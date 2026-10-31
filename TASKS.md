@@ -65,6 +65,7 @@ This file is the single source of truth for milestone status. Mark work complete
 - [ ] Resolve and visually verify live-action backtracking/stutter across pass interceptions, failed dribbles, and shot/rebound sequences.
 - [ ] Use CM 2010 as a gameplay reference: implement ordered player/ball movement paths, support runs/feeds, defensive reactions, and ball-follow framing with original TACTICA assets; do not reuse proprietary ISO assets.
 - [ ] Continue CM2010 static reverse engineering far enough to identify the match simulation-to-renderer event boundary, or document the protection barrier if the binary cannot be decoded offline (`docs/cm2010-static-analysis.md`).
+- [ ] Exercise Open Football's selected-league simulation through a live save; confirm only selected competitions dispatch matches and document that unselected competition schedules remain paused while world dates advance.
 
 ## TFC-M05: Live tactical interaction — COMPLETE
 

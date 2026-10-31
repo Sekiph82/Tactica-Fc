@@ -212,8 +212,21 @@
         if (_requestInFlight) return;
         const btn = document.getElementById('process-btn');
         if (!btn || btn.classList.contains('fm-processing')) return;
+        let selectedLeagues = [];
+        try {
+            const stored = JSON.parse(localStorage.getItem('tactica-fc-simulation-leagues-v1') || '[]');
+            if (Array.isArray(stored)) selectedLeagues = [...new Set(stored.map(Number).filter(Number.isInteger))];
+        } catch (e) {}
+        if (!selectedLeagues.length) {
+            alert(document.documentElement.lang === 'tr'
+                ? 'Önce lig sayfalarından maç simülasyonuna en az bir lig ekle.'
+                : 'Add at least one league to match simulation from a league page first.');
+            return;
+        }
         _requestInFlight = true;
-        const url = days ? '/api/game/process?days=' + days : '/api/game/process';
+        const params = new URLSearchParams({ league_ids: selectedLeagues.join(',') });
+        if (days) params.set('days', days);
+        const url = '/api/game/process?' + params.toString();
         btn.classList.add('fm-processing');
         try {
             const res = await fetch(url, {method: 'POST'});

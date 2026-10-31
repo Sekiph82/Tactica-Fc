@@ -11,6 +11,19 @@
 
 {% block content %}
 <div class="fm-page">
+    <div class="fm-panel d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3 p-3">
+        <div>
+            <strong>{% if lang == "tr" %}Maç simülasyonu ligleri{% else %}Match simulation leagues{% endif %}</strong>
+            <div class="small text-muted" id="simulation-league-count"></div>
+            <div class="small text-muted">{% if lang == "tr" %}Yalnızca seçilen liglerin maçları oynatılır. Tarih ilerler; diğer liglerin fikstürleri duraklatılır.{% else %}Only selected leagues play. The date advances while other league fixtures are paused.{% endif %}</div>
+        </div>
+        <button type="button" class="btn btn-outline-info btn-sm fm-simulation-league-toggle"
+                data-league-id="{{ simulation_league_id }}"
+                data-add-tr="Bu ligi simülasyona ekle" data-remove-tr="Bu ligi simülasyondan çıkar"
+                data-add-en="Include this league" data-remove-en="Remove this league">
+            {% if lang == "tr" %}Bu ligi simülasyona ekle{% else %}Include this league{% endif %}
+        </button>
+    </div>
     <div class="row g-3">
         <div class="col-md-12 col-lg-5">
             <section class="fm-panel">
@@ -269,4 +282,33 @@
     </div>
     {% endif %}
 </div>
+    <script>
+        (function () {
+            const key = 'tactica-fc-simulation-leagues-v1';
+            const button = document.querySelector('.fm-simulation-league-toggle');
+            const count = document.getElementById('simulation-league-count');
+            if (!button || !count) return;
+            let ids = [];
+            try { ids = JSON.parse(localStorage.getItem(key) || '[]'); } catch (_) {}
+            if (!Array.isArray(ids)) ids = [];
+            ids = [...new Set(ids.map(Number).filter(Number.isInteger))];
+            const update = function () {
+                const tr = document.documentElement.lang === 'tr';
+                const included = ids.includes(Number(button.dataset.leagueId));
+                button.textContent = tr
+                    ? (included ? button.dataset.removeTr : button.dataset.addTr)
+                    : (included ? button.dataset.removeEn : button.dataset.addEn);
+                count.textContent = tr
+                    ? 'Seçili lig: ' + ids.length + ' · seçim bu tarayıcıda saklanır'
+                    : 'Selected leagues: ' + ids.length + ' · saved in this browser';
+            };
+            button.addEventListener('click', function () {
+                const id = Number(button.dataset.leagueId);
+                ids = ids.includes(id) ? ids.filter(value => value !== id) : [...ids, id];
+                localStorage.setItem(key, JSON.stringify(ids));
+                update();
+            });
+            update();
+        })();
+    </script>
 {% endblock %}

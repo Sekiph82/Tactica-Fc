@@ -15,6 +15,7 @@ use chrono::{Duration, NaiveDate};
 use log::debug;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use rayon::prelude::{IntoParallelRefIterator, IntoParallelRefMutIterator};
+use std::collections::HashSet;
 use std::ops::Range;
 
 /// Reserved continent ids used to scope continental club competitions.
@@ -133,6 +134,16 @@ impl Continent {
         ctx: GlobalContext<'gc>,
         world: WorldSnapshot<'_>,
     ) -> ContinentBuildOutput<'gc> {
+        self.simulate_selected(ctx, world, None)
+    }
+
+    /// Build this continent's matchday with an optional competition whitelist.
+    pub fn simulate_selected<'gc>(
+        &mut self,
+        ctx: GlobalContext<'gc>,
+        world: WorldSnapshot<'_>,
+        selected_leagues: Option<&HashSet<u32>>,
+    ) -> ContinentBuildOutput<'gc> {
         let continent_name = self.name.clone();
         debug!(
             "Building matchday for continent: {} ({} countries)",
@@ -209,7 +220,7 @@ impl Continent {
             .map(|(country, country_ctx)| {
                 let stage = PerformanceProfiler::stage_scope("country_build", 1)
                     .labelled(|| country.name.clone());
-                let output = country.simulate_build(country_ctx, world);
+                let output = country.simulate_build_for_leagues(country_ctx, world, selected_leagues);
                 drop(stage);
                 output
             })

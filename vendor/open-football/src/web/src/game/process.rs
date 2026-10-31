@@ -11,6 +11,7 @@ use core::SimulationResult;
 use core::SimulatorData;
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -21,6 +22,7 @@ use tokio::task::{JoinSet, spawn_blocking};
 #[derive(Deserialize)]
 pub struct ProcessQuery {
     pub days: Option<u32>,
+    pub league_ids: Option<String>,
 }
 
 pub async fn game_process_action(
@@ -28,6 +30,22 @@ pub async fn game_process_action(
     Query(query): Query<ProcessQuery>,
 ) -> impl IntoResponse {
     let days = query.days.unwrap_or(1);
+    let Some(raw_league_ids) = query.league_ids else {
+        return StatusCode::BAD_REQUEST;
+    };
+    let selected_leagues: HashSet<u32> = raw_league_ids
+        .split(',')
+        .filter(|part| !part.trim().is_empty())
+        .filter_map(|part| part.trim().parse::<u32>().ok())
+        .collect();
+    if selected_leagues.is_empty()
+        || raw_league_ids
+            .split(',')
+            .filter(|part| !part.trim().is_empty())
+            .any(|part| part.trim().parse::<u32>().is_err())
+    {
+        return StatusCode::BAD_REQUEST;
+    }
 
     // If already processing, return immediately
     let process_guard = match Arc::clone(&state.process_lock).try_lock_owned() {
@@ -49,6 +67,7 @@ pub async fn game_process_action(
         data: Arc::clone(&state.data),
         i18n: Arc::clone(&state.i18n),
         cancel_flag: Arc::clone(&state.cancel_flag),
+        selected_leagues,
     };
 
     // Run CPU-bound simulation on the blocking thread pool so tokio worker
@@ -79,6 +98,7 @@ struct ProcessingRun {
     data: Arc<RwLock<Option<Arc<SimulatorData>>>>,
     i18n: Arc<I18nManager>,
     cancel_flag: Arc<AtomicBool>,
+    selected_leagues: HashSet<u32>,
 }
 
 impl ProcessingRun {
@@ -95,7 +115,11 @@ impl ProcessingRun {
 
             let result = self
                 .handle
-                .block_on(FootballSimulator::simulate(&mut simulator_data));
+                .block_on(FootballSimulator::simulate_selected_with(
+                    &mut simulator_data,
+                    &core::SimulatorConfig::default(),
+                    &self.selected_leagues,
+                ));
             if result.has_match_results() && MatchRuntime::recordings_mode() {
                 self.handle.block_on(Self::write_match_results(result));
             }

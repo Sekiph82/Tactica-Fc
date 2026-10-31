@@ -41,7 +41,7 @@ use crate::league::LeagueResult;
 use crate::league::LeagueTableResult;
 use crate::league::LeagueTableRow;
 use crate::league::playoff::{GroupStanding, LeaguePlayoff, StandingRow};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// State stashed between [`Country::simulate_build`] and
 /// [`Country::simulate_process`] for one tick. The build pass mutates
@@ -504,7 +504,17 @@ impl Country {
     pub fn simulate_build(
         &mut self,
         ctx: &GlobalContext<'_>,
+        world: WorldSnapshot<'_>,
+    ) -> (Vec<Match>, CountryPendingState) {
+        self.simulate_build_for_leagues(ctx, world, None)
+    }
+
+    /// Build today's matches, retaining only results for selected competitions.
+    pub fn simulate_build_for_leagues(
+        &mut self,
+        ctx: &GlobalContext<'_>,
         _world: WorldSnapshot<'_>,
+        selected_leagues: Option<&HashSet<u32>>,
     ) -> (Vec<Match>, CountryPendingState) {
         debug!(
             "Building matchday for country: {} (Reputation: {})",
@@ -550,13 +560,16 @@ impl Country {
                 league.reputation,
             )
         };
-        let opened: Vec<OpenedMatchday> = self
+        let opened: Vec<Option<OpenedMatchday>> = self
             .leagues
             .leagues
             .par_iter_mut()
             .map(|league| {
+                if selected_leagues.is_some_and(|ids| !ids.contains(&league.id)) {
+                    return None;
+                }
                 let league_ctx = league_ctx(league);
-                league.open_matchday(clubs, &league_ctx)
+                Some(league.open_matchday(clubs, &league_ctx))
             })
             .collect();
 
@@ -569,6 +582,13 @@ impl Country {
             .par_iter_mut()
             .zip(opened)
             .map(|(league, opened)| {
+                let Some(opened) = opened else {
+                    return LeagueBuildOutput {
+                        matches: Vec::new(),
+                        pending: None,
+                        immediate: None,
+                    };
+                };
                 let league_ctx = league_ctx(league);
                 league.build_matchday(opened, clubs, &league_ctx, &commitments)
             })
@@ -578,9 +598,13 @@ impl Country {
         let mut pending_leagues: Vec<Option<LeaguePendingState>> =
             Vec::with_capacity(league_outputs.len());
         let mut immediate_results: Vec<LeagueResult> = Vec::new();
-        for output in league_outputs {
-            all_matches.extend(output.matches);
-            pending_leagues.push(output.pending);
+        for (league, output) in self.leagues.leagues.iter().zip(league_outputs) {
+            if selected_leagues.is_none_or(|ids| ids.contains(&league.id)) {
+                all_matches.extend(output.matches);
+                pending_leagues.push(output.pending);
+            } else {
+                pending_leagues.push(None);
+            }
             if let Some(r) = output.immediate {
                 immediate_results.push(r);
             }
@@ -595,15 +619,17 @@ impl Country {
             .as_ref()
             .map(|c| (c.league.id, c.league.slug.clone(), c.league.reputation));
         if let Some((cup_id, cup_slug, cup_rep)) = cup_ctx_args {
-            let cup_ctx = ctx.with_league(cup_id, cup_slug, &[], cup_rep);
-            let cup = self.domestic_cup.as_mut().expect("cup checked above");
-            let output = cup.simulate_build(&self.clubs, &cup_ctx, &commitments);
-            all_matches.extend(output.matches);
-            if let Some(p) = output.pending {
-                cup_pending = Some(p);
-            }
-            if let Some(r) = output.immediate {
-                immediate_results.push(r);
+            if selected_leagues.is_none_or(|ids| ids.contains(&cup_id)) {
+                let cup_ctx = ctx.with_league(cup_id, cup_slug, &[], cup_rep);
+                let cup = self.domestic_cup.as_mut().expect("cup checked above");
+                let output = cup.simulate_build(&self.clubs, &cup_ctx, &commitments);
+                all_matches.extend(output.matches);
+                if let Some(p) = output.pending {
+                    cup_pending = Some(p);
+                }
+                if let Some(r) = output.immediate {
+                    immediate_results.push(r);
+                }
             }
         }
 
@@ -642,6 +668,10 @@ impl Country {
                 .collect();
 
             for playoff in &mut self.playoffs {
+                if selected_leagues.is_some_and(|ids| !ids.contains(&playoff.league.id)) {
+                    playoff_pending.push(None);
+                    continue;
+                }
                 let pf_ctx = ctx.with_league(
                     playoff.league.id,
                     playoff.league.slug.clone(),
@@ -656,6 +686,11 @@ impl Country {
                     immediate_results.push(r);
                 }
             }
+        }
+
+        if let Some(ids) = selected_leagues {
+            all_matches.retain(|game| ids.contains(&game.league_id()));
+            immediate_results.retain(|result| ids.contains(&result.league_id));
         }
 
         (

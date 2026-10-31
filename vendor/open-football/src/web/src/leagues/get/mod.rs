@@ -32,6 +32,7 @@ pub struct LeagueGetRequest {
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "leagues/get/index.html")]
 pub struct LeagueGetTemplate {
+    pub simulation_league_id: u32,
     pub css_version: &'static str,
     pub computer_name: &'static str,
     pub cpu_brand: &'static str,
@@ -719,6 +720,7 @@ pub async fn league_get_action(
     let league_url = LeagueAddress::new(&country.slug, &league.slug).url(&route_params.lang);
 
     Ok(LeagueGetTemplate {
+        simulation_league_id: league_id,
         css_version: CSS_VERSION,
         computer_name: &COMPUTER_NAME,
         cpu_brand: &CPU_BRAND,

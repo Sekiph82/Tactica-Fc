@@ -8,6 +8,7 @@ use crate::transfers::scouting::ScoutingPass;
 use crate::utils::PerformanceProfiler;
 use crate::world::SimulatorData;
 use rayon::prelude::*;
+use std::collections::HashSet;
 use std::panic::{self, AssertUnwindSafe};
 
 /// The matchday, in two clearly separated halves.
@@ -48,7 +49,11 @@ pub struct MatchdayOutcome<'gc> {
 }
 
 impl MatchdayPhase {
-    pub fn run<'gc>(data: &mut SimulatorData, ctx: &GlobalContext<'gc>) -> MatchdayOutcome<'gc> {
+    pub fn run<'gc>(
+        data: &mut SimulatorData,
+        ctx: &GlobalContext<'gc>,
+        selected_leagues: Option<&HashSet<u32>>,
+    ) -> MatchdayOutcome<'gc> {
         let panicks_before = ContinentPanicMetrics::total();
 
         let phase = PerformanceProfiler::phase_scope("A0_world_snapshots", 0);
@@ -95,7 +100,7 @@ impl MatchdayPhase {
                 let id = continent.id;
                 let name = continent.name.clone();
                 panic::catch_unwind(AssertUnwindSafe(|| {
-                    continent.simulate(ctx.with_continent(id), world)
+                    continent.simulate_selected(ctx.with_continent(id), world, selected_leagues)
                 }))
                 .map_err(|payload| ContinentPanicMetrics::swallow(&payload, "simulate", id, &name))
                 .ok()

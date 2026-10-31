@@ -33,6 +33,7 @@ use crate::config::SimulatorConfig;
 use crate::utils::PerformanceProfiler;
 use crate::world::SimulatorData;
 use phase::{Epilogue, Honours, MatchdayPhase, PeriodicPasses, Prologue, WorldPass};
+use std::collections::HashSet;
 
 pub struct FootballSimulator;
 
@@ -48,12 +49,29 @@ impl FootballSimulator {
         data: &mut SimulatorData,
         config: &SimulatorConfig,
     ) -> SimulationResult {
+        Self::simulate_scoped(data, config, None).await
+    }
+
+    /// Simulate a career day while playing only the selected competitions.
+    pub async fn simulate_selected_with(
+        data: &mut SimulatorData,
+        config: &SimulatorConfig,
+        selected_leagues: &HashSet<u32>,
+    ) -> SimulationResult {
+        Self::simulate_scoped(data, config, Some(selected_leagues)).await
+    }
+
+    async fn simulate_scoped(
+        data: &mut SimulatorData,
+        config: &SimulatorConfig,
+        selected_leagues: Option<&HashSet<u32>>,
+    ) -> SimulationResult {
         PerformanceProfiler::init_from_env();
         let mut result = SimulationResult::new();
 
         let ctx = Prologue::run(data, &mut result);
 
-        let matchday = MatchdayPhase::run(data, &ctx);
+        let matchday = MatchdayPhase::run(data, &ctx, selected_leagues);
         result.panicked_continents = matchday.panicked_continents;
 
         PeriodicPasses::run(data, matchday, &mut result);
