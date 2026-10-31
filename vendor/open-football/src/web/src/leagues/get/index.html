@@ -14,8 +14,8 @@
     <div class="fm-panel d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3 p-3">
         <div>
             <strong>{% if lang == "tr" %}Maç simülasyonu ligleri{% else %}Match simulation leagues{% endif %}</strong>
-            <div class="small text-muted" id="simulation-league-count"></div>
-            <div class="small text-muted">{% if lang == "tr" %}Yalnızca seçilen liglerin maçları oynatılır. Tarih ilerler; diğer liglerin fikstürleri duraklatılır.{% else %}Only selected leagues play. The date advances while other league fixtures are paused.{% endif %}</div>
+            <div class="mt-1 fw-semibold" id="simulation-league-count" style="color:#35d3c4;font-size:.95rem"></div>
+            <div class="small mt-1" style="color:#b8c9d8">{% if lang == "tr" %}Yalnızca seçilen liglerin maçları oynatılır. Tarih ilerler; diğer liglerin fikstürleri duraklatılır.{% else %}Only selected leagues play. The date advances while other league fixtures are paused.{% endif %}</div>
         </div>
         <button type="button" class="btn btn-outline-info btn-sm fm-simulation-league-toggle"
                 data-league-id="{{ simulation_league_id }}"
