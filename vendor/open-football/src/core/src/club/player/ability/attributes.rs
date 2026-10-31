@@ -1,0 +1,455 @@
+use crate::club::player::injury::{InjuryRecoverySpeed, InjurySeverity, InjuryType};
+use serde::{Deserialize, Serialize};
+
+pub const CONDITION_MAX_VALUE: i16 = 10000;
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct PlayerAttributes {
+    pub is_banned: bool,
+    pub is_injured: bool,
+
+    pub condition: i16,
+    pub fitness: i16,
+    pub jadedness: i16,
+
+    pub weight: u8,
+    pub height: u8,
+
+    pub value: u32,
+
+    //reputation
+    pub current_reputation: i16,
+    pub home_reputation: i16,
+    pub world_reputation: i16,
+
+    //ability
+    pub current_ability: u8,
+    /// Current ability the last time a mark was laid down, and the day
+    /// it was laid.
+    ///
+    /// Nothing else stores a historical ability, so nothing could say
+    /// whether a player had improved — only what he was worth today.
+    /// That made a breakthrough season, a plateau and a decline
+    /// indistinguishable to everything outside the development engine,
+    /// including the press.
+    ///
+    /// Two bytes and a date, refreshed on a slow clock: the question
+    /// "has he got better lately" is answered over months, and a
+    /// baseline that moved every week would answer it over a week and
+    /// therefore never.
+    ///
+    /// This is CURRENT ability, which clubs, coaches and the press may
+    /// all observe. It is never potential — that stays hidden from
+    /// everything that is not the engine itself.
+    pub ability_marker: u8,
+    /// Day the mark was laid, as a day count rather than a date:
+    /// 's serde support is not enabled in this build, and a
+    /// field that cannot survive a save is a field that silently stops
+    /// working. Zero means never marked.
+    pub ability_marked_on_day: i32,
+    /// HIDDEN biological ceiling. Clubs, scouts, and coaches can never
+    /// read this directly — AI scouting / transfer / loan / development
+    /// decisions must use estimates built from observable signals only
+    /// (matches, training, age, mentals): `PotentialEstimator`
+    /// (`estimate_for_staff` / `observable_ceiling`), scouting-report
+    /// `assessed_potential`, or monitoring rows. Raw PA is reserved for
+    /// the growth simulation, database generation, and debug surfaces.
+    pub potential_ability: u8,
+
+    //international expirience
+    pub international_apps: u16,
+    pub international_goals: u16,
+
+    pub under_21_international_apps: u16,
+    pub under_21_international_goals: u16,
+
+    // injury tracking
+    pub injury_days_remaining: u16,
+    pub injury_type: Option<InjuryType>,
+
+    // injury proneness & recovery
+    pub injury_proneness: u8,
+    pub recovery_days_remaining: u16,
+    pub last_injury_body_part: u8,
+    pub injury_count: u8,
+
+    // match load tracking
+    pub days_since_last_match: u16,
+
+    /// Matches still to be served on a competitive suspension. Bumped by
+    /// `Player::on_match_disciplinary_result` when a card crosses the
+    /// suspension threshold; decremented in `Player::serve_suspension_match`
+    /// after the player's team plays a fixture they're absent from.
+    /// Always equal to 0 when `is_banned == false`.
+    pub suspension_matches: u8,
+
+    /// Running yellow-card tally toward the next accumulation ban.
+    /// Distinct from `PlayerStatistics::yellow_cards` (which is the
+    /// season display total): this counter is reset by the threshold
+    /// each time it triggers a ban, so subsequent yellows accumulate
+    /// toward the next threshold without losing their relevance.
+    pub yellow_card_running: u8,
+}
+
+impl PlayerAttributes {
+    pub fn rest(&mut self, val: u16) {
+        self.condition += val as i16;
+        if self.condition > CONDITION_MAX_VALUE {
+            self.condition = CONDITION_MAX_VALUE;
+        }
+    }
+
+    pub fn condition_percentage(&self) -> u32 {
+        (self.condition as f32 * 100.0 / CONDITION_MAX_VALUE as f32).floor() as u32
+    }
+
+    /// Set an injury on this player, calculating a random duration within the injury's range.
+    /// The rolled duration and the post-injury recovery phase are both scaled
+    /// by the age-based healing curve (`InjuryRecoverySpeed`) — young tissue
+    /// heals faster, veterans slower.
+    /// Severe and critical injuries leave a lasting mark — `injury_proneness`
+    /// is nudged upward so a player with a torn ACL carries elevated career
+    /// injury risk long after the current injury heals ("glass bones").
+    pub fn set_injury(&mut self, injury_type: InjuryType, age: u8) {
+        self.is_injured = true;
+        self.injury_type = Some(injury_type);
+        self.injury_days_remaining =
+            InjuryRecoverySpeed::scale_days(injury_type.random_duration(), age);
+        self.last_injury_body_part = injury_type.body_part().to_u8();
+        self.recovery_days_remaining =
+            InjuryRecoverySpeed::scale_days(injury_type.recovery_days(), age);
+        self.injury_count = self.injury_count.saturating_add(1);
+
+        let bump = match injury_type.severity() {
+            InjurySeverity::Minor | InjurySeverity::Moderate => 0,
+            InjurySeverity::Severe => 1,
+            InjurySeverity::Critical => 2,
+        };
+        if bump > 0 {
+            self.injury_proneness = self.injury_proneness.saturating_add(bump).min(20);
+        }
+    }
+
+    /// Decrement injury days by one. Returns true when the injury countdown reaches 0
+    /// (transitioning to recovery phase).
+    pub fn recover_injury_day(&mut self) -> bool {
+        if self.injury_days_remaining > 0 {
+            self.injury_days_remaining -= 1;
+        }
+
+        if self.injury_days_remaining == 0 && self.is_injured {
+            // Transition to recovery phase — don't fully clear yet
+            self.is_injured = false;
+            self.injury_type = None;
+            // recovery_days_remaining was already set in set_injury()
+            return true;
+        }
+
+        false
+    }
+
+    /// Check if this player is in the post-injury recovery phase
+    pub fn is_in_recovery(&self) -> bool {
+        !self.is_injured && self.recovery_days_remaining > 0
+    }
+
+    /// Decrement recovery days. Returns true when fully fit.
+    pub fn recover_recovery_day(&mut self) -> bool {
+        if self.recovery_days_remaining > 0 {
+            self.recovery_days_remaining -= 1;
+        }
+
+        if self.recovery_days_remaining == 0 {
+            // Fully fit — clear last injury body part after full recovery
+            // (we keep last_injury_body_part for a while to track recurring risk)
+            return true;
+        }
+
+        false
+    }
+
+    /// Check if the current injury is serious (> 30 days remaining)
+    pub fn is_injury_serious(&self) -> bool {
+        self.is_injured && self.injury_days_remaining > 30
+    }
+
+    pub fn update_reputation(&mut self, current_delta: i16, home_delta: i16, world_delta: i16) {
+        self.current_reputation = (self.current_reputation + current_delta).clamp(0, 10000);
+        self.home_reputation = (self.home_reputation + home_delta).clamp(0, 10000);
+        self.world_reputation = (self.world_reputation + world_delta).clamp(0, 10000);
+    }
+
+    /// Blended standing on the 0..10000 scale — the figure to compare
+    /// against reputation thresholds instead of raw `world_reputation`.
+    ///
+    /// Fame is earned on big stages, so a genuine talent in a weak or
+    /// continentally isolated league carries a low world reputation while
+    /// being a household name at home. Reading `world_reputation` bare
+    /// therefore excludes exactly the players a step-up pull exists for.
+    /// Delegates to the market's own blend so the player-side gates and
+    /// the transfer pipeline can never drift apart.
+    pub fn effective_reputation(&self, domestic: bool) -> i16 {
+        crate::transfers::gate::EffectivePlayerReputation::compute(
+            self.world_reputation,
+            self.current_reputation,
+            self.home_reputation,
+            domestic,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn default_attrs() -> PlayerAttributes {
+        PlayerAttributes {
+            is_banned: false,
+            is_injured: false,
+            condition: 5000,
+            fitness: 8000,
+            jadedness: 2000,
+            weight: 75,
+            height: 180,
+            value: 1000000,
+            current_reputation: 50,
+            home_reputation: 60,
+            world_reputation: 70,
+            current_ability: 80,
+            ability_marker: 0,
+            ability_marked_on_day: 0,
+            potential_ability: 90,
+            international_apps: 10,
+            international_goals: 5,
+            under_21_international_apps: 15,
+            under_21_international_goals: 7,
+            injury_days_remaining: 0,
+            injury_type: None,
+            injury_proneness: 10,
+            recovery_days_remaining: 0,
+            last_injury_body_part: 0,
+            injury_count: 0,
+            days_since_last_match: 0,
+            suspension_matches: 0,
+            yellow_card_running: 0,
+        }
+    }
+
+    #[test]
+    fn test_rest_increases_condition() {
+        let mut player_attributes = default_attrs();
+        player_attributes.rest(1000);
+        assert_eq!(player_attributes.condition, 6000);
+    }
+
+    #[test]
+    fn test_rest_does_not_exceed_max_condition() {
+        let mut player_attributes = default_attrs();
+        player_attributes.condition = 9500;
+        player_attributes.rest(1000);
+        assert_eq!(player_attributes.condition, CONDITION_MAX_VALUE);
+    }
+
+    #[test]
+    fn test_condition_percentage() {
+        let mut player_attributes = default_attrs();
+        player_attributes.condition = 7500;
+        let condition_percentage = player_attributes.condition_percentage();
+        assert_eq!(condition_percentage, 75);
+    }
+
+    #[test]
+    fn test_condition_percentage_rounding() {
+        let mut player_attributes = default_attrs();
+        player_attributes.condition = 7499;
+        let condition_percentage = player_attributes.condition_percentage();
+        assert_eq!(condition_percentage, 74);
+    }
+
+    #[test]
+    fn test_set_injury() {
+        let mut attrs = default_attrs();
+        attrs.set_injury(InjuryType::Bruise, 26);
+        assert!(attrs.is_injured);
+        assert_eq!(attrs.injury_type, Some(InjuryType::Bruise));
+        assert!(attrs.injury_days_remaining >= 2 && attrs.injury_days_remaining <= 5);
+        assert!(attrs.recovery_days_remaining >= 2 && attrs.recovery_days_remaining <= 4);
+        assert_eq!(attrs.injury_count, 1);
+        assert!(attrs.last_injury_body_part > 0);
+    }
+
+    #[test]
+    fn test_set_injury_increments_count() {
+        let mut attrs = default_attrs();
+        attrs.set_injury(InjuryType::Bruise, 26);
+        assert_eq!(attrs.injury_count, 1);
+        attrs.is_injured = false;
+        attrs.injury_days_remaining = 0;
+        attrs.recovery_days_remaining = 0;
+        attrs.set_injury(InjuryType::Cramp, 26);
+        assert_eq!(attrs.injury_count, 2);
+    }
+
+    #[test]
+    fn minor_injuries_do_not_bump_proneness() {
+        let mut attrs = default_attrs();
+        let before = attrs.injury_proneness;
+        attrs.set_injury(InjuryType::Bruise, 26);
+        assert_eq!(attrs.injury_proneness, before);
+    }
+
+    #[test]
+    fn severe_injury_bumps_proneness_once() {
+        let mut attrs = default_attrs();
+        attrs.injury_proneness = 5;
+        attrs.set_injury(InjuryType::TornMeniscus, 26);
+        assert_eq!(attrs.injury_proneness, 6);
+    }
+
+    #[test]
+    fn critical_injury_bumps_proneness_more() {
+        let mut attrs = default_attrs();
+        attrs.injury_proneness = 5;
+        attrs.set_injury(InjuryType::ACLTear, 26);
+        assert_eq!(attrs.injury_proneness, 7);
+    }
+
+    #[test]
+    fn injury_proneness_caps_at_twenty() {
+        let mut attrs = default_attrs();
+        attrs.injury_proneness = 19;
+        attrs.set_injury(InjuryType::ACLTear, 26);
+        assert_eq!(attrs.injury_proneness, 20);
+    }
+
+    #[test]
+    fn young_players_heal_critical_injuries_faster() {
+        // A 16-year-old's ACL heals at ~0.78× the adult calendar cost:
+        // the 90-150 base range lands in 70-117 days, so an adolescent
+        // never opens a 120+-day injury spell.
+        for _ in 0..200 {
+            let mut attrs = default_attrs();
+            attrs.set_injury(InjuryType::ACLTear, 16);
+            assert!(
+                attrs.injury_days_remaining < 120,
+                "16yo ACL rolled {} days — youth healing curve not applied",
+                attrs.injury_days_remaining
+            );
+            assert!(attrs.injury_days_remaining >= 68);
+        }
+    }
+
+    #[test]
+    fn veteran_players_heal_slower_than_prime_age() {
+        // Age 36 → 1.12× multiplier; the ACL range stretches to 101-168.
+        for _ in 0..200 {
+            let mut attrs = default_attrs();
+            attrs.set_injury(InjuryType::ACLTear, 36);
+            assert!(attrs.injury_days_remaining >= 100);
+            assert!(attrs.injury_days_remaining <= 168);
+        }
+    }
+
+    #[test]
+    fn prime_age_duration_range_is_unscaled() {
+        for _ in 0..200 {
+            let mut attrs = default_attrs();
+            attrs.set_injury(InjuryType::ACLTear, 26);
+            assert!(attrs.injury_days_remaining >= 90 && attrs.injury_days_remaining <= 150);
+        }
+    }
+
+    #[test]
+    fn test_recover_injury_day_transitions_to_recovery() {
+        let mut attrs = default_attrs();
+        attrs.set_injury(InjuryType::Cramp, 26);
+        let saved_recovery = attrs.recovery_days_remaining;
+
+        // Burn through injury days
+        while attrs.injury_days_remaining > 1 {
+            assert!(!attrs.recover_injury_day());
+            assert!(attrs.is_injured);
+        }
+
+        // Last day — transitions to recovery
+        assert!(attrs.recover_injury_day());
+        assert!(!attrs.is_injured);
+        assert!(attrs.injury_type.is_none());
+        assert_eq!(attrs.recovery_days_remaining, saved_recovery);
+    }
+
+    #[test]
+    fn test_is_in_recovery() {
+        let mut attrs = default_attrs();
+        assert!(!attrs.is_in_recovery());
+
+        attrs.recovery_days_remaining = 5;
+        assert!(attrs.is_in_recovery());
+
+        attrs.is_injured = true;
+        assert!(!attrs.is_in_recovery());
+    }
+
+    #[test]
+    fn test_recover_recovery_day() {
+        let mut attrs = default_attrs();
+        attrs.recovery_days_remaining = 2;
+
+        assert!(!attrs.recover_recovery_day());
+        assert_eq!(attrs.recovery_days_remaining, 1);
+
+        assert!(attrs.recover_recovery_day());
+        assert_eq!(attrs.recovery_days_remaining, 0);
+    }
+
+    #[test]
+    fn test_is_injury_serious() {
+        let mut attrs = default_attrs();
+        attrs.is_injured = true;
+        attrs.injury_days_remaining = 31;
+        assert!(attrs.is_injury_serious());
+
+        attrs.injury_days_remaining = 30;
+        assert!(!attrs.is_injury_serious());
+
+        attrs.is_injured = false;
+        attrs.injury_days_remaining = 50;
+        assert!(!attrs.is_injury_serious());
+    }
+
+    #[test]
+    fn test_update_reputation_normal() {
+        let mut attrs = default_attrs();
+        attrs.current_reputation = 500;
+        attrs.home_reputation = 600;
+        attrs.world_reputation = 700;
+        attrs.update_reputation(100, 50, 25);
+        assert_eq!(attrs.current_reputation, 600);
+        assert_eq!(attrs.home_reputation, 650);
+        assert_eq!(attrs.world_reputation, 725);
+    }
+
+    #[test]
+    fn test_update_reputation_clamps_upper() {
+        let mut attrs = default_attrs();
+        attrs.current_reputation = 9950;
+        attrs.home_reputation = 9990;
+        attrs.world_reputation = 10000;
+        attrs.update_reputation(100, 50, 25);
+        assert_eq!(attrs.current_reputation, 10000);
+        assert_eq!(attrs.home_reputation, 10000);
+        assert_eq!(attrs.world_reputation, 10000);
+    }
+
+    #[test]
+    fn test_update_reputation_clamps_lower() {
+        let mut attrs = default_attrs();
+        attrs.current_reputation = 30;
+        attrs.home_reputation = 10;
+        attrs.world_reputation = 0;
+        attrs.update_reputation(-50, -20, -10);
+        assert_eq!(attrs.current_reputation, 0);
+        assert_eq!(attrs.home_reputation, 0);
+        assert_eq!(attrs.world_reputation, 0);
+    }
+}

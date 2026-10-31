@@ -1,0 +1,47 @@
+//! **Players intervening on a ball that is already moving** — the three
+//! ways a flight is ended by somebody other than its intended receiver,
+//! and the ledger of who ended up with it.
+//!
+//! Each resolver runs only on unowned balls with `in_flight_state > 0`,
+//! so routine possession play is never disturbed. They differ in reach
+//! and in what they are aimed at:
+//!
+//! * [`interception`] — every man a pass draws level with inside a
+//!   stride and a leg, one roll each at his closest approach.
+//! * [`block`] — ≤ 4u, shot-targeted, a higher per-event chance.
+//! * [`pass_block`] — the foot in: a defender's body in the path of a
+//!   PASS near his own goal. A DEFLECTION rather than a takeaway, which
+//!   is what keeps it out of the interception rate.
+//! * [`save`] — the keeper, and [`SaveModel`](save::SaveModel), the
+//!   shot-stopping curve the live path and the spread regression share.
+//!
+//! Alongside them:
+//!
+//! * [`body`] — the keeper's own volume: not a contest at all, but the
+//!   statement that a ball arriving where he already is comes off him.
+//! * [`ownership`] — somebody claims it instead: pass-target claims, the
+//!   reception and first-touch flow, deadlock resolution and the
+//!   unowned-too-long safety nets.
+//! * [`possession`] — the bookkeeping that outlives the contest: how the
+//!   carrier came by the ball ([`PossessionSource`]), the pass chain the
+//!   assist resolver walks, and the giveaway / shot / carry metadata.
+//! * [`reach`] — the one question every one of them asks first: can this
+//!   man get to the ball at all, on all three axes.
+//! * [`tackle`] — how the ball comes off a won challenge: kept, or
+//!   knocked loose.
+//! * [`aerial_duel`] — a lofted pass contested in the air where it drops
+//!   on its man.
+
+pub mod aerial_duel;
+pub mod block;
+pub mod body;
+pub mod interception;
+pub mod ownership;
+pub mod pass_block;
+pub mod possession;
+pub mod reach;
+pub mod save;
+pub mod tackle;
+
+pub use possession::{PassChainEntry, PassReach, PossessionSource};
+pub use reach::{BlockContact, PlayerReach};

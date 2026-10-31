@@ -1,0 +1,15 @@
+node_modules
+dist
+data-src
+*.local
+.DS_Store
+smoke-shots
+.vercel
+.env*
+!.env.example
+/vendor/open-football/target/
+/tools/open-football-stage/target/
+/.codex-local/
+*.log
+/.github/workflows/
+**/target/

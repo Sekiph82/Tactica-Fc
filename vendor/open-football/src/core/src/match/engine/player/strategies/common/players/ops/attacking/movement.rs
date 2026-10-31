@@ -1,0 +1,288 @@
+use crate::r#match::{MatchPlayerLite, PlayerSide, StateProcessingContext};
+use nalgebra::Vector3;
+
+/// Operations for movement and space-finding
+pub struct MovementOperationsImpl<'p> {
+    ctx: &'p StateProcessingContext<'p>,
+}
+
+impl<'p> MovementOperationsImpl<'p> {
+    pub fn new(ctx: &'p StateProcessingContext<'p>) -> Self {
+        MovementOperationsImpl { ctx }
+    }
+
+    /// Find space to dribble into
+    pub fn find_dribbling_space(&self) -> Option<Vector3<f32>> {
+        let player_pos = self.ctx.player.position;
+        let goal_direction = (self.ctx.player().opponent_goal_position() - player_pos).normalize();
+
+        // Check multiple angles for space
+        let angles = [-45.0f32, -30.0, 0.0, 30.0, 45.0];
+
+        for angle_deg in angles.iter() {
+            let angle_rad = angle_deg.to_radians();
+            let cos_a = angle_rad.cos();
+            let sin_a = angle_rad.sin();
+
+            // Rotate goal direction by angle
+            let check_direction = Vector3::new(
+                goal_direction.x * cos_a - goal_direction.y * sin_a,
+                goal_direction.x * sin_a + goal_direction.y * cos_a,
+                0.0,
+            );
+
+            let check_position = player_pos + check_direction * 15.0;
+
+            // Check if this direction is clear
+            let opponents_in_path = self
+                .ctx
+                .players()
+                .opponents()
+                .all()
+                .filter(|opp| {
+                    let to_opp = opp.position - player_pos;
+                    let dist = to_opp.magnitude();
+                    let dot = to_opp.normalize().dot(&check_direction);
+
+                    dist < 20.0 && dot > 0.7
+                })
+                .count();
+
+            if opponents_in_path == 0 {
+                return Some(check_position);
+            }
+        }
+
+        None
+    }
+
+    /// Find the best gap in opponent defense
+    pub fn find_best_gap_in_defense(&self) -> Option<Vector3<f32>> {
+        let player_pos = self.ctx.player.position;
+        let goal_pos = self.ctx.player().opponent_goal_position();
+
+        let opponents: Vec<MatchPlayerLite> = self
+            .ctx
+            .players()
+            .opponents()
+            .nearby(100.0)
+            .filter(|opp| {
+                // Only consider opponents between player and goal
+                let to_goal = goal_pos - player_pos;
+                let to_opp = opp.position - player_pos;
+                to_goal.normalize().dot(&to_opp.normalize()) > 0.5
+            })
+            .collect();
+
+        if opponents.len() < 2 {
+            return None;
+        }
+
+        // Find largest gap
+        let mut best_gap = None;
+        let mut best_gap_size = 0.0;
+
+        for i in 0..opponents.len() {
+            for j in i + 1..opponents.len() {
+                let gap_center = (opponents[i].position + opponents[j].position) * 0.5;
+                let gap_size = (opponents[i].position - opponents[j].position).magnitude();
+
+                if gap_size > best_gap_size && gap_size > 20.0 {
+                    best_gap_size = gap_size;
+                    best_gap = Some(gap_center);
+                }
+            }
+        }
+
+        best_gap
+    }
+
+    /// Find optimal attacking path considering opponents
+    pub fn find_optimal_attacking_path(&self) -> Option<Vector3<f32>> {
+        let player_pos = self.ctx.player.position;
+        let goal_pos = self.ctx.player().opponent_goal_position();
+
+        // Look for gaps in defense
+        if let Some(gap) = self.find_best_gap_in_defense() {
+            return Some(gap);
+        }
+
+        // Try to move toward goal while avoiding opponents
+        let to_goal = goal_pos - player_pos;
+        let goal_direction = to_goal.normalize();
+
+        // Check if direct path is clear
+        if !self.ctx.players().opponents().nearby(30.0).any(|opp| {
+            let to_opp = opp.position - player_pos;
+            let dot = to_opp.normalize().dot(&goal_direction);
+            dot > 0.8 && to_opp.magnitude() < 40.0
+        }) {
+            return Some(player_pos + goal_direction * 50.0);
+        }
+
+        None
+    }
+
+    /// Calculate support run position for a ball holder
+    pub fn calculate_support_run_position(&self, holder_pos: Vector3<f32>) -> Vector3<f32> {
+        let player_pos = self.ctx.player.position;
+        let field_height = self.ctx.context.field_size.height as f32;
+
+        // Determine player's role based on position
+        let is_central = (player_pos.y - field_height / 2.0).abs() < field_height * 0.2;
+
+        if is_central {
+            self.calculate_central_support_position(holder_pos)
+        } else {
+            self.calculate_wide_support_position(holder_pos)
+        }
+    }
+
+    /// Calculate wide support position (for wingers)
+    fn calculate_wide_support_position(&self, holder_pos: Vector3<f32>) -> Vector3<f32> {
+        let player_pos = self.ctx.player.position;
+        let field_height = self.ctx.context.field_size.height as f32;
+        let center_y = field_height / 2.0;
+
+        // Lateral target is driven by `team_width_target`: a wide-tactic
+        // attacking phase pushes wingers near the touchline, a compact
+        // low-block keeps them tucked. Polish-spec offset:
+        //   center_y ± field_height * (0.28 + team_width_target * 0.20)
+        // So the outermost target is 0.48 from centre (touchline-ish for
+        // a width 1.0 side) and the innermost is 0.28 for a fully
+        // compact side.
+        let width = self.ctx.team().team_width_target().clamp(0.0, 1.0);
+        let lateral_offset = field_height * (0.28 + width * 0.20);
+        let target_y = if player_pos.y < center_y {
+            center_y - lateral_offset
+        } else {
+            center_y + lateral_offset
+        };
+
+        // Stay ahead of ball carrier (increased distance to prevent clustering)
+        let target_x = match self.ctx.player.side {
+            Some(PlayerSide::Left) => holder_pos.x + 80.0,
+            Some(PlayerSide::Right) => holder_pos.x - 80.0,
+            None => holder_pos.x,
+        };
+
+        Vector3::new(target_x, target_y, 0.0)
+    }
+
+    /// Calculate central support position (for central players)
+    fn calculate_central_support_position(&self, holder_pos: Vector3<f32>) -> Vector3<f32> {
+        let field_height = self.ctx.context.field_size.height as f32;
+        let player_pos = self.ctx.player.position;
+
+        // Move into space between defenders (increased distance)
+        let target_x = match self.ctx.player.side {
+            Some(PlayerSide::Left) => holder_pos.x + 90.0,
+            Some(PlayerSide::Right) => holder_pos.x - 90.0,
+            None => holder_pos.x,
+        };
+
+        // Gentle pull toward center
+        let center_pull = (field_height / 2.0 - player_pos.y) * 0.2;
+        let target_y = player_pos.y + center_pull;
+
+        Vector3::new(
+            target_x,
+            target_y.clamp(field_height * 0.3, field_height * 0.7),
+            0.0,
+        )
+    }
+
+    /// Check if player is congested near boundary
+    pub fn is_congested_near_boundary(&self) -> bool {
+        let field_width = self.ctx.context.field_size.width as f32;
+        let field_height = self.ctx.context.field_size.height as f32;
+        let pos = self.ctx.player.position;
+
+        let near_boundary = pos.x < 20.0
+            || pos.x > field_width - 20.0
+            || pos.y < 20.0
+            || pos.y > field_height - 20.0;
+
+        if !near_boundary {
+            return false;
+        }
+
+        // Single count using pre-computed distances (teammates + opponents)
+        let player_id = self.ctx.player.id;
+        let total_nearby = self
+            .ctx
+            .tick_context
+            .grid
+            .teammates(player_id, 0.0, 15.0)
+            .count()
+            + self
+                .ctx
+                .tick_context
+                .grid
+                .opponents(player_id, 15.0)
+                .count();
+
+        // If 2 or more players nearby (congestion)
+        total_nearby >= 2
+    }
+
+    /// Check if player is in general congestion (anywhere on field)
+    /// This prevents mid-field clustering where multiple players get stuck
+    pub fn is_congested(&self) -> bool {
+        const CONGESTION_RADIUS: f32 = 15.0;
+        const CONGESTION_THRESHOLD: usize = 6; // 6+ players = congested
+
+        // Single count using pre-computed distances (teammates + opponents)
+        let player_id = self.ctx.player.id;
+        let total_nearby = self
+            .ctx
+            .tick_context
+            .grid
+            .teammates(player_id, 0.0, CONGESTION_RADIUS)
+            .count()
+            + self
+                .ctx
+                .tick_context
+                .grid
+                .opponents(player_id, CONGESTION_RADIUS)
+                .count();
+
+        // If 6 or more players clustered together
+        total_nearby >= CONGESTION_THRESHOLD
+    }
+
+    /// Calculate better passing position to escape pressure
+    pub fn calculate_better_passing_position(&self) -> Option<Vector3<f32>> {
+        let player_pos = self.ctx.player.position;
+        let goal_pos = self.ctx.ball().direction_to_own_goal();
+
+        // Calculate average position of pressing opponents in a single pass
+        let (sum_pos, count) = self
+            .ctx
+            .players()
+            .opponents()
+            .nearby(15.0)
+            .fold((Vector3::zeros(), 0u32), |(s, c), p| {
+                (s + p.position, c + 1)
+            });
+
+        if count == 0 {
+            return None;
+        }
+
+        let avg_opponent_pos = sum_pos / count as f32;
+
+        // Calculate direction away from pressure and perpendicular to goal line
+        let away_from_pressure = (player_pos - avg_opponent_pos).normalize();
+        let to_goal = (goal_pos - player_pos).normalize();
+
+        // Create a movement perpendicular to goal line
+        let perpendicular = Vector3::new(-to_goal.y, to_goal.x, 0.0).normalize();
+
+        // Blend the two directions (more weight to away from pressure)
+        let direction = (away_from_pressure * 0.7 + perpendicular * 0.3).normalize();
+
+        // Move slightly in the calculated direction
+        Some(player_pos + direction * 5.0)
+    }
+}

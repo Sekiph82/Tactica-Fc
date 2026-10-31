@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TACTICA FC IndexedDB interruption check</title>
+    <style>
+      body { margin: 32px; background: #070b16; color: #ecf3ff; font: 16px system-ui, sans-serif; }
+      #result { padding: 16px; border: 1px solid #263653; border-radius: 12px; background: #0f182d; }
+      .pass { color: #5dd9a6; } .fail { color: #ff7080; }
+    </style>
+  </head>
+  <body>
+    <h1>IndexedDB interrupted-write check</h1>
+    <p id="result" role="status">Running in this browser…</p>
+    <script type="module">
+      import { del, get, set } from 'idb-keyval';
+
+      const result = document.querySelector('#result');
+      const key = `tfc-atomic-probe:${crypto.randomUUID()}`;
+      const original = {
+        format: 'tactica-fc-save-record', schemaVersion: 1,
+        blob: new Blob(['previous save payload']),
+        meta: { id: 'interruption-probe', manager: 'QA', club: 'QA FC', date: '2025-08-09', saved: '2025-08-09T12:00:00.000Z' },
+      };
+      const replacement = {
+        ...original,
+        blob: new Blob(['replacement save payload']),
+        meta: { ...original.meta, date: '2025-08-16', saved: '2025-08-16T12:00:00.000Z' },
+      };
+      let putIntercepted = false;
+      let writeRejected = false;
+      const put = IDBObjectStore.prototype.put;
+
+      try {
+        await set(key, original);
+        IDBObjectStore.prototype.put = function (value, recordKey) {
+          const request = put.call(this, value, recordKey);
+          if (recordKey === key && !putIntercepted) {
+            putIntercepted = true;
+            this.transaction.abort();
+          }
+          return request;
+        };
+        try { await set(key, replacement); } catch { writeRejected = true; }
+        IDBObjectStore.prototype.put = put;
+
+        const afterAbort = await get(key);
+        const payload = afterAbort?.blob instanceof Blob ? await afterAbort.blob.text() : '';
+        if (!putIntercepted || !writeRejected || afterAbort?.meta?.date !== '2025-08-09' || payload !== 'previous save payload') {
+          throw new Error(`Expected aborted replacement to preserve the prior payload and metadata; got ${afterAbort?.meta?.date ?? 'missing'}`);
+        }
+        result.textContent = 'PASS: the IndexedDB transaction rejected the replacement and retained the previous save payload and metadata.';
+        result.className = 'pass';
+      } catch (error) {
+        IDBObjectStore.prototype.put = put;
+        result.textContent = `FAIL: ${error instanceof Error ? error.message : String(error)}`;
+        result.className = 'fail';
+      } finally {
+        await del(key).catch(() => {});
+      }
+    </script>
+  </body>
+</html>

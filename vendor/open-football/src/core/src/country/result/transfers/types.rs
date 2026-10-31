@@ -1,0 +1,287 @@
+use crate::club::board::mandate::SigningMandate;
+use crate::club::player::events::transfer_social::TransferContinentalPath;
+use crate::transfers::deal::negotiation::NegotiationPhase;
+use crate::transfers::deal::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferClause};
+use crate::transfers::gate::appraisal::PlayerStance;
+use crate::transfers::loan::guard::LoanGuardVerdict;
+use crate::transfers::market::TransferListingOrigin;
+use crate::{Country, Player, PlayerPositionType, TransferInterestSource, TransferInterestStage};
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub(crate) struct TransferActivitySummary {
+    pub(crate) total_listings: u32,
+    pub(crate) active_negotiations: u32,
+    pub(crate) completed_transfers: u32,
+    pub(crate) total_fees_exchanged: f64,
+    /// Pre-contract (Bosman) free moves executed in this country's local
+    /// pass — a subset of the in-country free-agent signings. Carried up
+    /// through `DeferredTransferOps` so Phase C can split the monthly
+    /// "signed pre-contract" vs "signed off a domestic expiry" diagnostics.
+    pub(crate) signed_pre_contract: u32,
+}
+
+impl TransferActivitySummary {
+    pub(crate) fn new() -> Self {
+        TransferActivitySummary {
+            total_listings: 0,
+            active_negotiations: 0,
+            completed_transfers: 0,
+            total_fees_exchanged: 0.0,
+            signed_pre_contract: 0,
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub(crate) struct SquadAnalysis {
+    pub(crate) surplus_positions: Vec<PlayerPositionType>,
+    pub(crate) needed_positions: Vec<PlayerPositionType>,
+    pub(crate) average_age: f32,
+    pub(crate) quality_level: u8,
+}
+
+/// Internal data extracted from a negotiation for phase resolution
+pub(crate) struct NegotiationData {
+    pub(crate) player_id: u32,
+    pub(crate) selling_club_id: u32,
+    pub(crate) buying_club_id: u32,
+    pub(crate) offer_amount: f64,
+    pub(crate) is_loan: bool,
+    pub(crate) has_option_to_buy: bool,
+    pub(crate) is_unsolicited: bool,
+    pub(crate) phase: NegotiationPhase,
+    pub(crate) selling_rep: f32,
+    pub(crate) buying_rep: f32,
+    pub(crate) player_age: u8,
+    pub(crate) player_ambition: f32,
+    pub(crate) asking_price: f64,
+    /// True when ANY listing exists for the player at the selling club.
+    /// Includes synthetic listings created by the pipeline to back an
+    /// unsolicited approach — useful for plumbing, not for acceptance
+    /// scoring (use [`player_is_available`] for that).
+    #[allow(dead_code)]
+    pub(crate) has_market_listing: bool,
+    /// True when the player is genuinely available — covers explicit
+    /// status flags (Lst/Loa/Req/Unh), `NotNeeded` squad status, and
+    /// seller-advertised listings (Lst/Loa/EndOfContract). Synthetic
+    /// listings backing unsolicited approaches do NOT set this to true.
+    pub(crate) player_is_available: bool,
+    /// Why the active listing exists (if any). None when there is no
+    /// listing at all. Resolver uses this to distinguish seller-listed
+    /// players from those carried only by a synthetic stub.
+    #[allow(dead_code)]
+    pub(crate) listing_origin: Option<TransferListingOrigin>,
+    /// Country the player is sold from (None = same as buying country)
+    pub(crate) selling_country_id: Option<u32>,
+    /// Selling country's continent_id. The geographic preference now
+    /// rides on the staged [`PlayerStance`] (which carries where the
+    /// player actually lives, not just where his club is registered);
+    /// this stays as the negotiation's own record of the route.
+    #[allow(dead_code)]
+    pub(crate) selling_continent_id: Option<u32>,
+    /// Selling country's code (for geographic preference)
+    pub(crate) selling_country_code: String,
+    /// If buying club previously sold this player: (club_id, fee)
+    pub(crate) player_sold_from: Option<(u32, f64)>,
+    /// Cached names for cross-country (player not accessible from buying country)
+    pub(crate) player_name: String,
+    pub(crate) selling_club_name: String,
+    /// Annual wage the buying club has staged for PersonalTerms.
+    pub(crate) offered_annual_wage: Option<u32>,
+    /// Creation-time reservation wage for players unreachable at
+    /// resolution (foreign moves, global-pool free agents). Foreign moves
+    /// carry a relocation premium above the opening wage; see
+    /// `TransferNegotiation::staged_reservation_wage`.
+    pub(crate) staged_reservation_wage: Option<u32>,
+    /// Buying club's league reputation (0–10000). Used to anchor the
+    /// player's reservation wage and for wage installation fallback.
+    pub(crate) buying_league_reputation: u16,
+    /// Selling club's league reputation (0–10000). Read alongside the
+    /// buyer's during PersonalTerms so a player chasing a bigger stage can
+    /// tell a genuine step up from a lateral move.
+    pub(crate) selling_league_reputation: u16,
+    /// The player's big-stage pull, staged at creation. Foreign moves
+    /// cannot re-read the player here; domestic ones use the live value.
+    pub(crate) player_stage_inclination: f32,
+    /// Sell-on percentage pledged in the buyer's offer, owed to the current
+    /// seller on the player's next sale.
+    pub(crate) sell_on_percentage: Option<f32>,
+    /// Loan option/obligation fee and whether it is mandatory.
+    pub(crate) loan_future_fee: Option<(u32, bool)>,
+    /// Structured personal-terms package the buyer has staged on the
+    /// current offer. Carried through resolution so PersonalTerms can
+    /// score against signing bonus / agent fee / role promise, and so
+    /// `resolve_medical` can include the full package in the deferred
+    /// transfer for execution to install.
+    pub(crate) personal_terms: Option<PersonalTermsOffer>,
+    /// Foreign moves only: seller-side player importance captured at
+    /// creation (same 0..1 scale as the domestic importance computation).
+    /// `None` for domestic moves, whose importance is recomputed live in
+    /// the resolver.
+    pub(crate) foreign_seller_importance: Option<f32>,
+    /// Foreign moves only: the absolute floor the seller's books put under
+    /// the fee, staged at creation — see the twin field on
+    /// [`crate::transfers::deal::negotiation::TransferNegotiation`].
+    pub(crate) foreign_seller_floor: Option<f64>,
+    /// Foreign moves only: `(annual income, annual wage bill, wage budget)`
+    /// for the selling club, staged at creation — see the twin field on
+    /// [`crate::transfers::deal::negotiation::TransferNegotiation`]. `None` for
+    /// domestic moves, whose seller is readable live.
+    pub(crate) foreign_seller_finances: Option<(i64, i64, i64)>,
+    /// The player's own side of the appraisal, staged at creation — see
+    /// [`crate::transfers::deal::negotiation::TransferNegotiation::staged_stance`].
+    /// `None` for domestic moves, which rebuild it live each round.
+    pub(crate) staged_stance: Option<PlayerStance>,
+    /// Sporting distance of the move, staged with the stance.
+    pub(crate) staged_sporting_drop: Option<f32>,
+    /// The parent's own answer about this destination, staged at the
+    /// approach — see the twin field on
+    /// [`crate::transfers::deal::negotiation::TransferNegotiation`].
+    pub(crate) staged_loan_verdict: Option<LoanGuardVerdict>,
+    /// What the board approved the signing FOR. Stamped on the player's
+    /// pathway when the deal completes.
+    pub(crate) mandate: Option<SigningMandate>,
+}
+
+/// A completed negotiation that needs execution at SimulatorData level.
+/// Used for ALL transfers — both domestic and cross-country.
+pub struct DeferredTransfer {
+    pub(crate) player_id: u32,
+    pub(crate) selling_country_id: u32,
+    pub(crate) selling_club_id: u32,
+    pub(crate) buying_country_id: u32,
+    pub(crate) buying_club_id: u32,
+    pub(crate) fee: f64,
+    pub(crate) is_loan: bool,
+    /// If true, record a contractual option-to-buy clause on the loan so the
+    /// buyer can trigger a permanent purchase at window close / loan end.
+    pub(crate) has_option_to_buy: bool,
+    /// Annual wage agreed in PersonalTerms — drives installed salary at execution.
+    pub(crate) agreed_annual_wage: Option<u32>,
+    /// Buying club's league reputation, for wage fallback at execution time.
+    pub(crate) buying_league_reputation: u16,
+    /// If the buyer's offer carried a sell-on clause, this is the percentage
+    /// owed to the *current seller* on the player's next permanent sale.
+    pub(crate) sell_on_percentage: Option<f32>,
+    /// Loan option/obligation fee and whether it is mandatory.
+    pub(crate) loan_future_fee: Option<(u32, bool)>,
+    /// Structured personal terms agreed during the negotiation —
+    /// signing bonus, agent fee, release clause, squad-status promise.
+    /// Execution honours these instead of inventing defaults so the
+    /// player ends up with the deal the AI actually agreed to.
+    pub(crate) personal_terms: Option<PersonalTermsOffer>,
+    /// Snapshot of the buyer's offer clauses — drives the scheduling
+    /// of installments, performance add-ons (appearances/goals), and
+    /// promotion bonuses at execution time. `sell_on_percentage` and
+    /// `loan_future_fee` above are already extracted; this carries the
+    /// rest (installments, appearance fees, goal bonuses, promotion
+    /// bonus) so the execution layer can write them into the buying
+    /// market's `pending_clauses` queue without re-reading the
+    /// negotiation (which is about to be dropped).
+    pub(crate) offer_clauses: Vec<TransferClause>,
+    /// What the board approved the signing FOR. Stamped on the player's
+    /// pathway at execution.
+    pub(crate) mandate: Option<SigningMandate>,
+}
+
+impl DeferredTransfer {
+    /// A permanent move nobody negotiated: the fee and the role the
+    /// destination gives him are all there is. The wage is the calculator's,
+    /// and with no hearing behind it the purpose is read from the role when
+    /// the move completes. A pool signing has no seller: `0` for both ids.
+    pub fn unnegotiated(
+        player_id: u32,
+        selling_country_id: u32,
+        selling_club_id: u32,
+        buying_country_id: u32,
+        buying_club_id: u32,
+        fee: f64,
+        buying_league_reputation: u16,
+        promise: Option<PromisedSquadStatus>,
+    ) -> Self {
+        DeferredTransfer {
+            player_id,
+            selling_country_id,
+            selling_club_id,
+            buying_country_id,
+            buying_club_id,
+            fee,
+            is_loan: false,
+            has_option_to_buy: false,
+            agreed_annual_wage: None,
+            buying_league_reputation,
+            sell_on_percentage: None,
+            loan_future_fee: None,
+            personal_terms: Some(PersonalTermsOffer {
+                squad_status_promise: promise,
+                ..PersonalTermsOffer::default()
+            }),
+            offer_clauses: Vec::new(),
+            mandate: None,
+        }
+    }
+}
+
+/// Finding a player inside one country's rosters.
+///
+/// The transfer passes hold a `&Country` and know only a player id — the
+/// negotiation, the listing and the saga beat all carry ids, not references.
+/// Every one of them needs the same walk: clubs, then teams, then the
+/// squad.
+pub(crate) struct CountryRoster;
+
+impl CountryRoster {
+    /// The player, wherever in the country he is registered.
+    pub(crate) fn find(country: &Country, player_id: u32) -> Option<&Player> {
+        for club in &country.clubs {
+            for team in &club.teams.teams {
+                if let Some(player) = team.players.find(player_id) {
+                    return Some(player);
+                }
+            }
+        }
+        None
+    }
+
+    /// The same walk, for a pass that needs to write to him.
+    pub(crate) fn find_mut(country: &mut Country, player_id: u32) -> Option<&mut Player> {
+        for club in &mut country.clubs {
+            for team in club.teams.iter_mut() {
+                if let Some(player) = team.players.find_mut(player_id) {
+                    return Some(player);
+                }
+            }
+        }
+        None
+    }
+}
+
+/// A player-visible saga beat that could not be delivered inside the
+/// country borrow: the negotiation is processed by the BUYING country's
+/// parallel Phase-A pass, but the player lives in the selling country's
+/// partition. Carries every buyer-side ingredient of a
+/// [`TransferInterestSignal`](crate::TransferInterestSignal); the
+/// player-dependent facts (former club, homecoming, seller rivalry) are
+/// resolved at delivery in the serial Phase-C drain, where the whole
+/// world is addressable. Events only — roster statuses stay domestic,
+/// where every negotiation death path can reliably clear them.
+#[derive(Debug, Clone)]
+pub(crate) struct PendingPlayerSignal {
+    pub(crate) player_id: u32,
+    pub(crate) selling_country_id: u32,
+    pub(crate) selling_club_id: u32,
+    pub(crate) stage: TransferInterestStage,
+    pub(crate) source: TransferInterestSource,
+    pub(crate) repeated_attention: bool,
+    pub(crate) interested_club_id: u32,
+    pub(crate) interested_league_id: Option<u32>,
+    pub(crate) buyer_rep: f32,
+    pub(crate) seller_rep: f32,
+    pub(crate) buyer_league_rep: u16,
+    pub(crate) buyer_country_id: u32,
+    pub(crate) buyer_continent_id: u32,
+    pub(crate) buyer_has_continental_path: bool,
+    pub(crate) buyer_competition_path: Option<TransferContinentalPath>,
+}

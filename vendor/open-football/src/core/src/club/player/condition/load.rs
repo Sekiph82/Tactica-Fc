@@ -1,0 +1,861 @@
+//! Per-player rolling workload, recovery debt, and form rating.
+//!
+//! Feeds squad rotation, injury risk, and form-based morale. Two concepts
+//! coexist by design:
+//!
+//! * **Minutes** — raw competitive time (kept for backwards-compatibility
+//!   and friendly-vs-competitive bookkeeping).
+//! * **Physical load** — minutes weighted by position group, intensity,
+//!   and post-drain condition. A 90-min keeper and a 90-min wingback
+//!   carry very different physical loads.
+//!
+//! `physical_load_7` and `physical_load_30` are exponentially decayed in
+//! the same shape as the minute windows so the struct stays compact and
+//! `daily_decay()` remains a single hot path. `recovery_debt` accumulates
+//! from heavy sessions and bleeds off with rest/recovery work — the
+//! "deeper than condition" tiredness scouts and physios talk about.
+//!
+//! All new fields default to zero, so old saves and freshly-built
+//! players load with a clean slate.
+//!
+//! Scale notes:
+//! * 1.0 unit of physical_load ≈ 1 minute of a center-back at neutral
+//!   intensity. A 90-min full-back tops out around 100, a 90-min keeper
+//!   around 40. ACWR ratios above ~1.5 are the sports-science danger
+//!   zone.
+//! * `recovery_debt` is in the same "minute-equivalent" scale so it
+//!   decays at the same rate. A heavy match adds 40-80; recovery
+//!   sessions burn it back down.
+
+use crate::PlayerFieldPositionGroup;
+use crate::club::player::player::Player;
+use crate::league::Season;
+use chrono::{Datelike, NaiveDate};
+
+const DECAY_7: f32 = 6.0 / 7.0;
+const DECAY_30: f32 = 29.0 / 30.0;
+/// `exp(−1/365)`: football absorbed fades with a time constant of a season.
+const DECAY_SEASON: f32 = 0.997_264;
+
+/// Friendlies, youth-league and reserve-league games are football, but not
+/// at the level a senior match asks of a player.
+const FRIENDLY_FOOTBALL_WEIGHT: f32 = 0.5;
+
+/// Days a season's fixtures are spread over, and the days from one season's
+/// opening to the next.
+const SEASON_DAYS: i32 = 280;
+const SEASON_CYCLE_DAYS: i32 = 365;
+
+/// Minutes a recorded substitute appearance stands for.
+const SUB_MINUTES: f32 = 20.0;
+
+/// Per-day decay factor for recovery debt — debt half-life ~3 days
+/// (a one-off heavy match is mostly gone by next weekend).
+const RECOVERY_DEBT_DAILY_DECAY: f32 = 0.79;
+
+/// EMA coefficient for form_rating. 0.33 gives a half-life of ~2 matches —
+/// quick enough to catch a hot streak, slow enough to smooth a one-off.
+const FORM_ALPHA: f32 = 0.33;
+
+/// Per-day pull of `form_rating` back toward its neutral baseline on days
+/// the player makes no competitive appearance (~14-day half-life). Applied
+/// only after a fortnight without a match, so a spell on the bench slowly
+/// erases a stale run rather than freezing a player's rating and stranding
+/// him: dropped for poor form, but never able to work it off because he
+/// isn't picked. An active player's form signal is left untouched.
+const FORM_FADE_DAILY: f32 = 0.9517;
+
+/// Football absorbed by a regular at his lowest: 30 league starts spread
+/// over each of two 280-day seasons, read at the end of the 85-day summer
+/// break that follows. `regular_stock_is_what_a_regular_holds_after_the_summer`
+/// recomputes it through the daily fade.
+pub(crate) const REGULAR_STOCK: f32 = 2015.0;
+
+/// Weekly minutes at which selection starts penalising the player (≈5 × 90).
+pub const FATIGUE_LOAD_THRESHOLD: f32 = 450.0;
+/// Weekly minutes treated as dangerous overload — injury risk kicks in too.
+pub const FATIGUE_LOAD_DANGER: f32 = 650.0;
+
+/// Physical-load equivalents of the minute thresholds above. A center-back
+/// pegs ≈1 unit / minute, so the bands sit a touch lower to leave room for
+/// position weighting and depletion bumps.
+pub const PHYSICAL_LOAD_THRESHOLD: f32 = 420.0;
+pub const PHYSICAL_LOAD_DANGER: f32 = 620.0;
+
+/// Acute:chronic workload ratio considered an "elevated risk" spike.
+/// Sports-science consensus puts the danger zone at 1.5+ — we surface it
+/// to selection so coaches rotate around training spikes.
+pub const WORKLOAD_SPIKE_RATIO: f32 = 1.4;
+
+/// Recovery debt at which the player feels heavy-legged irrespective of
+/// raw weekly minutes — used by selection / UI labels.
+pub const RECOVERY_DEBT_HEAVY: f32 = 350.0;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PlayerLoad {
+    /// Recency-weighted competitive minutes over the trailing ~7 days.
+    pub minutes_last_7: f32,
+    /// Recency-weighted competitive minutes over the trailing ~30 days.
+    pub minutes_last_30: f32,
+    /// Recency-weighted minutes in friendlies and youth or reserve league
+    /// games over the trailing ~30 days. Kept apart from the competitive
+    /// window, which rotation and selection read.
+    pub friendly_minutes_last_30: f32,
+    /// Minutes of football the player has absorbed, fading over about a
+    /// season: competitive minutes in full, friendly ones at half.
+    pub football_absorbed: f32,
+    /// Packed per-day bit array; bit 0 = today. Counts matches in last 14 days.
+    pub matches_last_14_bits: u16,
+    /// EMA of effective match ratings (1.0–10.0). Zero until the first match.
+    pub form_rating: f32,
+    /// Last date (CE ordinal) we aged the windows. 0 means uninitialised.
+    pub last_decay_day_ordinal: i32,
+
+    /// Recency-weighted physical-load units (minutes weighted by position,
+    /// intensity, and depletion). Decays in the same envelope as
+    /// `minutes_last_7`.
+    pub physical_load_7: f32,
+    /// Recency-weighted 30-day physical load. Used as the chronic baseline
+    /// for the acute:chronic ratio.
+    pub physical_load_30: f32,
+    /// Recency-weighted high-intensity load (sprints, presses, repeated
+    /// accelerations). Subset of physical_load_7.
+    pub high_intensity_load_7: f32,
+    /// Cumulative "deep tiredness" — built up by heavy matches/training
+    /// and bled off by recovery sessions. Decays daily on its own clock.
+    pub recovery_debt: f32,
+    /// Last computed match load (diagnostic / debugging — not driving any
+    /// selection logic on its own).
+    pub last_match_load: f32,
+}
+
+impl PlayerLoad {
+    pub const fn new() -> Self {
+        Self {
+            minutes_last_7: 0.0,
+            minutes_last_30: 0.0,
+            friendly_minutes_last_30: 0.0,
+            football_absorbed: 0.0,
+            matches_last_14_bits: 0,
+            form_rating: 0.0,
+            last_decay_day_ordinal: 0,
+            physical_load_7: 0.0,
+            physical_load_30: 0.0,
+            high_intensity_load_7: 0.0,
+            recovery_debt: 0.0,
+            last_match_load: 0.0,
+        }
+    }
+
+    /// Age the windows by whole days since the last call. Idempotent on
+    /// the same date; catches up multi-day gaps in one call.
+    pub fn daily_decay(&mut self, today: NaiveDate) {
+        self.age_windows(today, None);
+    }
+
+    /// [`Self::daily_decay`] plus a gentle pull of `form_rating` back toward
+    /// `form_target` on days the player makes no competitive appearance —
+    /// the "a bad (or hot) run fades from memory once you're out of the
+    /// side" effect. Without it a benched player's form freezes and can
+    /// strand him. The fade only kicks in once he's had no competitive
+    /// match for a fortnight, so an active player's form is left intact.
+    pub fn daily_decay_with_form_target(&mut self, today: NaiveDate, form_target: f32) {
+        self.age_windows(today, Some(form_target));
+    }
+
+    fn age_windows(&mut self, today: NaiveDate, form_target: Option<f32>) {
+        let today_ordinal = today.num_days_from_ce();
+
+        if self.last_decay_day_ordinal == 0 {
+            self.last_decay_day_ordinal = today_ordinal;
+            return;
+        }
+
+        let delta_days = (today_ordinal - self.last_decay_day_ordinal).max(0);
+        if delta_days == 0 {
+            return;
+        }
+        self.last_decay_day_ordinal = today_ordinal;
+
+        let d7 = DECAY_7.powi(delta_days);
+        let d30 = DECAY_30.powi(delta_days);
+        let d_debt = RECOVERY_DEBT_DAILY_DECAY.powi(delta_days);
+
+        self.minutes_last_7 *= d7;
+        self.minutes_last_30 *= d30;
+        self.friendly_minutes_last_30 *= d30;
+        self.football_absorbed *= DECAY_SEASON.powi(delta_days);
+        self.physical_load_7 *= d7;
+        self.physical_load_30 *= d30;
+        self.high_intensity_load_7 *= d7;
+        self.recovery_debt *= d_debt;
+
+        if delta_days >= 14 {
+            self.matches_last_14_bits = 0;
+        } else {
+            self.matches_last_14_bits <<= delta_days as u32;
+            self.matches_last_14_bits &= (1 << 14) - 1;
+        }
+
+        // Form fades toward its neutral baseline only once the player has
+        // gone a fortnight without a competitive match — a spell out of the
+        // side erases a stale run so a benched player becomes selectable
+        // again, while an active player (a match inside 14 days) is untouched.
+        if let Some(target) = form_target
+            && self.form_rating > 0.0
+            && self.matches_last_14_bits == 0
+        {
+            let f = FORM_FADE_DAILY.powi(delta_days);
+            self.form_rating = target + (self.form_rating - target) * f;
+        }
+
+        // Floor f32 residuals so repeated decays don't leave negligible
+        // noise that defeats equality in tests.
+        if self.minutes_last_7 < 0.1 {
+            self.minutes_last_7 = 0.0;
+        }
+        if self.minutes_last_30 < 0.1 {
+            self.minutes_last_30 = 0.0;
+        }
+        if self.friendly_minutes_last_30 < 0.1 {
+            self.friendly_minutes_last_30 = 0.0;
+        }
+        if self.football_absorbed < 0.1 {
+            self.football_absorbed = 0.0;
+        }
+        if self.physical_load_7 < 0.1 {
+            self.physical_load_7 = 0.0;
+        }
+        if self.physical_load_30 < 0.1 {
+            self.physical_load_30 = 0.0;
+        }
+        if self.high_intensity_load_7 < 0.1 {
+            self.high_intensity_load_7 = 0.0;
+        }
+        if self.recovery_debt < 0.5 {
+            self.recovery_debt = 0.0;
+        }
+    }
+
+    /// Record a match's minutes. Friendlies — youth and reserve leagues
+    /// included — only fill their own window: rotation and selection
+    /// ignore preseason XIs. Call `record_match_load` separately for the
+    /// physical load.
+    pub fn record_match_minutes(&mut self, minutes: f32, is_friendly: bool) {
+        if minutes <= 0.0 {
+            return;
+        }
+        if is_friendly {
+            self.friendly_minutes_last_30 += minutes;
+            self.football_absorbed += minutes * FRIENDLY_FOOTBALL_WEIGHT;
+            return;
+        }
+        self.minutes_last_7 += minutes;
+        self.minutes_last_30 += minutes;
+        self.football_absorbed += minutes;
+        self.matches_last_14_bits |= 1;
+    }
+
+    /// Record physical load from a match. Friendlies count at a reduced
+    /// rate so cameo minutes still register but pre-season tours don't
+    /// flag every player as overloaded. `hi_load` is the high-intensity
+    /// share of the same load.
+    pub fn record_match_load(&mut self, load: f32, hi_load: f32, is_friendly: bool) {
+        if load <= 0.0 {
+            return;
+        }
+        let factor = if is_friendly { 0.45 } else { 1.0 };
+        let l = load * factor;
+        let h = hi_load.max(0.0) * factor;
+        self.physical_load_7 += l;
+        self.physical_load_30 += l;
+        self.high_intensity_load_7 += h;
+        self.last_match_load = l;
+    }
+
+    /// Record physical load from a training session. Always counted (no
+    /// friendly discount); training never marks a "match" in the 14-day
+    /// bit array.
+    pub fn record_training_load(&mut self, load: f32, hi_load: f32) {
+        if load <= 0.0 {
+            return;
+        }
+        self.physical_load_7 += load;
+        self.physical_load_30 += load;
+        self.high_intensity_load_7 += hi_load.max(0.0);
+    }
+
+    /// Add to recovery debt. Called from match exertion and heavy training.
+    pub fn add_recovery_debt(&mut self, amount: f32) {
+        if amount <= 0.0 {
+            return;
+        }
+        self.recovery_debt = (self.recovery_debt + amount).min(2_000.0);
+    }
+
+    /// Reduce recovery debt — called by recovery / rest sessions and slow
+    /// natural recovery on rest days.
+    pub fn consume_recovery_debt(&mut self, amount: f32) {
+        if amount <= 0.0 {
+            return;
+        }
+        self.recovery_debt = (self.recovery_debt - amount).max(0.0);
+    }
+
+    /// Fold a match rating into the form EMA. Out-of-range inputs are ignored.
+    pub fn update_form(&mut self, rating: f32) {
+        if !(1.0..=10.0).contains(&rating) {
+            return;
+        }
+        if self.form_rating <= 0.0 {
+            self.form_rating = rating;
+        } else {
+            self.form_rating = self.form_rating * (1.0 - FORM_ALPHA) + rating * FORM_ALPHA;
+        }
+    }
+
+    /// Share of a regular's football the player has absorbed: 1.0 for one
+    /// who starts most league matches, 0.0 for one who has not played.
+    /// Read over a season rather than a month, so a summer break or a few
+    /// weeks on the bench do not undo what his seasons built.
+    pub fn match_exposure(&self) -> f32 {
+        (self.football_absorbed / REGULAR_STOCK).clamp(0.0, 1.0)
+    }
+
+    pub fn matches_last_14(&self) -> u8 {
+        self.matches_last_14_bits.count_ones() as u8
+    }
+
+    pub fn is_fatigued(&self) -> bool {
+        self.minutes_last_7 >= FATIGUE_LOAD_THRESHOLD
+            || self.physical_load_7 >= PHYSICAL_LOAD_THRESHOLD
+    }
+
+    pub fn is_overloaded(&self) -> bool {
+        self.minutes_last_7 >= FATIGUE_LOAD_DANGER || self.physical_load_7 >= PHYSICAL_LOAD_DANGER
+    }
+
+    /// Acute:chronic workload ratio. The chronic baseline is the 30-day
+    /// load scaled to a one-week window; floor at 1.0 so a player coming
+    /// out of the off-season doesn't read as a 30× spike on his first
+    /// session back.
+    pub fn workload_spike_ratio(&self) -> f32 {
+        let chronic_weekly = (self.physical_load_30 / 30.0) * 7.0;
+        let denom = chronic_weekly.max(1.0);
+        self.physical_load_7 / denom
+    }
+
+    /// True when the acute:chronic ratio is in the danger zone — flagged
+    /// to selection as a meaningful injury-risk signal.
+    pub fn is_workload_spike(&self) -> bool {
+        // Need a multi-week chronic baseline before we trust the ratio.
+        // With a single match, physical_load_30 ≈ physical_load_7 and the
+        // ratio is mathematically guaranteed to read as a spike — that's
+        // arithmetic, not reality.
+        self.physical_load_30 >= 200.0 && self.workload_spike_ratio() >= WORKLOAD_SPIKE_RATIO
+    }
+
+    /// Has the player accumulated enough deep tiredness to need a real
+    /// rest, even if his weekly minutes look fine? Used by UI labels.
+    pub fn has_heavy_legs(&self) -> bool {
+        self.recovery_debt >= RECOVERY_DEBT_HEAVY
+    }
+
+    /// Absorb a season played before the record began: `minutes` spread
+    /// evenly over its fixture days, faded as the daily windows would have
+    /// faded them by `seasons_ago` seasons after it opened.
+    fn absorb_past_season(&mut self, minutes: f32, seasons_ago: u16) {
+        let per_day = minutes / SEASON_DAYS as f32;
+        let last_fixture_ago = seasons_ago as i32 * SEASON_CYCLE_DAYS - (SEASON_DAYS - 1);
+        let spread = (1.0 - DECAY_SEASON.powi(SEASON_DAYS)) / (1.0 - DECAY_SEASON);
+        self.football_absorbed += per_day * DECAY_SEASON.powi(last_fixture_ago) * spread;
+    }
+}
+
+impl Player {
+    /// A world opens on `opening`: seed the football he absorbed in his two
+    /// most recent recorded seasons, every spell of each summed. False when
+    /// nothing of his career is recorded. A season dated in the world's own
+    /// opening year (a calendar-year league) reads as the one just finished.
+    pub fn seed_football_from_career(&mut self, opening: NaiveDate) -> bool {
+        let world_season = Season::from_date(opening).start_year;
+        let items = &self.statistics_history.items;
+        let mut years: Vec<u16> = items.iter().map(|i| i.season.start_year).collect();
+        if years.is_empty() {
+            return false;
+        }
+        years.sort_unstable_by(|a, b| b.cmp(a));
+        years.dedup();
+        for &year in years.iter().take(2) {
+            let minutes: f32 = items
+                .iter()
+                .filter(|i| i.season.start_year == year)
+                .map(|i| {
+                    i.statistics.played as f32 * 90.0
+                        + i.statistics.played_subs as f32 * SUB_MINUTES
+                })
+                .sum();
+            let seasons_ago = world_season.saturating_sub(year).max(1);
+            self.load.absorb_past_season(minutes, seasons_ago);
+        }
+        true
+    }
+
+    /// Seed from his place in the side when nothing of his career is
+    /// recorded. `rank` is his ability rank in `group` (0 is the
+    /// best): inside the group's starting slots he holds a regular's
+    /// football, in the tier behind them a squad player's, beyond it a
+    /// fringe player's. A side whose league is played as friendlies plays
+    /// youth or reserve football, which counts half.
+    pub fn seed_football_from_role(
+        &mut self,
+        group: PlayerFieldPositionGroup,
+        rank: usize,
+        plays_friendlies: bool,
+    ) {
+        const REGULAR: f32 = 1.0;
+        const SQUAD: f32 = 0.4;
+        const FRINGE: f32 = 0.1;
+        let starters = group.typical_starters();
+        let share = if rank < starters {
+            REGULAR
+        } else if rank < starters * 2 {
+            SQUAD
+        } else {
+            FRINGE
+        };
+        let weight = if plays_friendlies {
+            FRIENDLY_FOOTBALL_WEIGHT
+        } else {
+            1.0
+        };
+        self.load.football_absorbed = share * weight * REGULAR_STOCK;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    #[test]
+    fn new_is_zero() {
+        let l = PlayerLoad::new();
+        assert_eq!(l.minutes_last_7, 0.0);
+        assert_eq!(l.matches_last_14(), 0);
+        assert_eq!(l.form_rating, 0.0);
+        assert_eq!(l.physical_load_7, 0.0);
+        assert_eq!(l.recovery_debt, 0.0);
+    }
+
+    #[test]
+    fn friendly_does_not_accumulate() {
+        let mut l = PlayerLoad::new();
+        l.record_match_minutes(90.0, true);
+        assert_eq!(l.minutes_last_7, 0.0);
+        assert_eq!(l.matches_last_14(), 0);
+    }
+
+    #[test]
+    fn competitive_match_increments_windows() {
+        let mut l = PlayerLoad::new();
+        l.record_match_minutes(90.0, false);
+        assert_eq!(l.minutes_last_7, 90.0);
+        assert_eq!(l.minutes_last_30, 90.0);
+        assert_eq!(l.matches_last_14(), 1);
+    }
+
+    #[test]
+    fn match_load_records_into_load_windows() {
+        let mut l = PlayerLoad::new();
+        l.record_match_load(85.0, 25.0, false);
+        assert_eq!(l.physical_load_7, 85.0);
+        assert_eq!(l.physical_load_30, 85.0);
+        assert_eq!(l.high_intensity_load_7, 25.0);
+        assert_eq!(l.last_match_load, 85.0);
+    }
+
+    #[test]
+    fn match_load_friendly_is_discounted_but_present() {
+        let mut l = PlayerLoad::new();
+        l.record_match_load(100.0, 30.0, true);
+        // Friendly factor 0.45 → 45.0 / 13.5
+        assert!((l.physical_load_7 - 45.0).abs() < 0.01);
+        assert!((l.high_intensity_load_7 - 13.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn form_ema_seeds_from_first_rating() {
+        let mut l = PlayerLoad::new();
+        l.update_form(7.5);
+        assert!((l.form_rating - 7.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn benched_form_fades_toward_neutral() {
+        // A player carrying a bad run who then goes weeks without a match:
+        // his form should drift back up toward the neutral target instead
+        // of freezing at the low value and stranding him out of the side.
+        let mut l = PlayerLoad::new();
+        l.update_form(5.0);
+        l.daily_decay_with_form_target(d(2025, 1, 1), 6.5); // seed the clock
+        for day in 2..=31 {
+            l.daily_decay_with_form_target(d(2025, 1, day), 6.5);
+        }
+        assert!(
+            l.form_rating > 5.2 && l.form_rating < 6.5,
+            "form should drift toward neutral: {}",
+            l.form_rating
+        );
+    }
+
+    #[test]
+    fn active_player_form_is_not_faded() {
+        // A recent competitive appearance keeps the 14-day match flag set,
+        // so the fade never touches a regular's form signal.
+        let mut l = PlayerLoad::new();
+        l.update_form(5.0);
+        l.record_match_minutes(90.0, false); // played today
+        l.daily_decay_with_form_target(d(2025, 1, 1), 6.5); // seed
+        for day in 2..=10 {
+            l.daily_decay_with_form_target(d(2025, 1, day), 6.5);
+        }
+        assert!(
+            (l.form_rating - 5.0).abs() < 1e-3,
+            "an active player's form must be untouched: {}",
+            l.form_rating
+        );
+    }
+
+    #[test]
+    fn plain_daily_decay_leaves_form_untouched() {
+        // The no-target overload (used across the rest of the sim and its
+        // tests) never fades form — the recovery drift is strictly opt-in.
+        let mut l = PlayerLoad::new();
+        l.update_form(5.0);
+        l.daily_decay(d(2025, 1, 1));
+        for day in 2..=31 {
+            l.daily_decay(d(2025, 1, day));
+        }
+        assert!((l.form_rating - 5.0).abs() < 1e-6, "form={}", l.form_rating);
+    }
+
+    #[test]
+    fn form_ema_converges_toward_run_of_ratings() {
+        let mut l = PlayerLoad::new();
+        l.update_form(6.0);
+        for _ in 0..20 {
+            l.update_form(8.0);
+        }
+        // Should be close to 8.0 after many applications, not still 6-ish.
+        assert!(l.form_rating > 7.8, "form_rating={}", l.form_rating);
+    }
+
+    #[test]
+    fn form_ignores_out_of_range() {
+        let mut l = PlayerLoad::new();
+        l.update_form(15.0);
+        l.update_form(-1.0);
+        assert_eq!(l.form_rating, 0.0);
+    }
+
+    #[test]
+    fn daily_decay_ages_minute_windows() {
+        let mut l = PlayerLoad::new();
+        l.daily_decay(d(2025, 1, 1)); // seed
+        l.record_match_minutes(90.0, false);
+        assert_eq!(l.minutes_last_7, 90.0);
+
+        // After 7 days of decay, last_7 should have fallen materially
+        // (factor (6/7)^7 ≈ 0.34).
+        for i in 2..=8 {
+            l.daily_decay(d(2025, 1, i));
+        }
+        assert!(
+            l.minutes_last_7 < 45.0,
+            "after a week: {}",
+            l.minutes_last_7
+        );
+        assert!(
+            l.minutes_last_7 > 20.0,
+            "decay shouldn't be complete: {}",
+            l.minutes_last_7
+        );
+
+        // last_30 decays slower — after 7 days it should still be > 65
+        // (factor (29/30)^7 ≈ 0.79).
+        assert!(
+            l.minutes_last_30 > 65.0,
+            "last_30 after a week: {}",
+            l.minutes_last_30
+        );
+    }
+
+    #[test]
+    fn daily_decay_ages_physical_load_windows() {
+        let mut l = PlayerLoad::new();
+        l.daily_decay(d(2025, 1, 1));
+        l.record_match_load(90.0, 25.0, false);
+        assert_eq!(l.physical_load_7, 90.0);
+        assert_eq!(l.high_intensity_load_7, 25.0);
+
+        for i in 2..=8 {
+            l.daily_decay(d(2025, 1, i));
+        }
+        assert!(l.physical_load_7 < 45.0);
+        assert!(l.physical_load_30 > 65.0);
+        assert!(l.high_intensity_load_7 < 13.0);
+    }
+
+    #[test]
+    fn recovery_debt_decays_faster_than_minute_windows() {
+        let mut l = PlayerLoad::new();
+        l.daily_decay(d(2025, 1, 1));
+        l.add_recovery_debt(400.0);
+        l.record_match_minutes(90.0, false);
+
+        for i in 2..=4 {
+            l.daily_decay(d(2025, 1, i));
+        }
+        // After 3 days, debt half-life ≈ 3d → roughly halved.
+        assert!(
+            l.recovery_debt < 250.0,
+            "debt after 3d: {}",
+            l.recovery_debt
+        );
+        // Minutes window decays slower: (6/7)^3 ≈ 0.63 → ~57.
+        assert!(l.minutes_last_7 > 50.0);
+    }
+
+    #[test]
+    fn consume_recovery_debt_drains_but_floors_at_zero() {
+        let mut l = PlayerLoad::new();
+        l.add_recovery_debt(100.0);
+        l.consume_recovery_debt(40.0);
+        assert!((l.recovery_debt - 60.0).abs() < 0.01);
+        l.consume_recovery_debt(1_000.0);
+        assert_eq!(l.recovery_debt, 0.0);
+    }
+
+    #[test]
+    fn workload_spike_ratio_needs_baseline() {
+        let mut l = PlayerLoad::new();
+        // No baseline: should not flag a spike yet.
+        l.record_match_load(95.0, 25.0, false);
+        assert!(!l.is_workload_spike(), "single match shouldn't spike");
+    }
+
+    #[test]
+    fn workload_spike_after_three_matches_in_one_week() {
+        let mut l = PlayerLoad::new();
+        l.daily_decay(d(2025, 1, 1));
+        // Build a chronic baseline: one match a week for 4 weeks.
+        for week in 0..4 {
+            l.daily_decay(d(2025, 1, 1 + week * 7));
+            l.record_match_load(85.0, 25.0, false);
+        }
+        // Now stack three matches in 7 days.
+        l.daily_decay(d(2025, 2, 1));
+        l.record_match_load(85.0, 25.0, false);
+        l.daily_decay(d(2025, 2, 4));
+        l.record_match_load(85.0, 25.0, false);
+        l.daily_decay(d(2025, 2, 7));
+        l.record_match_load(85.0, 25.0, false);
+
+        let ratio = l.workload_spike_ratio();
+        assert!(ratio >= WORKLOAD_SPIKE_RATIO, "ratio={}", ratio);
+        assert!(l.is_workload_spike());
+    }
+
+    #[test]
+    fn daily_decay_is_idempotent_same_day() {
+        let mut l = PlayerLoad::new();
+        l.daily_decay(d(2025, 1, 1));
+        l.record_match_minutes(90.0, false);
+        l.daily_decay(d(2025, 1, 1)); // same day — no change
+        assert_eq!(l.minutes_last_7, 90.0);
+        l.daily_decay(d(2025, 1, 1));
+        assert_eq!(l.minutes_last_7, 90.0);
+    }
+
+    #[test]
+    fn daily_decay_handles_multi_day_gap() {
+        let mut l = PlayerLoad::new();
+        l.daily_decay(d(2025, 1, 1));
+        l.record_match_minutes(90.0, false);
+        // Skip 14 days — catch up in one call.
+        l.daily_decay(d(2025, 1, 15));
+        // (6/7)^14 ≈ 0.117 → ~10.5
+        assert!(l.minutes_last_7 < 15.0);
+    }
+
+    #[test]
+    fn matches_last_14_bit_array_shifts() {
+        let mut l = PlayerLoad::new();
+        l.daily_decay(d(2025, 1, 1));
+
+        l.record_match_minutes(90.0, false); // day 0
+        l.daily_decay(d(2025, 1, 3)); // +2
+        l.record_match_minutes(90.0, false); // day 2
+        l.daily_decay(d(2025, 1, 6)); // +3
+        l.record_match_minutes(90.0, false); // day 5
+        assert_eq!(l.matches_last_14(), 3);
+
+        // Fourteen days after the first match — it should drop out.
+        l.daily_decay(d(2025, 1, 16)); // delta from last=10; first match now at slot 15 → gone
+        assert_eq!(l.matches_last_14(), 2);
+    }
+
+    #[test]
+    fn fatigue_thresholds() {
+        let mut l = PlayerLoad::new();
+        l.minutes_last_7 = 500.0;
+        assert!(l.is_fatigued());
+        assert!(!l.is_overloaded());
+
+        l.minutes_last_7 = 700.0;
+        assert!(l.is_overloaded());
+    }
+
+    #[test]
+    fn physical_load_thresholds_independent_of_minutes() {
+        let mut l = PlayerLoad::new();
+        // Heavy load with no minutes (edge case but exercises the OR
+        // branch in is_fatigued).
+        l.physical_load_7 = PHYSICAL_LOAD_THRESHOLD + 5.0;
+        assert!(l.is_fatigued());
+    }
+
+    /// A calendar of seasons 365 days apart: `starts` 90-minute matches
+    /// spread evenly over each 280-day season, then the summer break.
+    struct Seasons {
+        load: PlayerLoad,
+        day: NaiveDate,
+    }
+
+    impl Seasons {
+        const LENGTH: i64 = SEASON_DAYS as i64;
+        const YEAR: i64 = SEASON_CYCLE_DAYS as i64;
+
+        fn new() -> Self {
+            let mut load = PlayerLoad::new();
+            let day = d(2020, 8, 1);
+            load.daily_decay(day);
+            Seasons { load, day }
+        }
+
+        fn play(&mut self, seasons: i64, starts: i64, friendly: bool) {
+            for _ in 0..seasons {
+                let opening = self.day;
+                for offset in 0..Self::YEAR {
+                    self.load
+                        .daily_decay(opening + chrono::Duration::days(offset));
+                    if offset < Self::LENGTH
+                        && (0..starts).any(|i| i * Self::LENGTH / starts == offset)
+                    {
+                        self.load.record_match_minutes(90.0, friendly);
+                    }
+                }
+                self.day = opening + chrono::Duration::days(Self::YEAR);
+                self.load.daily_decay(self.day);
+            }
+        }
+
+        fn idle(&mut self, days: i64) {
+            self.day += chrono::Duration::days(days);
+            self.load.daily_decay(self.day);
+        }
+    }
+
+    #[test]
+    fn football_absorbed_fades_by_a_season() {
+        let mut l = PlayerLoad::new();
+        l.daily_decay(d(2025, 1, 1));
+        l.record_match_minutes(1000.0, false);
+        for offset in 1..=365 {
+            l.daily_decay(d(2025, 1, 1) + chrono::Duration::days(offset));
+        }
+        let expected = 1000.0 / std::f32::consts::E;
+        assert!(
+            (l.football_absorbed - expected).abs() <= expected * 0.01,
+            "a year on, {} of 1000 minutes remain; expected {expected:.1}",
+            l.football_absorbed
+        );
+    }
+
+    #[test]
+    fn regular_stock_is_what_a_regular_holds_after_the_summer() {
+        let mut s = Seasons::new();
+        s.play(2, 30, false);
+        assert!(
+            (s.load.football_absorbed - REGULAR_STOCK).abs() <= REGULAR_STOCK * 0.005,
+            "a regular holds {:.1} after the summer; REGULAR_STOCK is {REGULAR_STOCK}",
+            s.load.football_absorbed
+        );
+    }
+
+    #[test]
+    fn a_weekly_starter_is_fully_exposed_all_year() {
+        let mut s = Seasons::new();
+        s.play(2, 40, false);
+        let opening = s.day;
+        for offset in 0..Seasons::YEAR {
+            s.load.daily_decay(opening + chrono::Duration::days(offset));
+            if offset < Seasons::LENGTH && offset % 7 == 0 {
+                s.load.record_match_minutes(90.0, false);
+            }
+            assert_eq!(
+                s.load.match_exposure(),
+                1.0,
+                "day {offset} of the third season"
+            );
+        }
+    }
+
+    #[test]
+    fn a_player_who_has_not_played_is_unexposed() {
+        assert_eq!(PlayerLoad::new().match_exposure(), 0.0);
+    }
+
+    #[test]
+    fn a_month_on_the_bench_after_the_summer_keeps_two_seasons() {
+        let mut s = Seasons::new();
+        s.play(2, 40, false);
+        s.idle(30);
+        assert!(
+            s.load.match_exposure() > 0.9,
+            "exposure {} after the summer and a month out",
+            s.load.match_exposure()
+        );
+    }
+
+    #[test]
+    fn ten_starts_after_three_idle_seasons_are_not_a_regulars_football() {
+        let mut s = Seasons::new();
+        s.idle(3 * Seasons::YEAR);
+        for _ in 0..10 {
+            s.idle(7);
+            s.load.record_match_minutes(90.0, false);
+        }
+        assert!(
+            s.load.match_exposure() < 0.5,
+            "exposure {}",
+            s.load.match_exposure()
+        );
+    }
+
+    #[test]
+    fn a_youth_league_regular_absorbs_half_a_regulars_football() {
+        let mut s = Seasons::new();
+        s.play(2, 30, true);
+        assert!(
+            (s.load.match_exposure() - 0.5).abs() <= 0.02,
+            "a youth-league regular reads {} after the summer",
+            s.load.match_exposure()
+        );
+    }
+}

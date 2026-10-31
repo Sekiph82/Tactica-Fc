@@ -1,0 +1,2273 @@
+use crate::club::staff::perception::DevelopmentFormEvidence;
+use crate::context::GlobalContext;
+use crate::league::{
+    League, LeagueDynamics, LeagueMatch, LeagueMatchResultResult, LeagueTable, Schedule,
+};
+use crate::r#match::MatchSquad;
+use crate::r#match::squad::selection::helpers::PlayerAvailability;
+use crate::r#match::squad::selection::model::MatchSelectionGameModel;
+use crate::club::finance::RevenueModel;
+use crate::r#match::{
+    CompetitionKind, FixtureContext, Match, MatchResult, SelectionCompetition, SelectionContext,
+};
+use crate::{Club, ClubPhilosophy, MatchRuntime, Person, Player, Team, TeamType};
+use chrono::Duration;
+use chrono::{Datelike, NaiveDate};
+use log::debug;
+use rayon::prelude::*;
+use std::cmp::Reverse;
+use std::collections::{HashMap, HashSet};
+
+/// Per-matchday snapshot of clubs and teams indexed by id. Built once
+/// at the top of `play_scheduled_matches` so `build_match` and friends
+/// can fan out lookups in O(1) instead of re-scanning every club's
+/// team list per fixture.
+struct MatchdayLookup<'a> {
+    team_by_id: HashMap<u32, &'a Team>,
+    club_by_id: HashMap<u32, &'a Club>,
+}
+
+impl<'a> MatchdayLookup<'a> {
+    fn build(clubs: &'a [Club]) -> Self {
+        let estimated_teams = clubs.len() * 4;
+        let mut team_by_id: HashMap<u32, &'a Team> = HashMap::with_capacity(estimated_teams);
+        let mut club_by_id: HashMap<u32, &'a Club> = HashMap::with_capacity(clubs.len());
+        for club in clubs {
+            club_by_id.insert(club.id, club);
+            for team in &club.teams.teams {
+                team_by_id.insert(team.id, team);
+            }
+        }
+        MatchdayLookup {
+            team_by_id,
+            club_by_id,
+        }
+    }
+
+    fn team(&self, id: u32) -> Option<&'a Team> {
+        self.team_by_id.get(&id).copied()
+    }
+
+    fn club(&self, id: u32) -> Option<&'a Club> {
+        self.club_by_id.get(&id).copied()
+    }
+}
+
+impl League {
+    pub(in crate::league) fn prepare_matchday(&mut self, ctx: &GlobalContext<'_>, clubs: &[Club]) {
+        debug!("Preparing matchday for {}", self.name);
+
+        let current_date = ctx.simulation.date.date();
+        let day_of_week = current_date.weekday();
+
+        self.dynamics
+            .update_attendance_predictions(&self.table, day_of_week, current_date.month());
+
+        for club in clubs {
+            for team in &club.teams.teams {
+                if team.league_id == Some(self.id) {
+                    self.check_fixture_congestion(team, current_date);
+                }
+            }
+        }
+
+        self.dynamics.assign_referees();
+    }
+
+    fn check_fixture_congestion(&self, team: &Team, current_date: NaiveDate) {
+        let upcoming = self
+            .schedule
+            .count_matches_for_team_in_days(team.id, current_date, 7);
+        if upcoming > 2 {
+            debug!(
+                "⚠️ Fixture congestion for team {}: {} matches in 7 days",
+                team.name, upcoming
+            );
+        }
+    }
+
+    /// Build (but do not play) the `Match` objects for today's fixtures.
+    /// Pure read of league state — leaves `self.dynamics` untouched, so
+    /// many leagues can be built up front and dispatched as one batch
+    /// later. `apply_matchday_results` is the matching half: it takes
+    /// the played results back, stamps them onto `scheduled_matches`
+    /// and updates the per-team momentum.
+    pub(in crate::league) fn build_matchday_matches(
+        &self,
+        scheduled_matches: &[LeagueMatch],
+        clubs: &[Club],
+        ctx: &GlobalContext<'_>,
+        friendly: bool,
+        knockout: bool,
+        commitments: &MatchdayCommitments,
+    ) -> Vec<Match> {
+        let today = ctx.simulation.date.date();
+        let is_cup = self.is_cup;
+        let lookup = MatchdayLookup::build(clubs);
+        // Each fixture's two squads are picked from shared reads only, so a
+        // matchday's fixtures are built in parallel; the indexed collect keeps
+        // them paired with `scheduled_matches` for `apply_matchday_results`.
+        scheduled_matches
+            .par_iter()
+            .map(|scheduled_match| {
+                // Count upcoming competitive fixtures within 5 days for
+                // each side. A team with a cup tie three days from now
+                // has a reason to rotate today even if the league match
+                // would otherwise be high-importance.
+                let home_upcoming = self.schedule.count_matches_for_team_in_days(
+                    scheduled_match.home_team_id,
+                    today + Duration::days(1),
+                    5,
+                ) as u8;
+                let away_upcoming = self.schedule.count_matches_for_team_in_days(
+                    scheduled_match.away_team_id,
+                    today + Duration::days(1),
+                    5,
+                ) as u8;
+                Self::build_match(
+                    scheduled_match,
+                    clubs,
+                    &lookup,
+                    ctx,
+                    &self.dynamics,
+                    &self.table,
+                    friendly,
+                    knockout,
+                    is_cup,
+                    (home_upcoming, away_upcoming),
+                    commitments,
+                )
+            })
+            .collect()
+    }
+
+    /// Stamp played results back onto `scheduled_matches` (paired by
+    /// index with the order returned from `build_matchday_matches`) and
+    /// bump each team's momentum. Run after the engine — local or
+    /// distributed — has returned the matches.
+    pub(in crate::league) fn apply_matchday_results(
+        &mut self,
+        scheduled_matches: &mut [LeagueMatch],
+        match_results: &[MatchResult],
+    ) {
+        for (scheduled_match, result) in scheduled_matches.iter_mut().zip(match_results.iter()) {
+            scheduled_match.result = Some(LeagueMatchResultResult::from_score(&result.score));
+        }
+        for result in match_results {
+            self.dynamics.update_team_momentum_after_match(
+                result.home_team_id,
+                result.away_team_id,
+                result,
+            );
+        }
+    }
+
+    /// Backwards-compatible single-call wrapper. The production path
+    /// (`Country::simulate_build` + `Continent::simulate_build` +
+    /// `FootballSimulator::simulate_with`) calls the
+    /// `build_matchday_matches` / `apply_matchday_results` halves
+    /// directly so the world's matches dispatch in ONE global batch
+    /// per tick. Kept for tests and any future single-league call
+    /// site.
+    #[allow(dead_code)]
+    pub(in crate::league) fn play_scheduled_matches(
+        &mut self,
+        scheduled_matches: &mut [LeagueMatch],
+        clubs: &[Club],
+        ctx: &GlobalContext<'_>,
+        friendly: bool,
+        knockout: bool,
+    ) -> Vec<MatchResult> {
+        let commitments = MatchdayCommitments::gather([&self.schedule], ctx.simulation.date.date());
+        let matches = self.build_matchday_matches(
+            scheduled_matches,
+            clubs,
+            ctx,
+            friendly,
+            knockout,
+            &commitments,
+        );
+        let match_results = MatchRuntime::engine_pool().play(matches);
+        self.apply_matchday_results(scheduled_matches, &match_results);
+        match_results
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_match(
+        scheduled_match: &LeagueMatch,
+        clubs: &[Club],
+        lookup: &MatchdayLookup<'_>,
+        ctx: &GlobalContext<'_>,
+        dynamics: &LeagueDynamics,
+        table: &LeagueTable,
+        friendly: bool,
+        knockout: bool,
+        is_cup: bool,
+        upcoming_fixtures: (u8, u8),
+        commitments: &MatchdayCommitments,
+    ) -> Match {
+        let home_team = lookup
+            .team(scheduled_match.home_team_id)
+            .expect("Home team not found");
+
+        let away_team = lookup
+            .team(scheduled_match.away_team_id)
+            .expect("Away team not found");
+
+        let home_momentum = dynamics.get_team_momentum(scheduled_match.home_team_id);
+        let away_momentum = dynamics.get_team_momentum(scheduled_match.away_team_id);
+
+        let (home_pressure, away_pressure) = Self::calculate_match_pressures_static(
+            home_team,
+            away_team,
+            ctx.simulation.date.date(),
+            dynamics,
+            table,
+        );
+
+        // Match importance for squad selection decisions. A league game
+        // reads the table; continental ties build their own context and
+        // never reach this builder. A domestic cup tie scales importance by
+        // bracket stage and the reputation gap — early rounds rotate, finals
+        // demand the strongest XI — computed per side because the two clubs
+        // face different opponents.
+        let date = ctx.simulation.date.date();
+        let domestic_cup_round = if knockout && is_cup {
+            scheduled_match
+                .cup_round
+                .map(|round| (round, scheduled_match.cup_total_rounds.unwrap_or(round)))
+        } else {
+            None
+        };
+
+        let home_rep = home_team.reputation.market_value_score();
+        let away_rep = away_team.reputation.market_value_score();
+
+        let (home_base, away_base, home_competition, away_competition) = if friendly {
+            (
+                0.1,
+                0.1,
+                SelectionCompetition::Friendly,
+                SelectionCompetition::Friendly,
+            )
+        } else if let Some((round, total_rounds)) = domestic_cup_round {
+            (
+                Self::domestic_cup_importance(round, total_rounds, home_rep, away_rep),
+                Self::domestic_cup_importance(round, total_rounds, away_rep, home_rep),
+                SelectionCompetition::DomesticCup {
+                    round,
+                    total_rounds,
+                    own_reputation: home_rep,
+                    opponent_reputation: away_rep,
+                },
+                SelectionCompetition::DomesticCup {
+                    round,
+                    total_rounds,
+                    own_reputation: away_rep,
+                    opponent_reputation: home_rep,
+                },
+            )
+        } else if knockout {
+            // Non-cup knockout run through the league scheduler keeps the
+            // historical high fixed importance.
+            (
+                0.9,
+                0.9,
+                SelectionCompetition::League,
+                SelectionCompetition::League,
+            )
+        } else {
+            let imp = Self::calculate_match_importance(table, home_team, away_team, date);
+            (
+                imp,
+                imp,
+                SelectionCompetition::League,
+                SelectionCompetition::League,
+            )
+        };
+
+        // Fixture congestion tilt: if a team has another competitive
+        // fixture within the next 5 days, dampen this match's importance
+        // for them so the rotation/development logic kicks in. Applied
+        // per team individually. A domestic cup final is floored so
+        // congestion can never rotate it down into a weak XI.
+        let congestion_dampen = |ups: u8| -> f32 {
+            if ups >= 2 {
+                0.55
+            } else if ups == 1 {
+                0.80
+            } else {
+                1.0
+            }
+        };
+        let final_floor = |competition: &SelectionCompetition| -> f32 {
+            match competition {
+                SelectionCompetition::DomesticCup {
+                    round,
+                    total_rounds,
+                    ..
+                } if *total_rounds <= 1 || *round >= *total_rounds => {
+                    Self::DOMESTIC_CUP_FINAL_IMPORTANCE_FLOOR
+                }
+                _ => 0.0,
+            }
+        };
+        let home_importance = (home_base * congestion_dampen(upcoming_fixtures.0))
+            .max(final_floor(&home_competition));
+        let away_importance = (away_base * congestion_dampen(upcoming_fixtures.1))
+            .max(final_floor(&away_competition));
+
+        // Surface each team's club philosophy to the selector so
+        // DevelopAndSell / LoanFocused sides actually put their archetype
+        // on the pitch, not just on paper.
+        let home_philosophy: Option<ClubPhilosophy> =
+            lookup.club(home_team.club_id).map(|c| c.philosophy);
+        let away_philosophy: Option<ClubPhilosophy> =
+            lookup.club(away_team.club_id).map(|c| c.philosophy);
+
+        // Surface each side's baseline tactic to the other so a sharp
+        // coach can pick a counter. If the team hasn't locked in tactics
+        // yet, the enhanced squad builder will fall back to its default.
+        let home_baseline = home_team.tactics.as_ref().map(|t| t.tactic_type);
+        let away_baseline = away_team.tactics.as_ref().map(|t| t.tactic_type);
+
+        // Exact season length per side for the development minutes plan —
+        // the busiest-player fallback under-reads in a rotated squad.
+        let played_in_table = |team_id: u32| -> Option<f32> {
+            table
+                .rows
+                .iter()
+                .find(|r| r.team_id == team_id)
+                .map(|r| r.played as f32)
+        };
+
+        // The goalkeeping department's word, carried into the team sheet:
+        // the declared pecking order and any live request to play a
+        // particular keeper. Only the side's own senior fixtures hear it —
+        // an academy side picks its keepers on its own rotation plan.
+        let fixture_standard = (home_team.playing_standard + away_team.playing_standard) * 0.5;
+        let keeper_brief = |team: &Team| {
+            if team.team_type != TeamType::Main {
+                return None;
+            }
+            lookup
+                .club(team.club_id)
+                .and_then(|c| c.keeper_selection_brief(date))
+                .map(|b| b.with_fixture_standard(fixture_standard))
+        };
+
+        let mut home_ctx = SelectionContext {
+            is_friendly: friendly,
+            date,
+            match_importance: home_importance,
+            philosophy: home_philosophy,
+            opponent_tactic: away_baseline,
+            competition: home_competition,
+            game_model: None,
+            development_guest_ids: Vec::new(),
+            season_matches_played: played_in_table(home_team.id),
+            keeper_brief: keeper_brief(home_team),
+        };
+        let mut away_ctx = SelectionContext {
+            is_friendly: friendly,
+            date,
+            match_importance: away_importance,
+            philosophy: away_philosophy,
+            opponent_tactic: home_baseline,
+            competition: away_competition,
+            game_model: None,
+            development_guest_ids: Vec::new(),
+            season_matches_played: played_in_table(away_team.id),
+            keeper_brief: keeper_brief(away_team),
+        };
+
+        // Fixture-aware game model per side: the opponent block reads the
+        // opposing roster (pace / aerial / pressing / flank threat), the
+        // environment carries the venue, and congestion mirrors the same
+        // upcoming-fixture count the importance dampener uses. Friendlies
+        // skip it — the rotation selector never reads the model.
+        // Rivalry read for the derby classification — either club listing
+        // the other as a rival makes the fixture a derby.
+        let is_derby = match (
+            lookup.club(home_team.club_id),
+            lookup.club(away_team.club_id),
+        ) {
+            (Some(h), Some(a)) => h.is_rival(a.id) || a.is_rival(h.id),
+            _ => false,
+        };
+        if !friendly {
+            home_ctx.game_model = Some(MatchSelectionGameModel::build_for_fixture(
+                &home_ctx,
+                home_team,
+                away_team,
+                true,
+                upcoming_fixtures.0,
+                is_derby,
+            ));
+            away_ctx.game_model = Some(MatchSelectionGameModel::build_for_fixture(
+                &away_ctx,
+                away_team,
+                home_team,
+                false,
+                upcoming_fixtures.1,
+                is_derby,
+            ));
+        }
+
+        let (mut home_squad, mut away_squad) = if friendly {
+            let mut home_supplements = Self::collect_supplementary_players(
+                clubs,
+                home_team.club_id,
+                home_team.id,
+                friendly,
+                commitments,
+            );
+            let mut away_supplements = Self::collect_supplementary_players(
+                clubs,
+                away_team.club_id,
+                away_team.id,
+                friendly,
+                commitments,
+            );
+
+            let home_overage = Self::collect_overage_development_players(
+                clubs,
+                home_team.club_id,
+                home_team.id,
+                &home_team.team_type,
+                ctx.simulation.date.date(),
+                commitments,
+            );
+            let away_overage = Self::collect_overage_development_players(
+                clubs,
+                away_team.club_id,
+                away_team.id,
+                &away_team.team_type,
+                ctx.simulation.date.date(),
+                commitments,
+            );
+            // Flag the overage picks as development guests so the rotation
+            // selector admits them even when the roster is full — they are
+            // here for match practice, not shortfall cover.
+            home_ctx.development_guest_ids = home_overage.iter().map(|p| p.id).collect();
+            away_ctx.development_guest_ids = away_overage.iter().map(|p| p.id).collect();
+            home_supplements.extend(home_overage);
+            away_supplements.extend(away_overage);
+
+            (
+                home_team.get_rotation_match_squad_with_reserves(&home_supplements, &home_ctx),
+                away_team.get_rotation_match_squad_with_reserves(&away_supplements, &away_ctx),
+            )
+        } else {
+            let home_is_main = home_team.team_type == TeamType::Main;
+            let away_is_main = away_team.team_type == TeamType::Main;
+            let home_reserves = Self::collect_reserve_players(
+                clubs,
+                home_team.club_id,
+                home_team.id,
+                friendly,
+                home_is_main,
+                date,
+                commitments,
+            );
+            let away_reserves = Self::collect_reserve_players(
+                clubs,
+                away_team.club_id,
+                away_team.id,
+                friendly,
+                away_is_main,
+                date,
+                commitments,
+            );
+            (
+                home_team.get_enhanced_match_squad(&home_reserves, &home_ctx),
+                away_team.get_enhanced_match_squad(&away_reserves, &away_ctx),
+            )
+        };
+
+        Self::apply_psychological_factors_static(&mut home_squad, home_momentum, home_pressure);
+        Self::apply_psychological_factors_static(&mut away_squad, away_momentum, away_pressure);
+
+        let competition = if friendly {
+            CompetitionKind::Friendly
+        } else if is_cup {
+            CompetitionKind::DomesticCup
+        } else {
+            CompetitionKind::League
+        };
+        let mut fixture = FixtureContext::new(&scheduled_match.id, date, competition, knockout)
+            .with_importance((home_base + away_base) * 0.5)
+            .with_gate(RevenueModel::utilisation(
+                home_team.reputation.overall_score(),
+                1.0,
+                1.0,
+            ))
+            .with_rivalry(if is_derby { 1.0 } else { 0.0 });
+        if let Some(continent) = &ctx.continent {
+            fixture = fixture.on_continent(continent.id());
+        }
+        Match::make(
+            scheduled_match.id.clone(),
+            scheduled_match.league_id,
+            &scheduled_match.league_slug,
+            home_squad,
+            away_squad,
+            fixture,
+        )
+    }
+
+    /// Resolve the club and hand the fixture to [`MatchdayPool`].
+    fn collect_reserve_players<'a>(
+        clubs: &'a [Club],
+        club_id: u32,
+        team_id: u32,
+        is_friendly: bool,
+        for_main_team: bool,
+        date: NaiveDate,
+        commitments: &MatchdayCommitments,
+    ) -> Vec<&'a Player> {
+        let Some(club) = clubs.iter().find(|c| c.id == club_id) else {
+            return Vec::new();
+        };
+        MatchdayPool::offer(club, team_id, is_friendly, for_main_team, date, commitments)
+    }
+
+    /// Ensure the reserve pool offers a backup goalkeeper when the assembling
+    /// team can't cover the bench from its own roster plus the senior/older
+    /// reserves already swept in. Counts available keepers on the team and in
+    /// `reserves`; if short of a starter-plus-sub pair, borrows the best
+    /// available academy keepers from the deeper youth tiers, preferring the
+    /// oldest tier first so a U18 is only pulled up as a last resort.
+    /// Availability rules (injury, ban, international duty) are respected — an
+    /// unavailable keeper is never borrowed.
+    fn ensure_backup_goalkeeper_candidate<'a>(
+        club: &'a Club,
+        team_id: u32,
+        is_friendly: bool,
+        spoken_for: &HashSet<u32>,
+        reserves: &mut Vec<&'a Player>,
+    ) {
+        // A starter plus one substitute keeper. Borrowing is capped at this so
+        // a single missing backup never strips a youth side of its whole keeper
+        // corps.
+        const GK_BENCH_TARGET: usize = 2;
+
+        let team_keepers = club
+            .teams
+            .teams
+            .iter()
+            .find(|t| t.id == team_id)
+            .map(|t| {
+                t.players
+                    .iter()
+                    .filter(|p| {
+                        p.positions.is_goalkeeper() && Self::is_player_available(p, is_friendly)
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        let reserve_keepers = reserves
+            .iter()
+            .filter(|p| p.positions.is_goalkeeper())
+            .count();
+
+        let mut have = team_keepers + reserve_keepers;
+        if have >= GK_BENCH_TARGET {
+            return;
+        }
+
+        // Realistic borrowing order: oldest academy tier first, U18 last.
+        for tier in [TeamType::U20, TeamType::U19, TeamType::U18] {
+            let mut tier_keepers: Vec<&'a Player> = club
+                .teams
+                .teams
+                .iter()
+                .filter(|t| t.id != team_id && t.team_type == tier)
+                .flat_map(|t| t.players.iter())
+                .filter(|p| {
+                    p.positions.is_goalkeeper() && Self::is_player_available(p, is_friendly)
+                })
+                .filter(|p| !spoken_for.contains(&p.id))
+                .filter(|p| !reserves.iter().any(|r| r.id == p.id))
+                .collect();
+            // Best keeper in the tier first.
+            tier_keepers.sort_by(|a, b| {
+                b.player_attributes
+                    .current_ability
+                    .cmp(&a.player_attributes.current_ability)
+            });
+            for gk in tier_keepers {
+                if have >= GK_BENCH_TARGET {
+                    return;
+                }
+                reserves.push(gk);
+                have += 1;
+            }
+            if have >= GK_BENCH_TARGET {
+                return;
+            }
+        }
+    }
+
+    /// Collect supplementary players from other teams in the same club.
+    /// Used by non-main teams in friendly leagues to ensure they have enough players.
+    fn collect_supplementary_players<'a>(
+        clubs: &'a [Club],
+        club_id: u32,
+        team_id: u32,
+        is_friendly: bool,
+        commitments: &MatchdayCommitments,
+    ) -> Vec<&'a Player> {
+        let Some(club) = clubs.iter().find(|c| c.id == club_id) else {
+            return Vec::new();
+        };
+        let spoken_for = commitments.spoken_for(club, team_id);
+
+        club.teams
+            .teams
+            .iter()
+            .filter(|t| t.id != team_id)
+            .flat_map(|t| t.players.iter())
+            .filter(|p| !spoken_for.contains(&p.id))
+            .filter(|p| Self::is_player_available(p, is_friendly))
+            .collect()
+    }
+
+    /// Collect overage players from higher youth teams who need match practice.
+    /// Only applies to U18/U19 teams — allows older youth players (from U20/U21/U23)
+    /// who aren't getting matches to gain development time, like real overage rules.
+    ///
+    /// The quota is position-aware: keepers get a dedicated slot instead of
+    /// competing with outfielders in one mixed list. A fixture-less older
+    /// squad can hold a large idle keeper corps, and there is only one
+    /// goalkeeping shirt per match — a keeper who is offered but not picked
+    /// never resets his idle clock, so under a mixed quota the longest-idle
+    /// keepers would permanently occupy every slot while the outfielders
+    /// behind them (and the keepers behind *them*) never rotate in.
+    fn collect_overage_development_players<'a>(
+        clubs: &'a [Club],
+        club_id: u32,
+        team_id: u32,
+        team_type: &TeamType,
+        date: NaiveDate,
+        commitments: &MatchdayCommitments,
+    ) -> Vec<&'a Player> {
+        const MAX_OVERAGE_OUTFIELD_SLOTS: usize = 3;
+        const MAX_OVERAGE_KEEPER_SLOTS: usize = 1;
+        const MIN_IDLE_DAYS: u16 = 21;
+
+        if !matches!(team_type, TeamType::U18 | TeamType::U19) {
+            return Vec::new();
+        }
+
+        let Some(club) = clubs.iter().find(|c| c.id == club_id) else {
+            return Vec::new();
+        };
+        let spoken_for = commitments.spoken_for(club, team_id);
+
+        let mut candidates: Vec<&Player> = club
+            .teams
+            .teams
+            .iter()
+            .filter(|t| {
+                t.id != team_id
+                    && matches!(t.team_type, TeamType::U20 | TeamType::U21 | TeamType::U23)
+            })
+            .flat_map(|t| t.players.iter())
+            .filter(|p| !spoken_for.contains(&p.id))
+            .filter(|p| {
+                Self::is_player_available(p, true)
+                    && p.player_attributes.days_since_last_match >= MIN_IDLE_DAYS
+                    && p.age(date) <= 23
+            })
+            .collect();
+
+        candidates.sort_by(|a, b| {
+            b.player_attributes
+                .days_since_last_match
+                .cmp(&a.player_attributes.days_since_last_match)
+        });
+
+        let mut picked: Vec<&Player> =
+            Vec::with_capacity(MAX_OVERAGE_OUTFIELD_SLOTS + MAX_OVERAGE_KEEPER_SLOTS);
+        let mut outfield = 0usize;
+        let mut keepers = 0usize;
+        for p in candidates {
+            if p.positions.is_goalkeeper() {
+                if keepers < MAX_OVERAGE_KEEPER_SLOTS {
+                    picked.push(p);
+                    keepers += 1;
+                }
+            } else if outfield < MAX_OVERAGE_OUTFIELD_SLOTS {
+                picked.push(p);
+                outfield += 1;
+            }
+            if outfield == MAX_OVERAGE_OUTFIELD_SLOTS && keepers == MAX_OVERAGE_KEEPER_SLOTS {
+                break;
+            }
+        }
+        picked
+    }
+
+    /// Lower bound a domestic cup final's importance is clamped to after the
+    /// congestion dampener. Kept just above the `BestEleven` selection-policy
+    /// threshold (0.82) rather than exactly on it, so the final stays a
+    /// strong-XI affair even if that threshold or the comparison ever shifts.
+    const DOMESTIC_CUP_FINAL_IMPORTANCE_FLOOR: f32 = 0.83;
+
+    /// Domestic-cup match importance for one side's squad selection.
+    /// Scales by bracket stage — early rounds rotate hard, semis and finals
+    /// demand a strong XI — and nudges up against a stronger opponent.
+    /// `own_rep`/`opp_rep` are the two sides' market-value scores. The
+    /// result is clamped per stage; the caller then applies the shared
+    /// congestion dampener (with a final-stage floor).
+    ///
+    /// Quarterfinals deliberately share the early/mid clamp band (max 0.62)
+    /// rather than getting their own higher band: a "last eight" tie against a
+    /// weak opponent should still be rotatable, while the stronger-opponent
+    /// nudge can lift it toward managed-minutes / strong-with-rotation.
+    fn domestic_cup_importance(round: u8, total_rounds: u8, own_rep: u16, opp_rep: u16) -> f32 {
+        let total = total_rounds.max(1);
+        let round_progress = round as f32 / total as f32;
+        let opponent_ratio = opp_rep as f32 / own_rep.max(1) as f32;
+
+        let is_final = total_rounds <= 1 || round >= total_rounds;
+        let is_semi = !is_final && round + 1 == total_rounds;
+        let is_quarter = !is_final && !is_semi && round + 2 == total_rounds;
+
+        let stage_base = if is_final {
+            0.95
+        } else if is_semi {
+            0.76
+        } else if is_quarter {
+            0.58
+        } else if round_progress < 0.40 {
+            0.30
+        } else if round_progress < 0.70 {
+            0.42
+        } else {
+            0.52
+        };
+
+        let opponent_adjust = if opponent_ratio < 0.45 {
+            -0.08
+        } else if opponent_ratio < 0.70 {
+            -0.04
+        } else if opponent_ratio <= 1.15 {
+            0.0
+        } else if opponent_ratio <= 1.50 {
+            0.08
+        } else {
+            0.14
+        };
+
+        let importance: f32 = stage_base + opponent_adjust;
+        if is_final {
+            importance.clamp(0.90, 0.98)
+        } else if is_semi {
+            importance.clamp(0.68, 0.86)
+        } else {
+            // Quarterfinal shares the early/mid clamp band.
+            importance.clamp(0.22, 0.62)
+        }
+    }
+
+    /// Calculate how important a match is for squad selection decisions.
+    /// Returns 0.0 (dead rubber) to 1.0 (must-win).
+    ///
+    /// Key principle: if a team has nothing to play for, importance drops
+    /// significantly — reserves and youth get chances.
+    fn calculate_match_importance(
+        table: &LeagueTable,
+        home_team: &Team,
+        away_team: &Team,
+        _date: NaiveDate,
+    ) -> f32 {
+        let total_teams = table.rows.len();
+        if total_teams == 0 {
+            return 0.5;
+        }
+
+        let home_row = table
+            .rows
+            .iter()
+            .enumerate()
+            .find(|(_, r)| r.team_id == home_team.id);
+        let away_row = table
+            .rows
+            .iter()
+            .enumerate()
+            .find(|(_, r)| r.team_id == away_team.id);
+
+        let (home_pos, home_played, home_points) = home_row
+            .map(|(i, r)| (i + 1, r.played as f32, r.points as i32))
+            .unwrap_or((total_teams / 2, 0.0, 0));
+
+        let away_pos = away_row.map(|(i, _)| i + 1).unwrap_or(total_teams / 2);
+
+        let total_matches = if total_teams > 1 {
+            ((total_teams - 1) * 2) as f32
+        } else {
+            1.0
+        };
+        let season_progress = (home_played / total_matches).clamp(0.0, 1.0);
+        let remaining_matches = (total_matches - home_played).max(0.0) as i32;
+
+        // Points gap to key positions
+        let top3_points = table.rows.get(2).map(|r| r.points as i32).unwrap_or(0);
+        let relegation_pos = total_teams.saturating_sub(3);
+        let relegation_points = table
+            .rows
+            .get(relegation_pos)
+            .map(|r| r.points as i32)
+            .unwrap_or(0);
+        // Can the team still catch top 3? (3 pts per remaining match)
+        let max_reachable = home_points + remaining_matches * 3;
+        let can_reach_top3 = max_reachable >= top3_points;
+
+        // Is the team safe from relegation? (gap too large to close)
+        let is_safe =
+            home_points > relegation_points + remaining_matches * 3 || home_pos <= total_teams / 2;
+        let is_in_danger = home_points <= relegation_points + 3 && home_pos > total_teams / 2;
+
+        // ── Determine importance ──
+
+        // Title contenders: fighting for top 3
+        if home_pos <= 3 && season_progress > 0.3 {
+            return if season_progress > 0.7 { 1.0 } else { 0.85 };
+        }
+
+        // Chasing top 3 and still mathematically possible
+        if home_pos <= 6 && can_reach_top3 && season_progress > 0.5 {
+            let gap = top3_points - home_points;
+            return if gap <= 6 { 0.85 } else { 0.7 };
+        }
+
+        // Relegation battle
+        if is_in_danger && season_progress > 0.3 {
+            return if season_progress > 0.7 { 1.0 } else { 0.85 };
+        }
+
+        // Direct rival: both in top 5 or both in bottom 5
+        let both_top = home_pos <= 5 && away_pos <= 5;
+        let both_bottom = home_pos > total_teams - 5 && away_pos > total_teams - 5;
+        if both_top || both_bottom {
+            return 0.8;
+        }
+
+        // ── Nothing to play for: dead rubber territory ──
+
+        // Safe from relegation + can't reach top 3 + late season = dead rubber
+        if is_safe && !can_reach_top3 && season_progress > 0.7 {
+            return 0.15;
+        }
+
+        // Same but mid-season: still rotate but less aggressively
+        if is_safe && !can_reach_top3 && season_progress > 0.5 {
+            return 0.3;
+        }
+
+        // Safe, can't reach top 3, early season — moderate rotation
+        if is_safe && !can_reach_top3 {
+            return 0.4;
+        }
+
+        // Early season: everyone still optimistic, moderate importance
+        if season_progress < 0.25 {
+            return 0.5;
+        }
+
+        // Default: standard competitive match
+        0.6
+    }
+
+    fn is_player_available(player: &Player, is_friendly: bool) -> bool {
+        if player.player_attributes.is_injured {
+            return false;
+        }
+        if player.statuses.is_on_international_duty() {
+            return false;
+        }
+        if !is_friendly && player.player_attributes.is_banned {
+            return false;
+        }
+        true
+    }
+
+    pub(in crate::league) fn calculate_match_pressures_static(
+        home_team: &Team,
+        away_team: &Team,
+        current_date: NaiveDate,
+        dynamics: &LeagueDynamics,
+        table: &LeagueTable,
+    ) -> (f32, f32) {
+        let home = Self::calculate_match_pressure_static(home_team, table, current_date, dynamics);
+        let away = Self::calculate_match_pressure_static(away_team, table, current_date, dynamics);
+        (home, away)
+    }
+
+    fn calculate_match_pressure_static(
+        team: &Team,
+        table: &LeagueTable,
+        _current_date: NaiveDate,
+        dynamics: &LeagueDynamics,
+    ) -> f32 {
+        let total_teams = table.rows.len();
+        // Cup (knockout) leagues have no standings table — guard the
+        // position arithmetic so `total_teams - 3` can't underflow and so
+        // an empty table doesn't masquerade as "top of the league".
+        if total_teams == 0 {
+            return 0.5;
+        }
+
+        let position = table
+            .rows
+            .iter()
+            .position(|r| r.team_id == team.id)
+            .unwrap_or(0);
+
+        let mut pressure: f32 = 0.5;
+
+        if position < 3 {
+            pressure += 0.3;
+        }
+
+        if position >= total_teams.saturating_sub(3) {
+            pressure += 0.4;
+        }
+
+        let losing_streak = dynamics.get_team_losing_streak(team.id);
+        if losing_streak > 3 {
+            pressure += 0.2;
+        }
+
+        pressure.min(1.0)
+    }
+
+    fn apply_psychological_factors_static(squad: &mut MatchSquad, momentum: f32, pressure: f32) {
+        debug!(
+            "Team {} - Momentum: {:.2}, Pressure: {:.2}",
+            squad.team_name, momentum, pressure
+        );
+    }
+}
+
+/// Every team with a fixture on one date, in whichever competitions the
+/// caller read. A player whose own team is in here is spoken for that day
+/// and is never lent to another of his club's sides.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct MatchdayCommitments {
+    teams: HashSet<u32>,
+}
+
+impl MatchdayCommitments {
+    pub(crate) fn gather<'s>(
+        schedules: impl IntoIterator<Item = &'s Schedule>,
+        date: NaiveDate,
+    ) -> Self {
+        MatchdayCommitments {
+            teams: schedules
+                .into_iter()
+                .flat_map(|s| s.teams_playing_on(date))
+                .collect(),
+        }
+    }
+
+    pub(crate) fn plays(&self, team_id: u32) -> bool {
+        self.teams.contains(&team_id)
+    }
+
+    /// The club's players the assembling side may not borrow today: those
+    /// whose own side plays, and — when a more senior side of the club
+    /// plays too — everyone, because the club lends to one side a day and
+    /// the most senior is served first.
+    fn spoken_for(&self, club: &Club, assembling_team_id: u32) -> HashSet<u32> {
+        let rank = |t: &Team| (t.team_type.seniority(), t.id);
+        let outranked = club
+            .teams
+            .teams
+            .iter()
+            .find(|t| t.id == assembling_team_id)
+            .is_some_and(|assembling| {
+                club.teams
+                    .teams
+                    .iter()
+                    .any(|t| self.plays(t.id) && rank(t) < rank(assembling))
+            });
+        club.teams
+            .teams
+            .iter()
+            .filter(|t| t.id != assembling_team_id && (outranked || self.plays(t.id)))
+            .flat_map(|t| t.players.iter().map(|p| p.id))
+            .collect()
+    }
+}
+
+/// Everyone a club may name for one fixture beyond the assembling team's own
+/// roster.
+///
+/// Sweeps the senior reserves and older youth sides (B / Second / Reserve /
+/// U21 / U23) in full — the pool a manager raids for matchday cover.
+/// Force-selected players from anywhere in the club are added only when the
+/// assembling team is the Main team — the pin is a senior-XI override, so a
+/// U18 starlet flagged for the first team must not also be pulled into the
+/// B-team's reserve pool.
+///
+/// On top of that sit the three narrower sweeps, each owning one question:
+/// [`YouthSeniorCallUp`] (who has earned a look), [`KeeperCallUp`] and
+/// [`League::ensure_backup_goalkeeper_candidate`] (the keeper room), and
+/// [`MatchdayShortfall`] (can the selector name eighteen at all).
+///
+/// Every competition that puts a club on a pitch reads this — the league
+/// matchday and the four continental brackets — so a club in an injury crisis
+/// gets the same bench in Europe that it gets on a Saturday.
+pub(crate) struct MatchdayPool;
+
+impl MatchdayPool {
+    pub(crate) fn offer<'a>(
+        club: &'a Club,
+        team_id: u32,
+        is_friendly: bool,
+        for_main_team: bool,
+        date: NaiveDate,
+        commitments: &MatchdayCommitments,
+    ) -> Vec<&'a Player> {
+        let spoken_for = commitments.spoken_for(club, team_id);
+
+        let mut reserves: Vec<&'a Player> = if for_main_team {
+            club.get_force_selected_players()
+                .into_iter()
+                .filter(|p| League::is_player_available(p, is_friendly))
+                .filter(|p| !spoken_for.contains(&p.id))
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        for p in club
+            .teams
+            .teams
+            .iter()
+            .filter(|t| {
+                t.id != team_id
+                    && matches!(
+                        t.team_type,
+                        TeamType::B
+                            | TeamType::Second
+                            | TeamType::Reserve
+                            | TeamType::U21
+                            | TeamType::U23
+                    )
+            })
+            .flat_map(|t| t.players.iter())
+            .filter(|p| League::is_player_available(p, is_friendly))
+            .filter(|p| !spoken_for.contains(&p.id))
+        {
+            if reserves.iter().any(|r| r.id == p.id) {
+                continue;
+            }
+            reserves.push(p);
+        }
+
+        // Academy call-ups: U18-U20 outfielders who have earned a place
+        // in the senior matchday pool (near-senior observable level, or
+        // breakout youth-league form).
+        if for_main_team {
+            YouthSeniorCallUp::sweep(club, team_id, is_friendly, &spoken_for, &mut reserves);
+            // Keepers come up a different way, because the judgement is a
+            // different one: not "is he as good as the man ahead of him"
+            // — he never is — but "is he ready to be around it". That is
+            // the goalkeeping coach's call, and the sweep above stays
+            // outfield-only precisely so it does not have to make it.
+            KeeperCallUp::sweep(club, team_id, is_friendly, date, &spoken_for, &mut reserves);
+        }
+
+        League::ensure_backup_goalkeeper_candidate(
+            club,
+            team_id,
+            is_friendly,
+            &spoken_for,
+            &mut reserves,
+        );
+        MatchdayShortfall::sweep(club, team_id, is_friendly, &spoken_for, &mut reserves);
+
+        reserves
+    }
+}
+
+/// Gated senior call-up sweep: the U18-U20 academy players good enough to
+/// train and travel with the first team join the Main matchday reserve
+/// pool, where the competitive selector's future-pathway layer decides
+/// whether the fixture is right for a cameo (early cup rounds, dead
+/// rubbers, congestion). This is the missing first rung of the real-life
+/// introduction ladder — stay youth-rostered, get named in the senior
+/// squad, collect cameos, and only then earn the permanent move (the
+/// cameos feed `PromotionEvidence` in the weekly squad rebalance).
+///
+/// Visible skills must approach the senior playing standard. Breakout youth
+/// form widens the band modestly; it never bypasses readiness. A missing
+/// position group uses the senior outfield standard rather than admitting
+/// an unready youngster automatically. Capped per matchday so the academy
+/// sides keep their squads, and goalkeepers are excluded — GK borrowing stays with
+/// the emergency sweep, since a green keeper cameo is a different risk
+/// class from an outfield one.
+struct YouthSeniorCallUp;
+
+impl YouthSeniorCallUp {
+    const TIERS: [TeamType; 3] = [TeamType::U20, TeamType::U19, TeamType::U18];
+    /// At most this many academy call-ups join the pool per matchday.
+    const MAX_PER_MATCHDAY: usize = 2;
+    /// Visible-skill band (1..200 scale) below the senior playing standard.
+    const LEVEL_BAND: u8 = 15;
+    /// Youth results earn a little more latitude, never an ability exemption.
+    const BREAKOUT_LEVEL_BAND: u8 = 25;
+    /// Breakout-form arm: a real sample of games...
+    const FORM_MIN_GAMES: u16 = 6;
+    /// ...at a regressed rating clearly above the ~6.6 positional neutral.
+    const FORM_MIN_RATING: f32 = 7.0;
+
+    fn sweep<'a>(
+        club: &'a Club,
+        main_team_id: u32,
+        is_friendly: bool,
+        spoken_for: &HashSet<u32>,
+        reserves: &mut Vec<&'a Player>,
+    ) {
+        let Some(main) = club.teams.teams.iter().find(|t| t.id == main_team_id) else {
+            return;
+        };
+
+        use crate::r#match::squad::selection::helpers::CallUpReadiness;
+        let senior_roster = main.players.players();
+
+        let mut candidates: Vec<(&'a Player, u8)> = Vec::new();
+        for team in club
+            .teams
+            .teams
+            .iter()
+            .filter(|t| t.id != main_team_id && Self::TIERS.contains(&t.team_type))
+        {
+            for p in team.players.iter() {
+                if p.positions.is_goalkeeper() {
+                    continue;
+                }
+                if !League::is_player_available(p, is_friendly) {
+                    continue;
+                }
+                if spoken_for.contains(&p.id) || reserves.iter().any(|r| r.id == p.id) {
+                    continue;
+                }
+                let level = CallUpReadiness::level(p);
+                let band = if Self::breakout_form(p) {
+                    Self::BREAKOUT_LEVEL_BAND
+                } else {
+                    Self::LEVEL_BAND
+                };
+                if CallUpReadiness::meets_level(p, &senior_roster, band) {
+                    candidates.push((p, level));
+                }
+            }
+        }
+
+        candidates.sort_by_key(|c| Reverse(c.1));
+        for (p, _) in candidates.into_iter().take(Self::MAX_PER_MATCHDAY) {
+            reserves.push(p);
+        }
+    }
+
+    /// Breakout youth-league form: judged on the season bucket that
+    /// actually carries the player's football (friendly bucket for youth
+    /// leagues), reliability-regressed so a hot streak can't trigger it.
+    fn breakout_form(player: &Player) -> bool {
+        if DevelopmentFormEvidence::games(player) < Self::FORM_MIN_GAMES {
+            return false;
+        }
+        DevelopmentFormEvidence::regressed_rating(player) >= Self::FORM_MIN_RATING
+    }
+}
+
+/// Fill the matchday pool before optimising it.
+///
+/// [`YouthSeniorCallUp`] is an *opportunity* mechanism — two academy players
+/// a matchday, the ones who have earned a look at the first team. For a club
+/// whose only other sides are U18/U20 it is also the only route into a senior
+/// matchday squad that exists, and those are not the same job. A first team
+/// missing half its squad to injury and international duty does not go out
+/// with three substitutes because only two boys were call-up ready; it names
+/// whoever is fit and worries about who deserved it afterwards.
+///
+/// So once every other sweep has run, whatever the pool is still short of a
+/// full eighteen is borrowed from the academy, oldest tier first and best
+/// first inside a tier — and only the shortfall, so a well-stocked senior
+/// squad borrows nobody and a thin one never takes more from the academy side
+/// than it actually needs. Same shape as
+/// [`ensure_backup_goalkeeper_candidate`](League::ensure_backup_goalkeeper_candidate),
+/// which has always done exactly this for the one position where going short
+/// was unmissable — and which keeps the keeper question, so this sweep is
+/// outfield-only for the same reason [`YouthSeniorCallUp`] is.
+struct MatchdayShortfall;
+
+impl MatchdayShortfall {
+    /// A starting eleven plus a full bench — what the selector is asked for
+    /// and what it silently gave up on when the pool could not reach it.
+    const MATCHDAY_SQUAD: usize = 18;
+
+    /// The selector's own availability read, not the matchday one.
+    ///
+    /// This sweep exists to answer "will the selector be able to name
+    /// eighteen", so it has to count the players the selector will count:
+    /// [`League::is_player_available`] knows nothing about the hard condition
+    /// floor that drops a man on an empty tank, and counting him would leave
+    /// the bench short by exactly the number of walking wounded on the
+    /// roster.
+    fn fit(player: &Player, is_friendly: bool) -> bool {
+        PlayerAvailability::is_available(player, is_friendly)
+    }
+
+    /// Borrowing order: the oldest academy tier first, U18 last.
+    const TIERS: [TeamType; 5] = [
+        TeamType::U23,
+        TeamType::U21,
+        TeamType::U20,
+        TeamType::U19,
+        TeamType::U18,
+    ];
+
+    fn sweep<'a>(
+        club: &'a Club,
+        team_id: u32,
+        is_friendly: bool,
+        spoken_for: &HashSet<u32>,
+        reserves: &mut Vec<&'a Player>,
+    ) {
+        let mut offered: HashSet<u32> = reserves.iter().map(|p| p.id).collect();
+        let own = club
+            .teams
+            .teams
+            .iter()
+            .find(|t| t.id == team_id)
+            .map(|t| {
+                t.players
+                    .iter()
+                    .filter(|p| Self::fit(p, is_friendly))
+                    .filter(|p| !offered.contains(&p.id))
+                    .count()
+            })
+            .unwrap_or(0);
+
+        let mut have = own + offered.len();
+        if have >= Self::MATCHDAY_SQUAD {
+            return;
+        }
+
+        for tier in Self::TIERS {
+            let mut pool: Vec<&'a Player> = club
+                .teams
+                .teams
+                .iter()
+                .filter(|t| t.id != team_id && t.team_type == tier)
+                .flat_map(|t| t.players.iter())
+                .filter(|p| !p.positions.is_goalkeeper())
+                .filter(|p| Self::fit(p, is_friendly))
+                .filter(|p| !offered.contains(&p.id) && !spoken_for.contains(&p.id))
+                .collect();
+            pool.sort_by(|a, b| {
+                b.player_attributes
+                    .current_ability
+                    .cmp(&a.player_attributes.current_ability)
+            });
+            for player in pool {
+                if have >= Self::MATCHDAY_SQUAD {
+                    return;
+                }
+                offered.insert(player.id);
+                reserves.push(player);
+                have += 1;
+            }
+        }
+    }
+}
+
+/// Academy keepers the goalkeeping department wants around the first team.
+///
+/// The outfield sweep asks whether a boy is nearly as good as the men ahead
+/// of him. For a keeper that question has no useful answer — he is one of
+/// three or four in the whole club and he is never nearly as good — so the
+/// sweep above leaves keepers alone and this one asks the question a
+/// goalkeeping coach actually asks: is he ready to be around it.
+///
+/// The answer is already in the department's plan, revised monthly across
+/// every squad the club owns, so all this does is carry the named keepers
+/// into the senior matchday pool. Without a plan it does nothing, and the
+/// only route into a senior squad for an academy keeper stays what it was:
+/// the emergency borrow below.
+struct KeeperCallUp;
+
+impl KeeperCallUp {
+    /// At most one academy keeper joins the senior pool per matchday. A
+    /// second is of no use to anybody — there is one shirt and one place on
+    /// the bench — and it would strip the academy side of its own keeper.
+    const MAX_PER_MATCHDAY: usize = 1;
+
+    fn sweep<'a>(
+        club: &'a Club,
+        main_team_id: u32,
+        is_friendly: bool,
+        date: NaiveDate,
+        spoken_for: &HashSet<u32>,
+        reserves: &mut Vec<&'a Player>,
+    ) {
+        let called_up: Vec<&'a Player> = club
+            .keeper_call_ups(main_team_id, date)
+            .into_iter()
+            .filter(|p| League::is_player_available(p, is_friendly))
+            .filter(|p| !spoken_for.contains(&p.id))
+            .filter(|p| !reserves.iter().any(|r| r.id == p.id))
+            .take(Self::MAX_PER_MATCHDAY)
+            .collect();
+        reserves.extend(called_up);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{League, MatchdayCommitments};
+    use crate::r#match::{SelectionCompetition, SelectionContext, SelectionPolicy};
+
+    fn cup_ctx(
+        round: u8,
+        total_rounds: u8,
+        own: u16,
+        opp: u16,
+        importance: f32,
+    ) -> SelectionContext {
+        SelectionContext {
+            match_importance: importance,
+            competition: SelectionCompetition::DomesticCup {
+                round,
+                total_rounds,
+                own_reputation: own,
+                opponent_reputation: opp,
+            },
+            ..SelectionContext::default()
+        }
+    }
+
+    #[test]
+    fn domestic_cup_early_round_rotates() {
+        // Round 1 of 5 against an equal-reputation opponent: low importance,
+        // selector falls into CupRotation.
+        let imp = League::domestic_cup_importance(1, 5, 1000, 1000);
+        assert!(imp < 0.40, "early round importance should be low: {imp}");
+        assert_eq!(
+            SelectionPolicy::from_context(&cup_ctx(1, 5, 1000, 1000, imp)),
+            SelectionPolicy::CupRotation
+        );
+    }
+
+    #[test]
+    fn domestic_cup_final_is_best_eleven() {
+        // Round 5 of 5: the final demands the strongest available XI.
+        let imp = League::domestic_cup_importance(5, 5, 1000, 1000);
+        assert!(imp >= 0.90, "final importance should be high: {imp}");
+        assert_eq!(
+            SelectionPolicy::from_context(&cup_ctx(5, 5, 1000, 1000, imp)),
+            SelectionPolicy::BestEleven
+        );
+    }
+
+    #[test]
+    fn domestic_cup_strong_opponent_raises_importance() {
+        // A much stronger opponent (ratio > 1.5) in an early round lifts
+        // importance out of full youth-development territory.
+        let weak_equal = League::domestic_cup_importance(1, 5, 1000, 1000);
+        let strong_opp = League::domestic_cup_importance(1, 5, 1000, 1800);
+        assert!(
+            strong_opp > weak_equal,
+            "stronger opponent must raise importance: {strong_opp} vs {weak_equal}"
+        );
+        let policy = SelectionPolicy::from_context(&cup_ctx(1, 5, 1000, 1800, strong_opp));
+        assert!(
+            matches!(
+                policy,
+                SelectionPolicy::ManagedMinutes | SelectionPolicy::StrongWithRotation
+            ),
+            "strong opponent early cup should manage minutes, not full youth: {policy:?}"
+        );
+    }
+
+    #[test]
+    fn domestic_cup_importance_rises_monotonically_by_stage() {
+        // Equal opponents, 5-round bracket: importance must climb round by
+        // round, and the derived policy must walk up the rotation ladder.
+        let r1 = League::domestic_cup_importance(1, 5, 1000, 1000);
+        let r3 = League::domestic_cup_importance(3, 5, 1000, 1000);
+        let r4 = League::domestic_cup_importance(4, 5, 1000, 1000);
+        let r5 = League::domestic_cup_importance(5, 5, 1000, 1000);
+        assert!(
+            r1 < r3 && r3 < r4 && r4 < r5,
+            "importance must increase by stage: {r1} {r3} {r4} {r5}"
+        );
+
+        assert_eq!(
+            SelectionPolicy::from_context(&cup_ctx(1, 5, 1000, 1000, r1)),
+            SelectionPolicy::CupRotation
+        );
+        // Quarterfinal (round 3 of 5) lands in the managed/strong band.
+        assert!(matches!(
+            SelectionPolicy::from_context(&cup_ctx(3, 5, 1000, 1000, r3)),
+            SelectionPolicy::ManagedMinutes | SelectionPolicy::StrongWithRotation
+        ));
+        assert_eq!(
+            SelectionPolicy::from_context(&cup_ctx(4, 5, 1000, 1000, r4)),
+            SelectionPolicy::StrongWithRotation
+        );
+        assert_eq!(
+            SelectionPolicy::from_context(&cup_ctx(5, 5, 1000, 1000, r5)),
+            SelectionPolicy::BestEleven
+        );
+    }
+
+    #[test]
+    fn domestic_cup_final_floor_holds_under_congestion() {
+        // The importance formula caps the final at <=0.98, and the build
+        // path floors it above the BestEleven threshold even when congestion
+        // would dampen it.
+        let final_importance = League::domestic_cup_importance(4, 4, 1000, 1000);
+        assert!((0.90..=0.98).contains(&final_importance));
+        // Heavy congestion dampener (0.55) would pull it to ~0.52; the floor
+        // keeps a final a strong-XI affair.
+        let dampened = (final_importance * 0.55).max(League::DOMESTIC_CUP_FINAL_IMPORTANCE_FLOOR);
+        assert!(dampened >= 0.83);
+        assert_eq!(
+            SelectionPolicy::from_context(&cup_ctx(4, 4, 1000, 1000, dampened)),
+            SelectionPolicy::BestEleven
+        );
+    }
+
+    // ========== Backup-goalkeeper borrowing ==========
+    //
+    // `collect_reserve_players` already sweeps senior reserves and the older
+    // youth sides (B/Second/Reserve/U21/U23). These tests cover the deep-squad
+    // keeper rescue layered on top: when the assembling team plus those swept
+    // reserves still can't field a substitute keeper, the deeper academy tiers
+    // (U20 → U19 → U18) are tapped, oldest first and respecting availability.
+
+    use crate::academy::ClubAcademy;
+    use crate::shared::Location;
+    use crate::{
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PeopleNameGeneratorData,
+        Player, PlayerCollection, PlayerGenerator, PlayerPositionType, PlayerSkills,
+        StaffCollection, Team, TeamBuilder, TeamCollection, TeamReputation, TeamType,
+        TrainingSchedule,
+    };
+    use chrono::{Datelike, NaiveDate, NaiveTime, Utc};
+
+    fn gk_names() -> PeopleNameGeneratorData {
+        PeopleNameGeneratorData {
+            first_names: vec!["Test".to_string()],
+            last_names: vec!["Keeper".to_string()],
+            nicknames: Vec::new(),
+        }
+    }
+
+    fn md_date() -> NaiveDate {
+        Utc::now().date_naive()
+    }
+
+    fn md_player(id: u32, position: PlayerPositionType, ability: u8) -> Player {
+        let mut p =
+            PlayerGenerator::generate(1, Utc::now().date_naive(), position, 15, &gk_names());
+        p.id = id;
+        p.player_attributes.current_ability = ability;
+        // The generator's academy skills are random — stamp them from the
+        // intended ability so observable-level reads (the call-up gate)
+        // order fixture players the way the test means them to be ordered.
+        p.skills = PlayerSkills::flat_for_ability(ability);
+        p
+    }
+
+    fn md_training() -> TrainingSchedule {
+        TrainingSchedule::new(
+            NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+            NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+        )
+    }
+
+    fn md_team(id: u32, club_id: u32, team_type: TeamType, players: Vec<Player>) -> Team {
+        TeamBuilder::new()
+            .id(id)
+            .league_id(Some(1))
+            .club_id(club_id)
+            .name(format!("team-{id}"))
+            .slug(format!("team-{id}"))
+            .team_type(team_type)
+            .players(PlayerCollection::new(players))
+            .staffs(StaffCollection::new(Vec::new()))
+            .reputation(TeamReputation::new(100, 100, 100))
+            .training_schedule(md_training())
+            .build()
+            .unwrap()
+    }
+
+    fn md_club(id: u32, teams: Vec<Team>) -> Club {
+        Club::new(
+            id,
+            "Club".to_string(),
+            Location::new(1),
+            ClubFinances::new(10_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(teams),
+            ClubFacilities::default(),
+        )
+    }
+
+    fn reserve_has(reserves: &[&Player], id: u32) -> bool {
+        reserves.iter().any(|p| p.id == id)
+    }
+
+    #[test]
+    fn collect_reserve_players_borrows_youth_keeper_when_team_lacks_backup() {
+        // First team carries a lone keeper, no senior reserve keeper exists, but
+        // the U19 side has one — it should be borrowed into the reserve pool.
+        let main = md_team(
+            1,
+            100,
+            TeamType::Main,
+            vec![
+                md_player(10, PlayerPositionType::Goalkeeper, 150),
+                md_player(11, PlayerPositionType::DefenderCenter, 140),
+            ],
+        );
+        let u19 = md_team(
+            2,
+            100,
+            TeamType::U19,
+            vec![md_player(20, PlayerPositionType::Goalkeeper, 90)],
+        );
+        let clubs = vec![md_club(100, vec![main, u19])];
+
+        let reserves = League::collect_reserve_players(
+            &clubs,
+            100,
+            1,
+            false,
+            true,
+            md_date(),
+            &MatchdayCommitments::default(),
+        );
+        assert!(
+            reserve_has(&reserves, 20),
+            "the U19 keeper is borrowed when the first team lacks a backup"
+        );
+    }
+
+    #[test]
+    fn collect_reserve_players_prefers_older_youth_keeper_tier() {
+        // Both a U20 and a (higher-CA) U18 keeper are available. The older tier
+        // is borrowed first, so the U18 is left untouched — tier beats ability.
+        let main = md_team(
+            1,
+            100,
+            TeamType::Main,
+            vec![md_player(10, PlayerPositionType::Goalkeeper, 150)],
+        );
+        let u20 = md_team(
+            2,
+            100,
+            TeamType::U20,
+            vec![md_player(20, PlayerPositionType::Goalkeeper, 90)],
+        );
+        let u18 = md_team(
+            3,
+            100,
+            TeamType::U18,
+            vec![md_player(30, PlayerPositionType::Goalkeeper, 95)],
+        );
+        let clubs = vec![md_club(100, vec![main, u20, u18])];
+
+        let reserves = League::collect_reserve_players(
+            &clubs,
+            100,
+            1,
+            false,
+            true,
+            md_date(),
+            &MatchdayCommitments::default(),
+        );
+        assert!(reserve_has(&reserves, 20), "the U20 keeper is preferred");
+        assert!(
+            !reserve_has(&reserves, 30),
+            "the U18 keeper is not borrowed once the U20 covers the bench"
+        );
+    }
+
+    #[test]
+    fn collect_reserve_players_skips_youth_keeper_when_reserve_keeper_present() {
+        // A B-team keeper is already swept into the reserves, so the bench is
+        // covered and no academy keeper is borrowed.
+        let main = md_team(
+            1,
+            100,
+            TeamType::Main,
+            vec![md_player(10, PlayerPositionType::Goalkeeper, 150)],
+        );
+        let b = md_team(
+            2,
+            100,
+            TeamType::B,
+            vec![
+                md_player(20, PlayerPositionType::Goalkeeper, 120),
+                md_player(21, PlayerPositionType::DefenderCenter, 130),
+            ],
+        );
+        let u19 = md_team(
+            3,
+            100,
+            TeamType::U19,
+            vec![md_player(30, PlayerPositionType::Goalkeeper, 90)],
+        );
+        let clubs = vec![md_club(100, vec![main, b, u19])];
+
+        let reserves = League::collect_reserve_players(
+            &clubs,
+            100,
+            1,
+            false,
+            true,
+            md_date(),
+            &MatchdayCommitments::default(),
+        );
+        assert!(
+            reserve_has(&reserves, 20),
+            "the B-team keeper is swept into the reserves"
+        );
+        assert!(
+            !reserve_has(&reserves, 30),
+            "no academy keeper is borrowed once a reserve keeper covers the bench"
+        );
+    }
+
+    #[test]
+    fn collect_reserve_players_does_not_borrow_unavailable_youth_keeper() {
+        // The only academy keeper is injured — it must not be borrowed, leaving
+        // the reserve pool keeper-less rather than naming an unavailable player.
+        let main = md_team(
+            1,
+            100,
+            TeamType::Main,
+            vec![md_player(10, PlayerPositionType::Goalkeeper, 150)],
+        );
+        let mut injured = md_player(20, PlayerPositionType::Goalkeeper, 90);
+        injured.player_attributes.is_injured = true;
+        let u19 = md_team(2, 100, TeamType::U19, vec![injured]);
+        let clubs = vec![md_club(100, vec![main, u19])];
+
+        let reserves = League::collect_reserve_players(
+            &clubs,
+            100,
+            1,
+            false,
+            true,
+            md_date(),
+            &MatchdayCommitments::default(),
+        );
+        assert!(
+            !reserves.iter().any(|p| p.positions.is_goalkeeper()),
+            "an injured academy keeper is never borrowed"
+        );
+    }
+
+    // ========== Overage development sweep (U20+ → U18/U19 dev fixtures) ==========
+
+    fn idle_u20_player(
+        id: u32,
+        position: PlayerPositionType,
+        idle_days: u16,
+        date: NaiveDate,
+    ) -> Player {
+        let mut p = md_player(id, position, 100);
+        p.player_attributes.days_since_last_match = idle_days;
+        p.birth_date = NaiveDate::from_ymd_opt(date.year() - 21, 1, 1).unwrap();
+        p
+    }
+
+    #[test]
+    fn overage_development_sweep_caps_keepers_to_a_dedicated_slot() {
+        // A fixture-less U20 squad holding ten idle keepers and four idle
+        // outfielders. There is one goalkeeping shirt per match and an
+        // offered-but-unpicked keeper never resets his idle clock, so under
+        // a mixed longest-idle quota the keeper corps would permanently
+        // occupy every slot. The sweep must offer exactly one keeper (the
+        // longest-idle) plus three outfielders.
+        let date = Utc::now().date_naive();
+        let u18 = md_team(1, 100, TeamType::U18, Vec::new());
+        let mut u20_players = Vec::new();
+        for i in 0..10u32 {
+            u20_players.push(idle_u20_player(
+                200 + i,
+                PlayerPositionType::Goalkeeper,
+                60 - i as u16,
+                date,
+            ));
+        }
+        for i in 0..4u32 {
+            u20_players.push(idle_u20_player(
+                300 + i,
+                PlayerPositionType::MidfielderCenter,
+                30 + i as u16,
+                date,
+            ));
+        }
+        let u20 = md_team(2, 100, TeamType::U20, u20_players);
+        let clubs = vec![md_club(100, vec![u18, u20])];
+
+        let picked = League::collect_overage_development_players(
+            &clubs,
+            100,
+            1,
+            &TeamType::U18,
+            date,
+            &MatchdayCommitments::default(),
+        );
+
+        let keepers = picked
+            .iter()
+            .filter(|p| p.positions.is_goalkeeper())
+            .count();
+        assert_eq!(keepers, 1, "exactly one keeper takes the dedicated slot");
+        assert_eq!(
+            picked.len() - keepers,
+            3,
+            "three outfield slots are filled despite ten longer-idle keepers"
+        );
+        assert!(
+            picked.iter().any(|p| p.id == 200),
+            "the longest-idle keeper is the one offered"
+        );
+    }
+
+    #[test]
+    fn ready_youth_outfielder_joins_main_reserve_pool() {
+        // A U19 midfielder within the observable band of the weakest senior
+        // peer is called into the senior matchday pool; a clearly-below kid
+        // with no form case is not. The first team is a full eighteen so the
+        // shortfall sweep stays out of it and the gate is what is measured.
+        let main_players: Vec<Player> = (1..=18)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 100))
+            .collect();
+        let main = md_team(1, 100, TeamType::Main, main_players);
+        let u19 = md_team(
+            2,
+            100,
+            TeamType::U19,
+            vec![
+                md_player(20, PlayerPositionType::MidfielderCenter, 95),
+                md_player(21, PlayerPositionType::MidfielderCenter, 40),
+            ],
+        );
+        let clubs = vec![md_club(100, vec![main, u19])];
+
+        let reserves = League::collect_reserve_players(
+            &clubs,
+            100,
+            1,
+            false,
+            true,
+            md_date(),
+            &MatchdayCommitments::default(),
+        );
+        assert!(
+            reserve_has(&reserves, 20),
+            "a near-senior U19 midfielder earns a call-up to the senior pool"
+        );
+        assert!(
+            !reserve_has(&reserves, 21),
+            "a kid far below senior level with no form case stays with the U19s"
+        );
+    }
+
+    #[test]
+    fn youth_call_ups_are_capped_per_matchday() {
+        // A full first team: nothing is short, so the only thing bringing
+        // academy players in is the opportunity cap this test is about.
+        let main_players: Vec<Player> = (1..=18)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 100))
+            .collect();
+        let main = md_team(1, 100, TeamType::Main, main_players);
+        let u19 = md_team(
+            2,
+            100,
+            TeamType::U19,
+            vec![
+                md_player(30, PlayerPositionType::MidfielderCenter, 95),
+                md_player(31, PlayerPositionType::MidfielderCenter, 96),
+                md_player(32, PlayerPositionType::MidfielderCenter, 97),
+            ],
+        );
+        let clubs = vec![md_club(100, vec![main, u19])];
+
+        let reserves = League::collect_reserve_players(
+            &clubs,
+            100,
+            1,
+            false,
+            true,
+            md_date(),
+            &MatchdayCommitments::default(),
+        );
+        let called_up = reserves
+            .iter()
+            .filter(|p| (30..=32).contains(&p.id))
+            .count();
+        assert_eq!(
+            called_up, 2,
+            "academy call-ups are capped so the youth side keeps its squad"
+        );
+    }
+
+    #[test]
+    fn breakout_youth_form_earns_call_up() {
+        // Breakout youth form modestly widens the skill band; it cannot
+        // make a player far below the senior level ready.
+        let main_players: Vec<Player> = (1..=18)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 130))
+            .collect();
+        let main = md_team(1, 100, TeamType::Main, main_players);
+        let mut breakout = md_player(40, PlayerPositionType::MidfielderCenter, 110);
+        breakout.friendly_statistics.played = 12;
+        for _ in 0..12 {
+            breakout
+                .friendly_statistics
+                .record_match_rating(8.0, 90, true);
+        }
+        let quiet = md_player(41, PlayerPositionType::MidfielderCenter, 110);
+        let mut unready = md_player(42, PlayerPositionType::MidfielderCenter, 60);
+        unready.friendly_statistics = breakout.friendly_statistics.clone();
+        let u19 = md_team(2, 100, TeamType::U19, vec![breakout, quiet, unready]);
+        let clubs = vec![md_club(100, vec![main, u19])];
+
+        let reserves = League::collect_reserve_players(
+            &clubs,
+            100,
+            1,
+            false,
+            true,
+            md_date(),
+            &MatchdayCommitments::default(),
+        );
+        assert!(
+            reserve_has(&reserves, 40),
+            "a breakout youth-league season earns the senior call-up"
+        );
+        assert!(
+            !reserve_has(&reserves, 41),
+            "the same level without the form case does not"
+        );
+        assert!(
+            !reserve_has(&reserves, 42),
+            "youth form cannot bridge a large skill gap"
+        );
+    }
+
+    #[test]
+    fn a_short_first_team_calls_up_past_the_opportunity_cap() {
+        // The reported bench: a first team with twelve fit bodies and an
+        // academy that only produced two "ready" boys went out with three
+        // substitutes and could make two changes all afternoon. The cap is an
+        // opportunity rule, not a rule about how many players a club may name.
+        let main_players: Vec<Player> = (1..=12)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 150))
+            .collect();
+        let main = md_team(1, 100, TeamType::Main, main_players);
+        let u20_players: Vec<Player> = (20..=30)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 60))
+            .collect();
+        let u20 = md_team(2, 100, TeamType::U20, u20_players);
+        let clubs = vec![md_club(100, vec![main, u20])];
+
+        let reserves = League::collect_reserve_players(
+            &clubs,
+            100,
+            1,
+            false,
+            true,
+            md_date(),
+            &MatchdayCommitments::default(),
+        );
+        assert_eq!(
+            reserves.len(),
+            6,
+            "twelve fit seniors plus the borrowed shortfall make an eighteen"
+        );
+    }
+
+    #[test]
+    fn a_full_first_team_borrows_nobody() {
+        // The other side of the same rule: a club that can name eighteen of
+        // its own takes nothing from the academy beyond the two who earned it.
+        let main_players: Vec<Player> = (1..=20)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 150))
+            .collect();
+        let main = md_team(1, 100, TeamType::Main, main_players);
+        let u20_players: Vec<Player> = (20..=30)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 60))
+            .collect();
+        let u20 = md_team(2, 100, TeamType::U20, u20_players);
+        let clubs = vec![md_club(100, vec![main, u20])];
+
+        let reserves = League::collect_reserve_players(
+            &clubs,
+            100,
+            1,
+            false,
+            true,
+            md_date(),
+            &MatchdayCommitments::default(),
+        );
+        assert!(
+            reserves.is_empty(),
+            "a stocked first team borrows nobody; got {}",
+            reserves.len()
+        );
+    }
+
+    #[test]
+    fn youth_keepers_are_not_called_up_as_outfield_reserves() {
+        // Keeper call-ups belong to the emergency-borrow path; the academy
+        // sweep must never pull a keeper on the outfield gate. Main already
+        // has two fit keepers, so the emergency path stays quiet too.
+        let main = md_team(
+            1,
+            100,
+            TeamType::Main,
+            vec![
+                md_player(1, PlayerPositionType::Goalkeeper, 100),
+                md_player(2, PlayerPositionType::Goalkeeper, 100),
+                md_player(3, PlayerPositionType::MidfielderCenter, 100),
+            ],
+        );
+        let u19 = md_team(
+            2,
+            100,
+            TeamType::U19,
+            vec![md_player(20, PlayerPositionType::Goalkeeper, 99)],
+        );
+        let clubs = vec![md_club(100, vec![main, u19])];
+
+        let reserves = League::collect_reserve_players(
+            &clubs,
+            100,
+            1,
+            false,
+            true,
+            md_date(),
+            &MatchdayCommitments::default(),
+        );
+        assert!(
+            !reserve_has(&reserves, 20),
+            "a youth keeper is not part of the outfield call-up sweep"
+        );
+    }
+
+    /// The seam between the club's goalkeeping department and the matchday
+    /// squad: the boy the specialist has asked for reaches the senior pool
+    /// even though the first team is not short of keepers, which is the one
+    /// thing the emergency borrow above can never do.
+    #[test]
+    fn the_goalkeeping_department_calls_its_prospect_into_the_senior_pool() {
+        let mut keeper_one = md_player(10, PlayerPositionType::Goalkeeper, 150);
+        keeper_one.birth_date = md_date() - chrono::Duration::days(365 * 34);
+        let mut keeper_two = md_player(11, PlayerPositionType::Goalkeeper, 138);
+        keeper_two.birth_date = md_date() - chrono::Duration::days(365 * 28);
+        let mut keeper_three = md_player(12, PlayerPositionType::Goalkeeper, 118);
+        keeper_three.birth_date = md_date() - chrono::Duration::days(365 * 37);
+        let mut prospect = md_player(20, PlayerPositionType::Goalkeeper, 108);
+        prospect.birth_date = md_date() - chrono::Duration::days(365 * 18);
+        prospect.attributes.professionalism = 15.0;
+        prospect.attributes.ambition = 15.0;
+
+        let mut main = md_team(
+            1,
+            100,
+            TeamType::Main,
+            vec![
+                keeper_one,
+                keeper_two,
+                keeper_three,
+                md_player(13, PlayerPositionType::DefenderCenter, 140),
+            ],
+        );
+        main.staffs = StaffCollection::new(vec![md_goalkeeping_coach(900)]);
+        let u18 = md_team(2, 100, TeamType::U18, vec![prospect]);
+
+        let mut club = md_club(100, vec![main, u18]);
+        club.review_goalkeeping_department(md_date());
+        assert_eq!(
+            club.keeper_plan().and_then(|p| p.nominated(md_date())),
+            Some(20),
+            "the department asks for the boy"
+        );
+
+        let clubs = vec![club];
+        let reserves = League::collect_reserve_players(
+            &clubs,
+            100,
+            1,
+            false,
+            true,
+            md_date(),
+            &MatchdayCommitments::default(),
+        );
+        assert!(
+            reserve_has(&reserves, 20),
+            "and he reaches the first team's matchday pool with three fit keepers ahead of him"
+        );
+    }
+
+    // ========== Same-day commitments ==========
+
+    fn md_commitments(team_ids: &[u32]) -> MatchdayCommitments {
+        use crate::league::{Schedule, ScheduleItem, ScheduleTour};
+        let kickoff = md_date().and_hms_opt(15, 0, 0).unwrap();
+        let mut tour = ScheduleTour::new(1, team_ids.len());
+        for (i, team_id) in team_ids.iter().enumerate() {
+            tour.items.push(ScheduleItem::new(
+                1,
+                "l".into(),
+                *team_id,
+                9_000 + i as u32,
+                kickoff,
+                None,
+            ));
+        }
+        MatchdayCommitments::gather([&Schedule { tours: vec![tour] }], md_date())
+    }
+
+    #[test]
+    fn commitments_gather_every_team_playing_that_day_across_schedules() {
+        use crate::league::{Schedule, ScheduleItem, ScheduleTour};
+        let day = md_date();
+        let fixture = |home: u32, away: u32, date: NaiveDate| {
+            let mut tour = ScheduleTour::new(1, 1);
+            tour.items.push(ScheduleItem::new(
+                1,
+                "l".into(),
+                home,
+                away,
+                date.and_hms_opt(15, 0, 0).unwrap(),
+                None,
+            ));
+            Schedule { tours: vec![tour] }
+        };
+        let league = fixture(1, 2, day);
+        let cup = fixture(3, 4, day);
+        let tomorrow = fixture(5, 6, day + chrono::Duration::days(1));
+
+        let commitments = MatchdayCommitments::gather([&league, &cup, &tomorrow], day);
+        for team in [1, 2, 3, 4] {
+            assert!(commitments.plays(team), "team {team} plays today");
+        }
+        assert!(!commitments.plays(5) && !commitments.plays(6));
+    }
+
+    fn b_team_club() -> Vec<Club> {
+        let main_players: Vec<Player> = (1..=12)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 150))
+            .collect();
+        let main = md_team(1, 100, TeamType::Main, main_players);
+        let b_players: Vec<Player> = (20..=30)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 120))
+            .collect();
+        let b = md_team(2, 100, TeamType::Second, b_players);
+        vec![md_club(100, vec![main, b])]
+    }
+
+    #[test]
+    fn a_b_team_playing_today_lends_nobody_to_the_first_team() {
+        let clubs = b_team_club();
+        let reserves = League::collect_reserve_players(
+            &clubs,
+            100,
+            1,
+            false,
+            true,
+            md_date(),
+            &md_commitments(&[1, 2]),
+        );
+        assert!(
+            !(20..=30).any(|id| reserve_has(&reserves, id)),
+            "the second team's men play their own match today"
+        );
+    }
+
+    #[test]
+    fn an_idle_b_team_lends_to_the_first_team_as_before() {
+        let clubs = b_team_club();
+        let reserves = League::collect_reserve_players(
+            &clubs,
+            100,
+            1,
+            false,
+            true,
+            md_date(),
+            &md_commitments(&[1]),
+        );
+        assert!(
+            (20..=30).all(|id| reserve_has(&reserves, id)),
+            "a second team with no fixture is the first team's reserve pool"
+        );
+    }
+
+    #[test]
+    fn the_shortfall_borrow_skips_a_youth_side_playing_today() {
+        let main_players: Vec<Player> = (1..=10)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 150))
+            .collect();
+        let main = md_team(1, 100, TeamType::Main, main_players);
+        let u19_players: Vec<Player> = (20..=30)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 70))
+            .collect();
+        let u19 = md_team(3, 100, TeamType::U19, u19_players);
+        let u18_players: Vec<Player> = (40..=50)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 60))
+            .collect();
+        let u18 = md_team(4, 100, TeamType::U18, u18_players);
+        let clubs = vec![md_club(100, vec![main, u19, u18])];
+
+        let reserves = League::collect_reserve_players(
+            &clubs,
+            100,
+            1,
+            false,
+            true,
+            md_date(),
+            &md_commitments(&[1, 3]),
+        );
+        assert!(
+            !(20..=30).any(|id| reserve_has(&reserves, id)),
+            "the U19 plays its own fixture today"
+        );
+        assert_eq!(
+            reserves.len(),
+            8,
+            "ten fit seniors plus eight idle U18s make the eighteen"
+        );
+        assert!(reserves.iter().all(|p| (40..=50).contains(&p.id)));
+    }
+
+    fn first_and_second_with_an_idle_u20() -> Vec<Club> {
+        let main_players: Vec<Player> = (1..=10)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 150))
+            .collect();
+        let main = md_team(1, 100, TeamType::Main, main_players);
+        let second_players: Vec<Player> = (20..=29)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 120))
+            .collect();
+        let second = md_team(2, 100, TeamType::Second, second_players);
+        let u20_players: Vec<Player> = (40..=50)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 70))
+            .collect();
+        let u20 = md_team(3, 100, TeamType::U20, u20_players);
+        vec![md_club(100, vec![main, second, u20])]
+    }
+
+    #[test]
+    fn on_a_shared_day_only_the_first_team_borrows_the_idle_academy() {
+        let clubs = first_and_second_with_an_idle_u20();
+        let both_play = md_commitments(&[1, 2]);
+
+        let first =
+            League::collect_reserve_players(&clubs, 100, 1, false, true, md_date(), &both_play);
+        assert!(
+            (40..=50).any(|id| reserve_has(&first, id)),
+            "the first team fills its bench from the idle U20"
+        );
+
+        let second =
+            League::collect_reserve_players(&clubs, 100, 2, false, false, md_date(), &both_play);
+        assert!(
+            second.is_empty(),
+            "the second side plays with its own men when the first team plays too"
+        );
+    }
+
+    #[test]
+    fn a_second_side_playing_alone_borrows_the_idle_academy() {
+        let clubs = first_and_second_with_an_idle_u20();
+        let second = League::collect_reserve_players(
+            &clubs,
+            100,
+            2,
+            false,
+            false,
+            md_date(),
+            &md_commitments(&[2]),
+        );
+        assert!(
+            (40..=50).any(|id| reserve_has(&second, id)),
+            "with the first team idle, the second side's shortfall reaches the U20"
+        );
+    }
+
+    #[test]
+    fn a_youth_side_gets_no_first_team_supplement_on_a_first_team_matchday() {
+        let main_players: Vec<Player> = (1..=18)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 150))
+            .collect();
+        let main = md_team(1, 100, TeamType::Main, main_players);
+        let u20_players: Vec<Player> = (20..=25)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 80))
+            .collect();
+        let u20 = md_team(2, 100, TeamType::U20, u20_players);
+        let u18 = md_team(
+            3,
+            100,
+            TeamType::U18,
+            vec![md_player(40, PlayerPositionType::MidfielderCenter, 60)],
+        );
+        let clubs = vec![md_club(100, vec![main, u20, u18])];
+
+        let supplements =
+            League::collect_supplementary_players(&clubs, 100, 3, true, &md_commitments(&[1, 3]));
+        assert!(
+            supplements.is_empty(),
+            "the first team plays today, so it alone borrows; the U18 plays with its own"
+        );
+
+        let idle_day =
+            League::collect_supplementary_players(&clubs, 100, 3, true, &md_commitments(&[3]));
+        assert!((1..=18).all(|id| reserve_has(&idle_day, id)));
+        assert!(
+            (20..=25).all(|id| reserve_has(&idle_day, id)),
+            "on its own matchday the U18 is supplemented from every idle squad"
+        );
+    }
+
+    /// A goalkeeping coach good enough to be listened to, plus the manager
+    /// whose seat the plan otherwise falls back to.
+    fn md_goalkeeping_coach(id: u32) -> crate::Staff {
+        use crate::{StaffClubContract, StaffPosition, StaffStatus, StaffStub};
+        let mut staff = StaffStub::build();
+        staff.id = id;
+        staff.contract = Some(StaffClubContract::new(
+            50_000,
+            md_date() + chrono::Duration::days(900),
+            StaffPosition::GoalkeeperCoach,
+            StaffStatus::Active,
+        ));
+        let gk = &mut staff.staff_attributes.goalkeeping;
+        gk.shot_stopping = 18;
+        gk.handling = 18;
+        gk.distribution = 16;
+        let knowledge = &mut staff.staff_attributes.knowledge;
+        knowledge.judging_player_ability = 17;
+        knowledge.judging_player_potential = 17;
+        let mental = &mut staff.staff_attributes.mental;
+        mental.man_management = 16;
+        mental.adaptability = 15;
+        staff
+    }
+}

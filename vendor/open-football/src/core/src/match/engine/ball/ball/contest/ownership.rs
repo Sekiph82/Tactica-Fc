@@ -1,0 +1,2210 @@
+//! Ball-ownership flow: pass-target receive, deadlock and unowned
+//! safety nets, the standing-ball notification dance, and the per-tick
+//! ownership claim that decides who is on the ball.
+
+use crate::r#match::engine::officiating::restart_shape::RestartShape;
+use crate::PlayerFieldPositionGroup;
+use crate::r#match::ball::events::BallEvent;
+use crate::r#match::engine::ball::ball::flight::motion::Carrier;
+use crate::r#match::engine::ball::ball::flight::roll::BallRoll;
+use crate::r#match::engine::ball::ball::{
+    AerialReach, AwaitedRestart, Ball, CONTROL_DISTANCE, LOOSE_CLAIM_DISTANCE, PlayerReach,
+    RestartQuiet,
+};
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::psychology::lapse::lapse_diag;
+use crate::r#match::engine::psychology::{ActionLapse, LapseFamily, PsychState};
+use crate::r#match::events::EventCollection;
+use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart};
+use nalgebra::Vector3;
+use std::env::var;
+use std::sync::OnceLock;
+
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::strike_diag::{GrantPath, StrikeCensus};
+
+/// Where the ball actually is when a pass is booked as received, and
+/// how often the delivery is then thrown away.
+///
+/// `try_pass_target_claim` grants ownership at up to 100u, but
+/// `Ball::move_to` only tracks the ball to an owner within 15u and
+/// drops ownership beyond that. Any reception in the gap is credited
+/// as a completed pass and then immediately released as a loose ball.
+#[cfg(feature = "match-logs")]
+pub mod reception_diag {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    pub const BANDS: usize = 5;
+    /// Upper bound of each band, in game units (1u = 0.125m).
+    pub const BAND_EDGES: [f32; BANDS] = [2.0, 15.0, 30.0, 60.0, f32::MAX];
+    pub const BAND_NAMES: [&str; BANDS] = ["<2u", "2-15u", "15-30u", "30-60u", ">60u"];
+    const ZERO: AtomicU64 = AtomicU64::new(0);
+    /// Receptions by receiver-to-ball distance at claim time.
+    pub static AT_DISTANCE: [AtomicU64; BANDS] = [ZERO; BANDS];
+    /// Ownership dropped by `move_to` because the owner was >15u away.
+    pub static OWNER_TOO_FAR: AtomicU64 = AtomicU64::new(0);
+    /// Passes emitted.
+    pub static EMITTED: AtomicU64 = AtomicU64::new(0);
+    /// Passes emitted while a previous pass was still unresolved — the
+    /// earlier one can never be credited, so it books as a failure.
+    pub static SUPERSEDED: AtomicU64 = AtomicU64::new(0);
+    /// Pass window ended because the ball went dead (out of play, foul,
+    /// restart) with nobody having taken control.
+    pub static DIED_DEAD_BALL: AtomicU64 = AtomicU64::new(0);
+    /// `PassTo` events rejected because the ball was out of the
+    /// passer's reach.
+    pub static OUT_OF_REACH: AtomicU64 = AtomicU64::new(0);
+    /// Ownership grants refused because the player was further from the
+    /// ball than it can be owned at. These are the ones that used to
+    /// become `OWNER_TOO_FAR` a tick later, with the ball's velocity
+    /// already destroyed — see `Ball::within_possession_reach`.
+    pub static GRANT_OUT_OF_REACH: AtomicU64 = AtomicU64::new(0);
+
+    /// **Which route a completed pass took to its credit**, and the one
+    /// number that bounds how much the passer's execution can ever be
+    /// worth.
+    ///
+    /// `try_pass_target_claim` rolls [`Ball::roll_first_touch`] before it
+    /// grants, so a delivery struck off its line can be spilled and the
+    /// pass booked as a failure. Every other route to control
+    /// (`ClaimBall` / `GainBall` / `TakeBall` →
+    /// `resolve_pending_pass_on_control`) credits the pass on contact
+    /// and cannot fail. Whatever share sits in `CREDIT_CONTROL` is
+    /// deaf to `pending_pass_error` by construction, so the measured
+    /// skill response to passing is diluted by exactly that fraction.
+    /// Deliveries on which the receiver lost his exclusive claim because
+    /// the ball was never going to reach him — see
+    /// `Ball::delivery_reaches_its_man`. These become ordinary loose
+    /// balls, which he still usually wins.
+    pub static DELIVERY_OVERRUN: AtomicU64 = AtomicU64::new(0);
+    /// Of those, the ones where the ball's travel ENDED before it got to
+    /// the aim point (underhit / lofted-and-short) rather than passing it
+    /// wide. Separates a weighting problem from a targeting one.
+    pub static OVERRUN_SHORT: AtomicU64 = AtomicU64::new(0);
+    /// Sum of the closest approach at the trip, ×100.
+    pub static OVERRUN_MISS_X100: AtomicU64 = AtomicU64::new(0);
+    /// Ticks since the strike at the trip, summed.
+    pub static OVERRUN_AGE: AtomicU64 = AtomicU64::new(0);
+    /// Geometry at the trip, summed ×100 over `DELIVERY_OVERRUN`. Which
+    /// of the two moved is the whole question: `BALL_AIM` large with
+    /// `MAN_AIM` small means the delivery went somewhere else, and the
+    /// reverse means the receiver did.
+    pub static OVERRUN_BALL_AIM_X100: AtomicU64 = AtomicU64::new(0);
+    pub static OVERRUN_MAN_AIM_X100: AtomicU64 = AtomicU64::new(0);
+    pub static OVERRUN_MAN_BALL_X100: AtomicU64 = AtomicU64::new(0);
+    /// Ball speed at the trip, ×100. Separates "still flying past him"
+    /// from "already dead somewhere else".
+    pub static OVERRUN_SPEED_X100: AtomicU64 = AtomicU64::new(0);
+    /// Angle between where the ball is going and where the aim point is,
+    /// in degrees ×100. Near zero means the ball is on line and the
+    /// PROJECTION is wrong; large means the delivery really is misaimed.
+    pub static OVERRUN_ANGLE_X100: AtomicU64 = AtomicU64::new(0);
+    /// Trips where the ball was still in the air, so `projected_arrival`
+    /// used the landing cache rather than the roll.
+    pub static OVERRUN_AIRBORNE: AtomicU64 = AtomicU64::new(0);
+
+    /// `(ball→aim, man→aim, man→ball, speed)`, each a mean in game units.
+    pub fn overrun_geometry() -> (f32, f32, f32, f32, f32, f32) {
+        let n = (DELIVERY_OVERRUN.load(Ordering::Relaxed).max(1) * 100) as f32;
+        (
+            OVERRUN_BALL_AIM_X100.load(Ordering::Relaxed) as f32 / n,
+            OVERRUN_MAN_AIM_X100.load(Ordering::Relaxed) as f32 / n,
+            OVERRUN_MAN_BALL_X100.load(Ordering::Relaxed) as f32 / n,
+            OVERRUN_SPEED_X100.load(Ordering::Relaxed) as f32 / n,
+            OVERRUN_ANGLE_X100.load(Ordering::Relaxed) as f32 / n,
+            OVERRUN_AIRBORNE.load(Ordering::Relaxed) as f32
+                / DELIVERY_OVERRUN.load(Ordering::Relaxed).max(1) as f32
+                * 100.0,
+        )
+    }
+    pub static CREDIT_TARGET: AtomicU64 = AtomicU64::new(0);
+    pub static CREDIT_CONTROL: AtomicU64 = AtomicU64::new(0);
+    /// First-touch rolls at a targeted reception, and the ones that
+    /// spilled (miscontrol + heavy). `STRETCH_ENGAGED` counts rolls
+    /// where the delivery's arrival error cleared the dead zone at all —
+    /// if it reads near zero the stretch term is not in the model.
+    pub static TOUCH_ROLLS: AtomicU64 = AtomicU64::new(0);
+    pub static TOUCH_SPILLED: AtomicU64 = AtomicU64::new(0);
+    pub static STRETCH_ENGAGED: AtomicU64 = AtomicU64::new(0);
+    /// Sum of arrival error over `TOUCH_ROLLS`, ×100 so it can live in
+    /// an integer counter. Divided out it is the mean radial the
+    /// receiver was actually asked to cover, in game units.
+    pub static ARRIVAL_ERROR_X100: AtomicU64 = AtomicU64::new(0);
+
+    /// `(target, control, rolls, spilled, stretch_engaged, mean_error_u, overrun)`
+    pub fn credit_route_snapshot() -> (u64, u64, u64, u64, u64, f32, u64, u64, f32, f32) {
+        let rolls = TOUCH_ROLLS.load(Ordering::Relaxed);
+        (
+            CREDIT_TARGET.load(Ordering::Relaxed),
+            CREDIT_CONTROL.load(Ordering::Relaxed),
+            rolls,
+            TOUCH_SPILLED.load(Ordering::Relaxed),
+            STRETCH_ENGAGED.load(Ordering::Relaxed),
+            ARRIVAL_ERROR_X100.load(Ordering::Relaxed) as f32 / (rolls.max(1) * 100) as f32,
+            DELIVERY_OVERRUN.load(Ordering::Relaxed),
+            OVERRUN_SHORT.load(Ordering::Relaxed),
+            OVERRUN_MISS_X100.load(Ordering::Relaxed) as f32
+                / (DELIVERY_OVERRUN.load(Ordering::Relaxed).max(1) * 100) as f32,
+            OVERRUN_AGE.load(Ordering::Relaxed) as f32
+                / DELIVERY_OVERRUN.load(Ordering::Relaxed).max(1) as f32,
+        )
+    }
+
+    /// Attribution for the `OWNER_TOO_FAR` drops, so the granting site can
+    /// be identified without auditing all fifteen of them by hand.
+    ///
+    /// Inspection has repeatedly picked the wrong suspect here, so this
+    /// splits the drops three ways at the one place they are all visible:
+    /// how far the owner actually was, whether the ball was in a keeper's
+    /// gloves (a gather), and whether a shot was live (a save path). The
+    /// distance band is the most informative: drops clustered just past
+    /// the cutoff are a reach that is marginally too generous, while drops
+    /// at 60u+ are a restart or hand-off that never moved anybody.
+    pub mod too_far {
+        use super::{AtomicU64, Ordering};
+
+        pub const BANDS: usize = 4;
+        pub const BAND_EDGES: [f32; BANDS] = [20.0, 30.0, 60.0, f32::MAX];
+        pub const BAND_NAMES: [&str; BANDS] = ["15-20u", "20-30u", "30-60u", ">60u"];
+        const ZERO: AtomicU64 = AtomicU64::new(0);
+
+        pub static AT_DISTANCE: [AtomicU64; BANDS] = [ZERO; BANDS];
+        /// Drops where the ball was in a keeper's gloves — a gather.
+        pub static IN_HANDS: AtomicU64 = AtomicU64::new(0);
+        /// Drops where a shot was still live — a save path.
+        pub static DURING_SHOT: AtomicU64 = AtomicU64::new(0);
+        /// Drops where the ball had already been stopped dead, i.e. the
+        /// ones that actually produce the reported artefact. A drop on a
+        /// ball still travelling is invisible; this is the subset that
+        /// leaves it sitting in mid-pitch.
+        pub static BALL_ALREADY_STOPPED: AtomicU64 = AtomicU64::new(0);
+
+        pub fn note(distance: f32, in_hands: bool, during_shot: bool, speed: f32) {
+            let band = BAND_EDGES.iter().position(|&e| distance < e).unwrap_or(0);
+            AT_DISTANCE[band].fetch_add(1, Ordering::Relaxed);
+            if in_hands {
+                IN_HANDS.fetch_add(1, Ordering::Relaxed);
+            }
+            if during_shot {
+                DURING_SHOT.fetch_add(1, Ordering::Relaxed);
+            }
+            if speed < 0.05 {
+                BALL_ALREADY_STOPPED.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn snapshot() -> ([u64; BANDS], u64, u64, u64) {
+            let mut bands = [0u64; BANDS];
+            for (i, b) in AT_DISTANCE.iter().enumerate() {
+                bands[i] = b.load(Ordering::Relaxed);
+            }
+            (
+                bands,
+                IN_HANDS.load(Ordering::Relaxed),
+                DURING_SHOT.load(Ordering::Relaxed),
+                BALL_ALREADY_STOPPED.load(Ordering::Relaxed),
+            )
+        }
+    }
+
+    /// Ticks the ball spent in a keeper's gloves, against total ticks.
+    ///
+    /// `held_in_hands` suppresses claiming, interception and — since
+    /// `carrier_id` — every press and tackle decision, so if it ever fails
+    /// to clear it does not misbehave subtly, it switches the defending
+    /// half of the engine off. Two counters settle "is this stuck?" in one
+    /// run instead of by reading clearing paths and hoping.
+    /// Real football: a keeper holds the ball for roughly 3-6% of a match.
+    pub static HELD_TICKS: AtomicU64 = AtomicU64::new(0);
+    pub static TOTAL_TICKS: AtomicU64 = AtomicU64::new(0);
+    /// Times a keeper closed his gloves on it. Held ticks divided by this
+    /// is the mean hold, which separates "holds too long" from "gathers
+    /// far too often" — the two have completely different causes.
+    pub static GATHERS: AtomicU64 = AtomicU64::new(0);
+    /// Gathers split by the state that emitted `CaughtBall`:
+    /// 0 catching, 1 picking up, 2 diving, 3 anything else.
+    pub static GATHER_SOURCE: [AtomicU64; 4] = [ZERO2; 4];
+    const ZERO2: AtomicU64 = AtomicU64::new(0);
+    pub fn gather_source_snapshot() -> [u64; 4] {
+        std::array::from_fn(|i| GATHER_SOURCE[i].load(Ordering::Relaxed))
+    }
+
+    /// `(held, total, gathers)`
+    pub fn hold_snapshot() -> (u64, u64, u64) {
+        (
+            HELD_TICKS.load(Ordering::Relaxed),
+            TOTAL_TICKS.load(Ordering::Relaxed),
+            GATHERS.load(Ordering::Relaxed),
+        )
+    }
+
+    /// ── KEEPER POSSESSION census ─────────────────────────
+    ///
+    /// A keeper's possession comes in two completely different flavours
+    /// and the counters above cannot tell them apart. In his GLOVES the
+    /// ball is out of play: `held_in_hands` bars every claim, tackle and
+    /// interception. At his FEET he is the worst tackler on the pitch
+    /// standing over the ball six yards from his own goal, and
+    /// `check_ball_ownership` hands it to whichever opponent inside 5u has
+    /// the better tackling score — which is all of them.
+    ///
+    /// So "the keeper gets robbed" is not one question but two, and only
+    /// this split can say which: a loss out of the HANDS is a rules breach
+    /// and must read zero, while a loss off the FEET is the engine
+    /// faithfully modelling a keeper who declined to pick the ball up.
+    ///
+    ///   0 foot ticks                     4 hand ticks
+    ///   1 …an opponent within 5u         5 …an opponent inside his area
+    ///   2 …hands would have been legal   6 …an opponent within 5u
+    ///   3 …both of the above             7 opponents-in-area, summed
+    ///   8 possession lost straight to an opponent OFF HIS FEET
+    ///   9 …OUT OF HIS GLOVES — must be 0
+    ///  10 foot spells started           11 hand spells started
+    ///  12 his gloves OPENED while he was still holding the ball and
+    ///     nobody had touched it — must be 0
+    ///  13 …and how many of those he was subsequently robbed on
+    ///  14/15, 16/17, 18/19 — (hand ticks, opponents-in-area summed) for
+    ///     the first second of the hold, the second, and everything after.
+    ///     A MEAN over the whole hold cannot tell "they never left" from
+    ///     "they left, and it took them three seconds"; the time course
+    ///     can, and only the second of those is what a retreat looks like.
+    ///  20 ticks a player spent being steered out of a keeper's area,
+    ///     21 the speed he was steered at, summed × 1000. See
+    ///     `KeeperReleaseSpace`.
+    pub static KEEPER_BALL: [AtomicU64; 22] = [ZERO2; 22];
+
+    #[inline]
+    pub fn keeper_ball_note(slot: usize) {
+        KEEPER_BALL[slot].fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn keeper_ball_add(slot: usize, n: u64) {
+        KEEPER_BALL[slot].fetch_add(n, Ordering::Relaxed);
+    }
+
+    pub fn keeper_ball_snapshot() -> [u64; 22] {
+        std::array::from_fn(|i| KEEPER_BALL[i].load(Ordering::Relaxed))
+    }
+
+    /// Foot-possession ticks split by the keeper state he was in, indexed
+    /// by the `GoalkeeperState` discriminant. Says WHERE to put the
+    /// decision: a state that holds the ball at his feet and has no
+    /// branch for an opponent arriving is the one that loses it.
+    pub static KEEPER_FEET_BY_STATE: [AtomicU64; 24] = [ZERO2; 24];
+
+    #[inline]
+    pub fn keeper_feet_state(slot: usize) {
+        if slot < 24 {
+            KEEPER_FEET_BY_STATE[slot].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn keeper_feet_state_snapshot() -> [u64; 24] {
+        std::array::from_fn(|i| KEEPER_FEET_BY_STATE[i].load(Ordering::Relaxed))
+    }
+
+    /// The keeper state he was in when an opponent took the ball off his
+    /// feet, same indexing. Answers "which state loses the ball", which is
+    /// a different question from "which state holds it longest".
+    pub static KEEPER_ROBBED_BY_STATE: [AtomicU64; 24] = [ZERO2; 24];
+
+    #[inline]
+    pub fn keeper_robbed_state(slot: usize) {
+        if slot < 24 {
+            KEEPER_ROBBED_BY_STATE[slot].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn keeper_robbed_state_snapshot() -> [u64; 24] {
+        std::array::from_fn(|i| KEEPER_ROBBED_BY_STATE[i].load(Ordering::Relaxed))
+    }
+
+    /// The keeper state he was in on the tick a FOOT possession began —
+    /// i.e. which state was running when some path handed him the ball
+    /// without putting it in his gloves. "Which state holds it" and
+    /// "which state was handed it" are different questions and the
+    /// second is the one that names the granting site.
+    pub static KEEPER_FEET_START_BY_STATE: [AtomicU64; 24] = [ZERO2; 24];
+
+    #[inline]
+    pub fn keeper_feet_start_state(slot: usize) {
+        if slot < 24 {
+            KEEPER_FEET_START_BY_STATE[slot].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn keeper_feet_start_snapshot() -> [u64; 24] {
+        std::array::from_fn(|i| KEEPER_FEET_START_BY_STATE[i].load(Ordering::Relaxed))
+    }
+
+    // ── Shot fate ────────────────────────────────────────────────────
+    // ~80% of shots are AIMED between the posts (`on_target` at emit),
+    // yet only ~23% ever resolve as a save or a goal. These say where
+    // the rest end up.
+    /// Shot crossed the endline outside the posts.
+    pub static SHOT_WIDE: AtomicU64 = AtomicU64::new(0);
+    /// Shot crossed inside the posts but over the bar.
+    pub static SHOT_OVER: AtomicU64 = AtomicU64::new(0);
+    /// Somebody took control of the ball while the shot was still live.
+    pub static SHOT_CLAIMED: AtomicU64 = AtomicU64::new(0);
+    /// `secure_ball_for` granted possession to a player further from the
+    /// ball than [`MAX_OWNER_TRACK_DISTANCE`](crate::r#match::engine::ball::ball::MAX_OWNER_TRACK_DISTANCE),
+    /// so the ball had to be written to his feet rather than tracked in.
+    ///
+    /// A tackle or an interception is something you do to a ball at your
+    /// feet, so every one of these is a grant that should not have been
+    /// made — the write is the symptom. Kept as a counter rather than
+    /// refused outright because refusing changes the tackle and
+    /// interception rates, which are calibrated numbers.
+    pub static SECURE_OUT_OF_REACH: AtomicU64 = AtomicU64::new(0);
+    /// Shot emitted with NO projected goal-line target — the keeper can
+    /// never engage it and no save/goal accounting reaches it.
+    pub static SHOT_NO_TARGET: AtomicU64 = AtomicU64::new(0);
+    /// Ball crossed the goal line but `check_goal` refused it (no recent
+    /// shot on record and no live shot target).
+    pub static GOAL_REJECTED: AtomicU64 = AtomicU64::new(0);
+    /// MUST STAY 0. A loose ball that reached `check_boundary_collision`
+    /// still past an endline and still between the posts — i.e. one that
+    /// every endline resolver declined, so the boundary clamp teleported
+    /// it back to x = ±10 with zero velocity and left it dead in the
+    /// goalmouth instead of restarting play.
+    ///
+    /// This was the "ball appears at a single point in front of the goal"
+    /// bug: `check_goal` refuses a ball with no shot behind it and
+    /// returned without a restart, `check_over_goal` only takes balls
+    /// above the bar, and `check_wide_of_goal` only took balls outside
+    /// the posts. 22 balls a match fell through all three. The counter is
+    /// the invariant: any non-zero reading means a hole has reopened.
+    pub static ENDLINE_CLAMPED_IN_MOUTH: AtomicU64 = AtomicU64::new(0);
+
+    /// ── Shot LIFECYCLE census ────────────────────────────────────────
+    ///
+    /// The counters above are all "a shot ended THIS way" flags planted
+    /// at individual sites, and between them they accounted for ~20 of
+    /// every 3500 shots struck — so the question "where do shots
+    /// actually go" had no answer. These are the complete partition:
+    /// every struck shot lands in exactly one bucket, and STRUCK equals
+    /// their sum plus whatever is still in the air.
+    ///
+    /// Read them as a waterfall against `STRUCK`. Anything large in
+    /// `CLAIMED_*` or `STOPPED` is a shot that never got a chance to be
+    /// a shot.
+    pub static FATE_STRUCK: AtomicU64 = AtomicU64::new(0);
+    /// Ended in the net.
+    pub static FATE_GOAL: AtomicU64 = AtomicU64::new(0);
+    /// The defending keeper finished with it — caught, gathered, held.
+    pub static FATE_GK: AtomicU64 = AtomicU64::new(0);
+    /// Went out of play: corner, goal kick or throw.
+    pub static FATE_OUT: AtomicU64 = AtomicU64::new(0);
+    /// An OUTFIELD defender took control of it mid-flight.
+    pub static FATE_CLAIMED_DEF: AtomicU64 = AtomicU64::new(0);
+    /// A team-mate of the shooter took control of it mid-flight
+    /// (rebound, deflection into a striker's path, or a shot walked
+    /// straight back into an attacker's feet).
+    pub static FATE_CLAIMED_ATT: AtomicU64 = AtomicU64::new(0);
+    /// Came to rest on the pitch, still unowned. A shot that stopped.
+    pub static FATE_STOPPED: AtomicU64 = AtomicU64::new(0);
+    /// Still live when the census window (400 ticks) expired.
+    pub static FATE_TIMEOUT: AtomicU64 = AtomicU64::new(0);
+    /// Sum of ticks a shot spent live, and how far from goal each was
+    /// struck (x100) — the two numbers that say whether shots are
+    /// getting a flight at all.
+    pub static FATE_LIVE_TICKS: AtomicU64 = AtomicU64::new(0);
+    pub static FATE_STRUCK_DIST_X100: AtomicU64 = AtomicU64::new(0);
+    /// …and the same distance sum, for the shots that DID resolve at the
+    /// goal (goal / keeper). Compared with the one above it says whether
+    /// the leak is distance-selective.
+    pub static FATE_REACHED_DIST_X100: AtomicU64 = AtomicU64::new(0);
+
+    pub fn fate_census() -> [u64; 11] {
+        [
+            FATE_STRUCK.load(Ordering::Relaxed),
+            FATE_GOAL.load(Ordering::Relaxed),
+            FATE_GK.load(Ordering::Relaxed),
+            FATE_OUT.load(Ordering::Relaxed),
+            FATE_CLAIMED_DEF.load(Ordering::Relaxed),
+            FATE_CLAIMED_ATT.load(Ordering::Relaxed),
+            FATE_STOPPED.load(Ordering::Relaxed),
+            FATE_TIMEOUT.load(Ordering::Relaxed),
+            FATE_LIVE_TICKS.load(Ordering::Relaxed),
+            FATE_STRUCK_DIST_X100.load(Ordering::Relaxed),
+            FATE_REACHED_DIST_X100.load(Ordering::Relaxed),
+        ]
+    }
+
+    pub fn shot_fate_snapshot() -> (u64, u64, u64, u64, u64, u64) {
+        (
+            SHOT_WIDE.load(Ordering::Relaxed),
+            SHOT_OVER.load(Ordering::Relaxed),
+            SHOT_CLAIMED.load(Ordering::Relaxed),
+            SHOT_NO_TARGET.load(Ordering::Relaxed),
+            GOAL_REJECTED.load(Ordering::Relaxed),
+            ENDLINE_CLAMPED_IN_MOUTH.load(Ordering::Relaxed),
+        )
+    }
+
+    pub fn band_for(distance: f32) -> usize {
+        BAND_EDGES
+            .iter()
+            .position(|&e| distance < e)
+            .unwrap_or(BANDS - 1)
+    }
+
+    pub fn record(distance: f32) {
+        AT_DISTANCE[band_for(distance)].fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn reset() {
+        for c in AT_DISTANCE.iter() {
+            c.store(0, Ordering::Relaxed);
+        }
+        for c in [
+            &OWNER_TOO_FAR,
+            &EMITTED,
+            &SUPERSEDED,
+            &DIED_DEAD_BALL,
+            &OUT_OF_REACH,
+            &SHOT_WIDE,
+            &SHOT_OVER,
+            &SHOT_CLAIMED,
+            &SECURE_OUT_OF_REACH,
+            &SHOT_NO_TARGET,
+            &GOAL_REJECTED,
+            &ENDLINE_CLAMPED_IN_MOUTH,
+            &FATE_STRUCK,
+            &FATE_GOAL,
+            &FATE_GK,
+            &FATE_OUT,
+            &FATE_CLAIMED_DEF,
+            &FATE_CLAIMED_ATT,
+            &FATE_STOPPED,
+            &FATE_TIMEOUT,
+            &FATE_LIVE_TICKS,
+            &FATE_STRUCK_DIST_X100,
+            &FATE_REACHED_DIST_X100,
+            &DELIVERY_OVERRUN,
+            &OVERRUN_SHORT,
+            &OVERRUN_MISS_X100,
+            &OVERRUN_AGE,
+            &OVERRUN_BALL_AIM_X100,
+            &OVERRUN_MAN_AIM_X100,
+            &OVERRUN_MAN_BALL_X100,
+            &OVERRUN_SPEED_X100,
+            &OVERRUN_ANGLE_X100,
+            &OVERRUN_AIRBORNE,
+            &CREDIT_TARGET,
+            &CREDIT_CONTROL,
+            &TOUCH_ROLLS,
+            &TOUCH_SPILLED,
+            &STRETCH_ENGAGED,
+            &ARRIVAL_ERROR_X100,
+        ] {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// `(per-band reception counts, owner-too-far drops)`
+    pub fn snapshot() -> ([u64; BANDS], u64) {
+        let mut out = [0u64; BANDS];
+        for (i, c) in AT_DISTANCE.iter().enumerate() {
+            out[i] = c.load(Ordering::Relaxed);
+        }
+        (out, OWNER_TOO_FAR.load(Ordering::Relaxed))
+    }
+
+    /// `(emitted, superseded, died_dead_ball, out_of_reach)`
+    pub fn pass_outcome_snapshot() -> (u64, u64, u64, u64) {
+        (
+            EMITTED.load(Ordering::Relaxed),
+            SUPERSEDED.load(Ordering::Relaxed),
+            DIED_DEAD_BALL.load(Ordering::Relaxed),
+            OUT_OF_REACH.load(Ordering::Relaxed),
+        )
+    }
+}
+
+/// Result of the first-touch resolution at the moment a pass target
+/// receives the ball. `Clean` keeps the legacy instant-control flow;
+/// the other two leave the ball live and contestable.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum FirstTouchOutcome {
+    /// Ball killed instantly — receiver takes ownership.
+    Clean,
+    /// Touch pushes the ball on several units along its line of travel.
+    /// Usually re-collected by the receiver, occasionally stolen by a
+    /// closing defender.
+    Heavy,
+    /// Ball bounces off the boot at a wide angle — a genuine loss of
+    /// control that often becomes a turnover.
+    Miscontrol,
+}
+
+impl Ball {
+    pub fn process_ownership(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        // A ball waiting for its restart is out of play and it is nobody's.
+        //
+        // `Ball::update` already skips the whole tick for one, so this is
+        // for the award that raises the flag from INSIDE this function:
+        // `try_pass_target_claim` gives the offside below, and everything
+        // after it in this tick has to respect the dead ball it leaves —
+        // otherwise `check_ball_ownership` hands it straight back to
+        // whoever is nearest, which for an offside is the offside player,
+        // standing on it.
+        if self.awaiting_restart.is_some() {
+            return;
+        }
+        // **Somebody other than the thrower has the ball**, and no touch
+        // was recorded on the way — several of the grants below (the
+        // notified claim, the deadlock resolver, the main claim scan)
+        // assign `current_owner` outright. Left unsettled, Law 15's bar
+        // stayed armed against a thrower whose team-mate had already
+        // collected the throw, which excluded him from the chase for a
+        // ball that was back in play. See `Ball::settle_throw_in`.
+        if let (Some(thrower), Some(owner)) = (self.throw_in_taker, self.current_owner)
+            && owner != thrower
+        {
+            let team = players.iter().find(|p| p.id == owner).map(|p| p.team_id);
+            let tick = self.current_tick_cached;
+            self.settle_throw_in(owner, team, tick);
+        }
+        if self.flags.in_flight_state > 0 {
+            self.flags.in_flight_state -= 1;
+            // Allow pass target to claim during flight
+            self.try_pass_target_claim(context, players, events);
+            // A delivery that has come to rest is not "in flight", whatever
+            // the counter says.
+            //
+            // The window is an EXCLUSION: while it runs, `check_ball_ownership`
+            // never executes, `force_claim_if_deadlock` and
+            // `try_notify_standing_ball` return early, and `ClaimBall` is
+            // rejected for anyone but the intended receiver. That is correct
+            // for a ball genuinely travelling to its man and indefensible for
+            // one lying still — and the two used to be indistinguishable,
+            // because the window was sized from a velocity the ball never
+            // got. The result was a stationary ball nobody was permitted to
+            // touch, with the designated chaser stuck in TakeBall beside it
+            // for as long as four seconds.
+            //
+            // Checked AFTER the receiver's own attempt, so his priority is
+            // never cut short by his pass arriving gently.
+            if self.current_owner.is_none()
+                && self.awaiting_restart.is_none()
+                && self.is_delivery_spent()
+            {
+                self.flags.in_flight_state = 0;
+                self.check_ball_ownership(context, players, events);
+            }
+        } else {
+            self.check_ball_ownership(context, players, events);
+        }
+    }
+
+    /// Weight of the stretched-reception term in the first-touch
+    /// difficulty blend. `OF_TOUCH_STRETCH=<f32>` overrides for
+    /// titration; `0` restores the pre-change difficulty exactly.
+    fn touch_stretch_weight() -> f32 {
+        static W: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+        *W.get_or_init(|| {
+            std::env::var("OF_TOUCH_STRETCH")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.30)
+        })
+    }
+
+    /// True when the current delivery has stopped being one: on the deck
+    /// and slower than a walking pace. See the call site in
+    /// [`Ball::process_ownership`].
+    pub(in crate::r#match::engine::ball::ball) fn is_delivery_spent(&self) -> bool {
+        /// 2.5 m/s. Below this the ball is trickling, not travelling — the
+        /// same physical meaning `MIN_INTERCEPTABLE_SPEED` carries.
+        const SPENT_SPEED: f32 = 0.20;
+        /// Anything with height left is still arriving.
+        const SPENT_HEIGHT: f32 = 0.5;
+
+        self.position.z <= SPENT_HEIGHT && self.velocity.norm_squared() < SPENT_SPEED * SPENT_SPEED
+    }
+
+    /// Skill-rolled first touch at pass reception — the producer for the
+    /// `miscontrols` / `heavy_touches` stat counters the rating helper
+    /// has been reading since the counters were added ("deferred
+    /// producer" in their docs). Probability flows from the
+    /// `receiving_first_touch` composite (first_touch / technique /
+    /// composure / anticipation / balance / agility, fatigue-aware via
+    /// `effective_skill`), the arrival difficulty (hot passes, aerial
+    /// drops, a closing defender) and his state of mind, which scales the
+    /// result through the lapse lane (`ActionLapse::scaled`).
+    /// All terms are continuous curves; no skill cliffs.
+    ///
+    /// Calibration: an average receiver (~0.5 composite) on a routine
+    /// ground pass under no pressure rolls ~0.7-0.9% miscontrol and
+    /// ~2× that heavy-touch; an elite receiver is ~4× cleaner, a tired
+    /// low-skill one under pressure several times worse. At the
+    /// engine's ~800 completed receptions/team this lands near the
+    /// real-football miscontrol band (~8-15/team/match).
+    fn roll_first_touch(
+        &self,
+        context: &MatchContext,
+        receiver: &MatchPlayer,
+        players: &[MatchPlayer],
+    ) -> FirstTouchOutcome {
+        // Keepers gathering back-passes essentially never mis-control
+        // in a way the outfield model represents; modelling it would
+        // only destabilise GK distribution calibration.
+        if receiver.tactical_position.current_position.position_group()
+            == PlayerFieldPositionGroup::Goalkeeper
+        {
+            return FirstTouchOutcome::Clean;
+        }
+
+        let minute = sc::minute_from_ticks(self.current_tick_cached);
+        let quality = sc::receiving_first_touch(receiver, minute);
+
+        // Arrival difficulty — every term continuous in [0, 1].
+        let speed01 = ((self.velocity.norm() - 1.5) / 5.0).clamp(0.0, 1.0);
+        let aerial01 = (self.position.z / 2.8).clamp(0.0, 1.0);
+        let mut nearest_opp_dist = f32::MAX;
+        for p in players.iter().filter(|p| p.team_id != receiver.team_id) {
+            let d = (p.position - receiver.position).norm();
+            if d < nearest_opp_dist {
+                nearest_opp_dist = d;
+            }
+        }
+        let pressure01 = (1.0 - nearest_opp_dist / 10.0).clamp(0.0, 1.0);
+        // A ball weighted to feet and one collected a stretch off its
+        // line are different receptions. `pending_pass_error` is the
+        // radial the delivery genuinely arrived off its ideal point
+        // (stashed at emit — jitter + miskick, swing excluded), and
+        // this is the one place the passer's execution reaches an
+        // outcome: `max_position_error` is bounded so far under
+        // `CONTROL_DISTANCE` that a wayward delivery is still caught,
+        // so if it does not cost the receiver a touch it costs nothing
+        // at all.
+        //
+        // The band is the reception geometry itself, not a pair of
+        // titrated constants: inside a boot the ball is at his feet and
+        // free, and a ball arriving a full `CONTROL_DISTANCE` off its
+        // line is the furthest he can still reach, so that is what a
+        // full stretch means. Anchoring it there is what keeps the two
+        // in step — the old fixed 4u sill was set against an error
+        // model that topped out at 9.3u, and when the budget moved the
+        // sill silently stopped describing anything (it exempted 88% of
+        // all receptions). `STRETCH_ENGAGED` is how often the term is in
+        // the model at all; `OF_TOUCH_STRETCH=<w>` overrides the weight,
+        // 0 disables exactly.
+        const STRETCH_FREE: f32 = 2.0;
+        let stretch01 = ((self.pending_pass_error - STRETCH_FREE)
+            / (CONTROL_DISTANCE - STRETCH_FREE))
+            .clamp(0.0, 1.0);
+        let difficulty = (speed01 * 0.40
+            + pressure01 * 0.40
+            + aerial01 * 0.20
+            + stretch01 * Self::touch_stretch_weight())
+        .min(1.0);
+        #[cfg(feature = "match-logs")]
+        {
+            use std::sync::atomic::Ordering;
+            reception_diag::TOUCH_ROLLS.fetch_add(1, Ordering::Relaxed);
+            reception_diag::ARRIVAL_ERROR_X100
+                .fetch_add((self.pending_pass_error * 100.0) as u64, Ordering::Relaxed);
+            if stretch01 > 0.0 {
+                reception_diag::STRETCH_ENGAGED.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let (p_miscontrol, p_heavy) =
+            Self::first_touch_chances(difficulty, quality, context.psychology.get(receiver.id));
+
+        let roll = context.rng.unit_f32();
+        #[cfg(feature = "match-logs")]
+        {
+            if roll < p_miscontrol + p_heavy {
+                reception_diag::TOUCH_SPILLED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            lapse_diag::note(LapseFamily::Touch, roll < p_miscontrol + p_heavy);
+        }
+        if roll < p_miscontrol {
+            FirstTouchOutcome::Miscontrol
+        } else if roll < p_miscontrol + p_heavy {
+            FirstTouchOutcome::Heavy
+        } else {
+            FirstTouchOutcome::Clean
+        }
+    }
+
+    /// `(miscontrol, heavy touch)` chances of a reception of `difficulty`
+    /// by a receiver of touch `quality`, as his head scales them: a nervous
+    /// receiver spills more of the same balls, a settled one exactly what
+    /// his touch and the ball say.
+    ///
+    /// First dev_match pass (300 matches) measured 2.6 miscontrols + 7.1
+    /// heavy touches/team — below the real ~8-15 band, expected since this
+    /// producer only fires at targeted-pass receptions (dribble losses are
+    /// booked by the dribble-duel system). Coefficients lifted to land
+    /// receptions at ~4-5 + ~10/team, the reception share of the real band.
+    pub(crate) fn first_touch_chances(
+        difficulty: f32,
+        quality: f32,
+        state: Option<&PsychState>,
+    ) -> (f32, f32) {
+        let settled =
+            ((0.006 + difficulty * 0.060) * (1.15 - quality).powf(1.6)).clamp(0.0005, 0.15);
+        (
+            ActionLapse::scaled(LapseFamily::Touch, settled, state),
+            ActionLapse::scaled(LapseFamily::Touch, settled * 2.2, state).min(0.25),
+        )
+    }
+
+    /// Apply a failed first touch: the receiver gets a touch (last-
+    /// toucher bookkeeping) but NOT ownership — the ball squirts loose
+    /// from their feet and normal claiming decides who comes up with
+    /// it. A heavy touch runs on along the line of travel (the classic
+    /// "took it in stride but too far"); a miscontrol bounces off at a
+    /// wide angle. `FirstTouchFailed` carries the stat + pass-accounting
+    /// credit to the dispatcher.
+    fn apply_failed_first_touch(
+        &mut self,
+        context: &MatchContext,
+        receiver_id: u32,
+        receiver_team: u32,
+        passer_id: u32,
+        outcome: FirstTouchOutcome,
+        events: &mut EventCollection,
+    ) {
+        let arrival_speed = self.velocity.norm();
+        let dir = if arrival_speed > 0.05 {
+            self.velocity / arrival_speed
+        } else {
+            Vector3::new(1.0, 0.0, 0.0)
+        };
+
+        let (out_dir, out_speed) = match outcome {
+            FirstTouchOutcome::Heavy => {
+                // Damped continuation — ball rolls 8-20u ahead of the
+                // receiver before friction kills it.
+                (dir, (arrival_speed * 0.40).clamp(0.8, 2.0))
+            }
+            _ => {
+                // Miscontrol: wide deflection off the boot, ±40-110°
+                // either side of the line of travel.
+                let sign = if context.rng.unit_f32() < 0.5 {
+                    -1.0
+                } else {
+                    1.0
+                };
+                let angle = sign * (0.7 + context.rng.unit_f32() * 1.2);
+                let (sin, cos) = angle.sin_cos();
+                let rotated =
+                    Vector3::new(dir.x * cos - dir.y * sin, dir.x * sin + dir.y * cos, 0.0);
+                (rotated, (arrival_speed * 0.50).clamp(1.0, 2.6))
+            }
+        };
+
+        // A failed touch happens where the BALL is, not where the receiver
+        // is: the deflection runs on from the point he met it, and a ball
+        // met off the deck is given a descent rather than put on the grass.
+        self.velocity = out_dir * out_speed;
+        self.sink_to_ground();
+        self.previous_owner = Some(receiver_id);
+        self.current_owner = None;
+        self.pass_target_player_id = None;
+        // Brief protection window so the squirting ball separates from
+        // the receiver before claiming resumes — without it the very
+        // next tick re-claims in place and the failure is invisible.
+        self.flags.in_flight_state = 12;
+        self.claim_cooldown = 0;
+        let tick = self.current_tick_cached;
+        self.record_touch(receiver_id, receiver_team, tick, false);
+        self.offside_snapshot = None;
+        self.pass_origin_restart = PassOriginRestart::OpenPlay;
+        events.add_ball_event(BallEvent::FirstTouchFailed(
+            receiver_id,
+            passer_id,
+            outcome == FirstTouchOutcome::Miscontrol,
+        ));
+    }
+
+    /// **The first involvement after a team-mate played the ball.** A man
+    /// who was offside then and has the ball now is flagged; anybody else
+    /// having it means the ball has been deliberately played and the
+    /// snapshot is over. A ball nobody has yet — in flight, deflected,
+    /// parried, off the post — keeps it.
+    pub(in crate::r#match::engine::ball::ball) fn police_offside(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        let (Some(snap), Some(owner)) = (self.offside_snapshot, self.current_owner) else {
+            return;
+        };
+        if snap.flags(owner) {
+            if let Some(offender) = players.iter().find(|p| p.id == owner) {
+                self.award_offside(context, players, offender, events);
+            }
+        } else if owner != snap.passer_id {
+            self.offside_snapshot = None;
+        }
+    }
+
+    /// A man who was offside plays the ball without ever having it — a
+    /// header, a volley, a touch on. Flagged before his strike happens.
+    pub fn flag_offside_striker(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        striker_id: u32,
+        events: &mut EventCollection,
+    ) -> bool {
+        if !self.offside_snapshot.is_some_and(|snap| snap.flags(striker_id)) {
+            return false;
+        }
+        let Some(offender) = players.iter().find(|p| p.id == striker_id) else {
+            return false;
+        };
+        self.award_offside(context, players, offender, events);
+        true
+    }
+
+    /// The flag is up: kill the pass and set the indirect free kick up
+    /// **without moving anything**.
+    ///
+    /// # Why the spot is HERE and not where he started his run
+    ///
+    /// It used to be `snap.receiver_{x,y}_at_kick` — where the offside
+    /// player stood at the moment the ball was played — and the engine then
+    /// had to put the ball there: the whole length of his run, and he has
+    /// just run onto a through-ball, so 10 to 25 m. On top of that
+    /// `handle_offside_event` staged a `pending_set_piece_teleport` for the
+    /// taker, so a defender materialised on the spot as well. Between them
+    /// that is the single biggest ball relocation left in a match, and at
+    /// 9-12 offsides a match it fires far more often than the corner and
+    /// goal-kick shortcuts it was modelled on.
+    ///
+    /// Law 11 has not asked for that spot since 2016/17: the restart is an
+    /// indirect free kick **where the offence occurred**, and the offence is
+    /// this touch — the tick the offside player becomes involved in active
+    /// play, which is the tick this function runs on. So the ball is already
+    /// on the spot, to within the claim radius, and nothing has to move at
+    /// all. The snapshot is still what DECIDES the offence; it just no
+    /// longer decides where the kick is taken from.
+    ///
+    /// The taker walks, exactly as a thrower does — see [`AwaitedRestart`].
+    fn award_offside(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        receiver: &MatchPlayer,
+        events: &mut EventCollection,
+    ) {
+        // Where the offence happened, held a couple of units inside the
+        // pitch so the dead ball cannot sit on a line and be resolved as a
+        // throw-in or a corner while it waits for its taker.
+        let spot = Vector3::new(
+            self.position.x.clamp(2.0, self.field_width - 2.0),
+            self.position.y.clamp(2.0, self.field_height - 2.0),
+            0.0,
+        );
+
+        // Nearest opponent takes it. Nearest to the SPOT rather than to the
+        // ball's landing place, which is the same thing now — and the
+        // goalkeeper is eligible, because a through-ball flagged offside on
+        // the edge of his area is a free kick he takes himself.
+        let taker = players
+            .iter()
+            .filter(|p| p.side.is_some() && p.side != receiver.side && !p.off_pitch)
+            .min_by(|a, b| {
+                let da = (a.position - spot).norm_squared();
+                let db = (b.position - spot).norm_squared();
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|p| p.id);
+
+        let Some(taker_id) = taker else {
+            // Nobody on the other side left to take it. Rather than leave a
+            // dead ball in mid-pitch with no restart coming, drop the
+            // offence: the snapshot goes and the pass completes as if the
+            // flag had stayed down. Reachable only with a side wiped off
+            // the pitch, and a stalled match is the worse failure.
+            self.offside_snapshot = None;
+            return;
+        };
+
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::RestartCensus::note_offside_given();
+
+        // Dead, where it lies. The height is NOT written down with it: a
+        // ball flagged out of the air settles onto the spot over the next
+        // few ticks (`tick_awaited_restart`) rather than being dropped a
+        // couple of metres in one.
+        self.position.x = spot.x;
+        self.position.y = spot.y;
+        self.velocity = Vector3::zeros();
+        self.spin = Vector3::zeros();
+        self.previous_owner = self.current_owner;
+        self.current_owner = None;
+        self.ownership_duration = 0;
+        self.claim_cooldown = 0;
+        self.flags.in_flight_state = 0;
+        self.contested_claim_count = 0;
+        self.clear_pass_history();
+        self.clear_open_play_metadata();
+        self.pass_origin_restart = PassOriginRestart::IndirectFreeKick;
+        // A carry that was still open when the flag went up ends here — the
+        // ball update is skipped for the whole wait, so otherwise it stays
+        // open and is charged to whoever takes the free kick.
+        self.tick_carry_tracker(events);
+
+        // The offside itself, for the statistic. `handle_offside_event` is
+        // purely a bookkeeping handler now; everything about the ball and
+        // the restart is settled above.
+        events.add_ball_event(BallEvent::Offside(receiver.id, spot));
+
+        self.pending_restart_stations = RestartShape::plan(
+            PassOriginRestart::IndirectFreeKick,
+            players,
+            taker_id,
+            spot,
+            self.field_width,
+            self.field_height,
+        );
+        self.awaiting_restart = Some(AwaitedRestart {
+            // ⚠ **The only restart with nothing to fetch.** An offside is
+            // an offence committed ON the pitch, so the ball has not left
+            // it and there is no run-out: it is dead where it lies and it
+            // is taken from where it lies. `settled` up, `take_from` empty
+            // — see [`AwaitedRestart::take_from`] and [`RunOff`].
+            take_from: None,
+            settled: true,
+            carrying: false,
+            taker_id,
+            spot,
+            origin: PassOriginRestart::IndirectFreeKick,
+            awarded_tick: context.current_tick(),
+            patience_ticks: AwaitedRestart::PATIENCE_TICKS,
+            settled_tick: None,
+            hold: None,
+            quiet: RestartQuiet::default(),
+        });
+        events.add_ball_event(BallEvent::TakeMe(taker_id));
+    }
+
+    /// **Is the delivery still going to reach the man it was played to?**
+    ///
+    /// The intended receiver holds an exclusive claim on a pass: nobody
+    /// else may take it while it is in flight, and `LooseBallChase`
+    /// truncates every other man's race at his collection point
+    /// ([`ChasePath::end_at`]). That is right while the ball is on its
+    /// way to him and indefensible once it is not — and because the
+    /// claim never expired, a sprayed or mis-weighted delivery stayed
+    /// his however far from him it ended up, so he simply ran after it
+    /// and completed the pass. `try_pass_target_claim` re-tests his
+    /// distance to the ball every tick, which makes it a CHASE test
+    /// rather than a catch test.
+    ///
+    /// That is why the passer's execution was worth nothing. Measured
+    /// with `OF_PIN=passing:20:1:out`, a 19-point swing in the attribute
+    /// across a whole side moved team pass accuracy +0.6pp against a
+    /// 0.5pp noise floor; driving the mean arrival error to 3.3 m, more
+    /// than double `CONTROL_DISTANCE`, left it flat at 87.4%.
+    ///
+    /// The test is the ball's own projected arrival against the spot the
+    /// receiver is running to. One predicate covers every way a
+    /// delivery can fail to find him — sprayed wide, overhit through
+    /// him, underhit short — because all three are the same fact about
+    /// where the ball is going to end up. Losing the privilege is not
+    /// losing the ball: he is usually still the nearest man and wins the
+    /// loose-ball election anyway. It stops being UNCONTESTED, which is
+    /// the whole of the difference.
+    fn delivery_reaches_its_man(&self, receiver: Option<&MatchPlayer>) -> bool {
+        let Some(aim) = self.pending_pass_aim else {
+            return true;
+        };
+        // Two anchors, because a pass is not struck to STOP on its man —
+        // it is struck to run through him and be collected in stride
+        // (`BallRoll::range` is most of a pitch for a firm ball). While
+        // the delivery is still short of the aim point that spot is what
+        // it has to find; once it is past, the only question left is
+        // whether it is still passing the man himself. Measured with one
+        // anchor, 37% of all passes were ruled overrun at a mean 12 m
+        // past an aim point the receiver was standing beside.
+        let reach = Self::delivery_reach();
+        if let Some(receiver) = receiver
+            && self.travel_passes_within(receiver.position, reach)
+        {
+            return true;
+        }
+        // Still short of him: the aim point is what the ball has to find.
+        // Closest approach rather than the finishing point, so an underhit
+        // delivery that dies before it gets there fails on the same test
+        // as one sprayed wide — no branch per kind of bad pass.
+        let reaches = self.travel_passes_within(aim, reach);
+        #[cfg(feature = "match-logs")]
+        if !reaches {
+            use std::sync::atomic::Ordering;
+            let d = reception_diag::OVERRUN_AGE.fetch_add(
+                self.current_tick_cached
+                    .saturating_sub(self.last_release_tick),
+                Ordering::Relaxed,
+            );
+            let _ = d;
+            let flat = Vector3::new(self.position.x, self.position.y, 0.0);
+            let cm = |v: f32| (v * 100.0) as u64;
+            reception_diag::OVERRUN_BALL_AIM_X100
+                .fetch_add(cm((flat - aim).norm()), Ordering::Relaxed);
+            reception_diag::OVERRUN_SPEED_X100.fetch_add(
+                cm(Vector3::new(self.velocity.x, self.velocity.y, 0.0).norm()),
+                Ordering::Relaxed,
+            );
+            if let Some(receiver) = receiver {
+                let man = Vector3::new(receiver.position.x, receiver.position.y, 0.0);
+                reception_diag::OVERRUN_MAN_AIM_X100
+                    .fetch_add(cm((man - aim).norm()), Ordering::Relaxed);
+                reception_diag::OVERRUN_MAN_BALL_X100
+                    .fetch_add(cm((man - flat).norm()), Ordering::Relaxed);
+            }
+            if self.position.z > 0.5 {
+                reception_diag::OVERRUN_AIRBORNE.fetch_add(1, Ordering::Relaxed);
+            }
+            let heading = Vector3::new(self.velocity.x, self.velocity.y, 0.0);
+            if let (Some(h), Some(t)) = (
+                heading.try_normalize(1.0e-4),
+                (aim - flat).try_normalize(1.0e-4),
+            ) {
+                let deg = h.dot(&t).clamp(-1.0, 1.0).acos().to_degrees();
+                reception_diag::OVERRUN_ANGLE_X100.fetch_add(cm(deg), Ordering::Relaxed);
+            }
+        }
+        reaches
+    }
+
+    /// How far off his line a delivery may run and still be counted as
+    /// coming to the man it was played to.
+    ///
+    /// Deliberately wider than `CONTROL_DISTANCE`: that is the radius at
+    /// which he can CONTROL the ball standing still, and a footballer
+    /// will happily chase one several metres off his line. This is the
+    /// bar for keeping his EXCLUSIVE claim, so it has to be the generous
+    /// question — and `CONTROL_DISTANCE` is already that question asked
+    /// of the delivery rather than of the man, so the two are the same
+    /// number and not two that have to be kept in step.
+    ///
+    /// Titrated against the population it has to leave standing:
+    ///
+    /// ```text
+    ///   reach   expiries   team pass accuracy   (real ~85%)
+    ///     36u      3.9%          87.4%
+    ///     24u      5.9%          87.6%
+    ///     12u      9.0%          86.4%
+    ///      8u     16.1%          81.3%
+    /// ```
+    ///
+    /// `OF_PASS_REACH=<u>` overrides; a very large value disarms it.
+    fn delivery_reach() -> f32 {
+        static REACH: OnceLock<f32> = OnceLock::new();
+        *REACH.get_or_init(|| {
+            var("OF_PASS_REACH")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(CONTROL_DISTANCE)
+        })
+    }
+
+    /// Does the ball's remaining travel ever come within `reach` of
+    /// `point`?
+    fn travel_passes_within(&self, point: Vector3<f32>, reach: f32) -> bool {
+        Self::travel_passes(
+            self.position,
+            self.velocity,
+            self.cached_landing_position,
+            point,
+            reach,
+        )
+    }
+
+    /// Does the travel of a ball at `position` moving at `velocity`,
+    /// landing at `landing` while it is in the air, ever come within
+    /// `reach` of `point`? The travel is the straight run to wherever it
+    /// would end up untouched, so this is a point-to-segment distance.
+    pub(crate) fn travel_passes(
+        position: Vector3<f32>,
+        velocity: Vector3<f32>,
+        landing: Vector3<f32>,
+        point: Vector3<f32>,
+        reach: f32,
+    ) -> bool {
+        let from = Vector3::new(position.x, position.y, 0.0);
+        let travel = Self::arrival_of(position, velocity, landing) - from;
+        let len_sq = travel.norm_squared();
+        let along = if len_sq <= f32::EPSILON {
+            0.0
+        } else {
+            ((point - from).dot(&travel) / len_sq).clamp(0.0, 1.0)
+        };
+        let closest = from + travel * along;
+        let dx = closest.x - point.x;
+        let dy = closest.y - point.y;
+        dx * dx + dy * dy <= reach * reach
+    }
+
+    /// Where a ball ends up if nobody touches it: the landing spot while
+    /// it is in the air, otherwise the end of its roll.
+    fn arrival_of(
+        position: Vector3<f32>,
+        velocity: Vector3<f32>,
+        landing: Vector3<f32>,
+    ) -> Vector3<f32> {
+        // Same sill as `is_delivery_spent`: anything with height left is
+        // still arriving.
+        const AIRBORNE: f32 = 0.5;
+        let velocity = Vector3::new(velocity.x, velocity.y, 0.0);
+        let speed = velocity.norm();
+        // A lofted delivery does not finish where it lands — it lands and
+        // RUNS ON, and a ball flighted to drop in front of its man and
+        // roll to him is the most ordinary pass in football. Stopping the
+        // projection at the landing spot called all of them misses: 84%
+        // of every expiry was an airborne ball, at a mean 28.9 degrees
+        // off a line it was in fact going to reach.
+        let start = if position.z > AIRBORNE {
+            landing
+        } else {
+            Vector3::new(position.x, position.y, 0.0)
+        };
+        if speed <= BallRoll::STOPPED {
+            return start;
+        }
+        start + (velocity / speed) * BallRoll::range(speed)
+    }
+
+    fn try_pass_target_claim(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        // **A pass that is not going to reach him stops being his.**
+        //
+        // Checked before the claim because everything below — and the
+        // whole in-flight exclusion window around it — exists to protect
+        // a delivery genuinely travelling to a named man, and nothing in
+        // the engine used to ask whether it still was.
+        // Only a LIVE privilege can expire. A deflection, a block or a
+        // body contact nulls `pass_target_player_id` on its own and
+        // leaves `pending_pass_aim` standing until the window closes, so
+        // asking this question without a target measures a ball that
+        // stopped being a pass some time ago — and it is travelling
+        // somewhere else by definition.
+        let target = self
+            .pass_target_player_id
+            .and_then(|id| players.iter().find(|p| p.id == id));
+        if target.is_some() && !self.delivery_reaches_its_man(target) {
+            #[cfg(feature = "match-logs")]
+            reception_diag::DELIVERY_OVERRUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.pass_target_player_id = None;
+            // The exclusion window goes with the privilege it was
+            // protecting. Left standing it would be strictly worse than
+            // before: the ball would fly on as nobody's AND stay
+            // untouchable until it came to rest.
+            self.flags.in_flight_state = 0;
+            self.check_ball_ownership(context, players, events);
+            return;
+        }
+        // **The receiver takes the ball where his foot meets it.** Until
+        // the delivery is within his touch it is his by right — the
+        // exclusive claim and the in-flight window — and nobody's to
+        // steer: it keeps its own pace and line. Ownership, the first
+        // touch and the completion credit are all decided on the tick it
+        // reaches him, with the pressure and the arrival pace read then.
+        if let Some(target_id) = self.pass_target_player_id
+            && let Some(target_player) = players.iter().find(|p| p.id == target_id)
+        {
+            if PlayerReach::can_touch(self, target_player) {
+                // Receiver is becoming active. If we have an offside
+                // snapshot for this receiver and it's offside per the
+                // kick-time geometry, fire offside instead of a clean
+                // claim. Set-piece-origin snapshots were never built
+                // (exempt origins skip snapshot creation), so there's
+                // no need to re-check the origin here.
+                if let Some(snap) = self.offside_snapshot
+                    && snap.flags(target_id)
+                {
+                    self.award_offside(context, players, target_player, events);
+                    return;
+                }
+                let passer_id = self.previous_owner;
+                let target_team = target_player.team_id;
+                // First-touch resolution before control is granted.
+                // Only a genuine teammate pass rolls — self-passes
+                // and passer-less claims keep the legacy flow.
+                if let Some(pid) = passer_id.filter(|&id| id != target_id) {
+                    let outcome = self.roll_first_touch(context, target_player, players);
+                    if outcome != FirstTouchOutcome::Clean {
+                        self.apply_failed_first_touch(
+                            context,
+                            target_id,
+                            target_team,
+                            pid,
+                            outcome,
+                            events,
+                        );
+                        return;
+                    }
+                }
+                self.current_owner = Some(target_id);
+                #[cfg(feature = "match-logs")]
+                {
+                    StrikeCensus::note_grant(GrantPath::RECEIVER, self.position.z);
+                    self.open_arrival(GrantPath::RECEIVER, target_player.position);
+                }
+                self.touch(target_id, Carrier::of(target_player));
+                self.pass_target_player_id = None;
+                self.ownership_duration = 0;
+                self.flags.in_flight_state = 0;
+                let tick = self.current_tick_cached;
+                self.record_touch(target_id, target_team, tick, true);
+                self.offside_snapshot = None;
+                self.pass_origin_restart = PassOriginRestart::OpenPlay;
+                // Post-receive possession protection. Real football:
+                // a player who controls a pass has ~1.5-2 s of settle
+                // time before a challenging defender arrives — they
+                // take the ball in stride, look up, and start their
+                // next action. Our old 50-tick (0.5 s) floor let
+                // counter-pressing opponents strip the ball on the
+                // very next tick after a receive, which turned every
+                // possession into a 1-second ping-pong cycle and
+                // drove the 80-300 shots-per-team metric. 150 ticks
+                // (1.5 s) is a realistic floor — enough for the
+                // receiver to survive the initial close-down without
+                // shutting the game off to defensive pressure entirely.
+                self.claim_cooldown = self.claim_cooldown.max(150);
+                #[cfg(feature = "match-logs")]
+                reception_diag::record(
+                    ((target_player.position.x - self.position.x).powi(2)
+                        + (target_player.position.y - self.position.y).powi(2))
+                    .sqrt(),
+                );
+                if let Some(pid) = passer_id {
+                    events.add_ball_event(BallEvent::PassCompleted(target_id, pid));
+                } else {
+                    events.add_ball_event(BallEvent::Claimed(target_id));
+                }
+                return;
+            }
+        }
+
+        // Also allow previous owner (passer) to reclaim if ball bounced back
+        // BUT only after the ball has had time to travel away (in_flight_state < 10)
+        // This prevents the passer from immediately reclaiming on low-force passes
+        if self.flags.in_flight_state < 10
+            && let Some(prev_id) = self.previous_owner
+        {
+            // …but not if he is the man who just put it into play and it
+            // has gone nowhere. See `blocked_recollect_player`.
+            if self.blocked_recollect_player() == Some(prev_id) {
+                return;
+            }
+            if let Some(prev_player) = players.iter().find(|p| p.id == prev_id) {
+                let dx = prev_player.position.x - self.position.x;
+                let dy = prev_player.position.y - self.position.y;
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist < 2.0 && self.position.z <= 2.8 {
+                    // Check ball is moving toward passer (bounced back)
+                    let ball_speed = self.velocity.norm();
+                    if ball_speed > 0.1 {
+                        let to_passer_x = dx / dist;
+                        let to_passer_y = dy / dist;
+                        let dot = (self.velocity.x / ball_speed) * to_passer_x
+                            + (self.velocity.y / ball_speed) * to_passer_y;
+                        if dot > 0.3 {
+                            // Ball moving toward passer
+                            let passer_team = prev_player.team_id;
+                            self.current_owner = Some(prev_id);
+                            #[cfg(feature = "match-logs")]
+                            {
+                                StrikeCensus::note_grant(GrantPath::SCAN, self.position.z);
+                                self.open_arrival(GrantPath::SCAN, prev_player.position);
+                            }
+                            self.pass_target_player_id = None;
+                            self.ownership_duration = 0;
+                            self.flags.in_flight_state = 0;
+                            self.claim_cooldown = 15;
+                            let tick = self.current_tick_cached;
+                            self.record_touch(prev_id, passer_team, tick, true);
+                            self.offside_snapshot = None;
+                            self.pass_origin_restart = PassOriginRestart::OpenPlay;
+                            events.add_ball_event(BallEvent::Claimed(prev_id));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn try_notify_standing_ball(
+        &mut self,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        // Don't treat ball as "standing" during in-flight (just passed)
+        // Short passes have low velocity that triggers is_ball_stopped_on_field(),
+        // but the ball is still in transit to the intended receiver
+        if self.flags.in_flight_state > 0 {
+            return;
+        }
+
+        // Decrement cooldown timer
+        if self.notification_cooldown > 0 {
+            self.notification_cooldown -= 1;
+        }
+
+        // Check if ball is stopped (either outside or inside field) and no one owns it
+        let is_ball_stopped = self.is_stands_outside() || self.is_ball_stopped_on_field();
+
+        // Check if ball has moved significantly from last boundary position
+        let has_escaped_boundary = if let Some(last_pos) = self.last_boundary_position {
+            let dist_sq = (self.position - last_pos).norm_squared();
+            dist_sq > 4.0 // 2.0^2
+        } else {
+            true // No previous boundary position recorded
+        };
+
+        if (is_ball_stopped)
+            && self.take_ball_notified_players.is_empty()
+            && self.current_owner.is_none()
+            && self.notification_cooldown == 0 // Only notify if cooldown expired
+            && has_escaped_boundary
+        // Only notify if ball escaped from previous boundary loop
+        {
+            let notified_players = self.notify_nearest_player(players, events);
+            if !notified_players.is_empty() {
+                self.take_ball_notified_players = notified_players;
+                self.notification_timeout = 0; // Reset timeout when new players are notified
+
+                // If ball is at boundary, set short cooldown and record position
+                if self.is_ball_outside() {
+                    self.notification_cooldown = 5; // Short cooldown to prevent spam
+                    self.last_boundary_position = Some(self.position);
+                }
+            }
+        } else if !self.take_ball_notified_players.is_empty() {
+            // Increment timeout counter
+            self.notification_timeout += 1;
+
+            // If players haven't claimed the ball within reasonable time, reset and try again
+            const MAX_NOTIFICATION_TIMEOUT: u32 = 60; // ~1 second - reduced from 200 for faster response
+            if self.notification_timeout > MAX_NOTIFICATION_TIMEOUT {
+                self.take_ball_notified_players.clear();
+                self.notification_timeout = 0;
+                self.notification_cooldown = 0; // Clear cooldown to allow immediate re-notification
+                // Clear boundary position to allow re-notification even if ball hasn't moved
+                self.last_boundary_position = None;
+                return; // Will re-notify on next tick
+            }
+            // Check if any notified player reached the ball
+            const CLAIM_DISTANCE: f32 = 5.0; // Claim distance for notified players (generous to avoid corner deadlocks)
+            const MAX_CLAIM_VELOCITY: f32 = 5.0; // Ball must be slow enough to claim
+
+            let target_position = if self.is_aerial() {
+                self.cached_landing_position
+            } else {
+                self.position
+            };
+
+            let ball_speed = self.velocity.norm();
+            let can_claim_by_speed = ball_speed < MAX_CLAIM_VELOCITY;
+
+            let mut claiming_player_id: Option<u32> = None;
+            let mut all_players_missing = true;
+
+            for notified_player_id in &self.take_ball_notified_players {
+                if let Some(player) = players.iter().find(|p| p.id == *notified_player_id) {
+                    all_players_missing = false;
+
+                    let dx = player.position.x - target_position.x;
+                    let dy = player.position.y - target_position.y;
+                    let dz = target_position.z;
+                    let distance_3d = (dx * dx + dy * dy + dz * dz).sqrt();
+
+                    // Simple distance check - if close enough and ball is slow, claim it
+                    if distance_3d < CLAIM_DISTANCE
+                        && self.current_owner.is_none()
+                        && can_claim_by_speed
+                        && (!self.is_aerial() || self.position.z < 2.5)
+                    {
+                        claiming_player_id = Some(*notified_player_id);
+                        break;
+                    }
+                }
+            }
+
+            // If all notified players are missing from the players slice, clear the list
+            // This can happen if players were substituted or if there's a data inconsistency
+            if all_players_missing {
+                self.take_ball_notified_players.clear();
+            }
+
+            // Process the claim after iteration to avoid borrow checker issues
+            if let Some(player_id) = claiming_player_id {
+                self.current_owner = Some(player_id);
+                #[cfg(feature = "match-logs")]
+                {
+                    StrikeCensus::note_grant(GrantPath::SCAN, self.position.z);
+                    if let Some(claimant) = players.iter().find(|p| p.id == player_id) {
+                        self.open_arrival(GrantPath::SCAN, claimant.position);
+                    }
+                }
+                self.pass_target_player_id = None;
+                self.take_ball_notified_players.clear();
+                self.notification_timeout = 0;
+                events.add_ball_event(BallEvent::Claimed(player_id));
+
+                // Reset boundary tracking when ball is claimed
+                if has_escaped_boundary {
+                    self.last_boundary_position = None;
+                }
+            }
+        }
+    }
+
+    /// Deadlock resolution: Force the nearest player to claim the ball if it's been sitting unowned for too long
+    /// Uses progressive radius - starts strict, expands if stuck to ensure game never deadlocks
+    pub(in crate::r#match::engine::ball::ball) fn force_claim_if_deadlock(
+        &mut self,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        const DEADLOCK_VELOCITY_ENTER: f32 = 3.0;
+        const DEADLOCK_VELOCITY_EXIT: f32 = 4.0;
+        const DEADLOCK_HEIGHT_THRESHOLD: f32 = 1.5;
+
+        // Progressive timing thresholds — faster initial response prevents corner deadlocks
+        const TICK_PHASE_1: u32 = 15; // ~0.25s - try close range quickly
+        const TICK_PHASE_2: u32 = 35; // ~0.6s - expand range
+        const TICK_PHASE_3: u32 = 60; // ~1.0s - further expand
+        const TICK_PHASE_4: u32 = 100; // ~1.6s - last resort
+
+        // Progressive claim distances — generous to handle boundary/corner situations
+        const CLAIM_DISTANCE_PHASE_1: f32 = 5.0; // Close range - matches notification claim distance
+        const CLAIM_DISTANCE_PHASE_2: f32 = 8.0; // Medium range - acceptable
+        const CLAIM_DISTANCE_PHASE_3: f32 = 12.0; // Extended range - noticeable but not terrible
+        const CLAIM_DISTANCE_PHASE_4: f32 = 15.0; // Last resort - better than stuck forever
+
+        let is_unowned = self.current_owner.is_none();
+
+        if !is_unowned {
+            self.unowned_stopped_ticks = 0;
+            return;
+        }
+
+        // Don't interfere with passed/kicked balls
+        if self.flags.in_flight_state > 0 {
+            self.unowned_stopped_ticks = 0;
+            return;
+        }
+
+        let velocity_threshold = if self.unowned_stopped_ticks > 0 {
+            DEADLOCK_VELOCITY_EXIT
+        } else {
+            DEADLOCK_VELOCITY_ENTER
+        };
+
+        let velocity_sq = self.velocity.norm_squared();
+        let threshold_sq = velocity_threshold * velocity_threshold;
+        let is_slow = velocity_sq < threshold_sq;
+        let is_low = self.position.z < DEADLOCK_HEIGHT_THRESHOLD;
+
+        if is_slow && is_low {
+            self.unowned_stopped_ticks += 1;
+
+            // Determine claim distance based on how long we've been waiting
+            let (should_claim, claim_distance) = if self.unowned_stopped_ticks >= TICK_PHASE_4 {
+                (true, CLAIM_DISTANCE_PHASE_4)
+            } else if self.unowned_stopped_ticks >= TICK_PHASE_3 {
+                (true, CLAIM_DISTANCE_PHASE_3)
+            } else if self.unowned_stopped_ticks >= TICK_PHASE_2 {
+                (true, CLAIM_DISTANCE_PHASE_2)
+            } else if self.unowned_stopped_ticks >= TICK_PHASE_1 {
+                (true, CLAIM_DISTANCE_PHASE_1)
+            } else {
+                (false, 0.0)
+            };
+
+            if should_claim {
+                // Find nearest player within current claim distance (use squared to avoid sqrt)
+                let claim_distance_sq = claim_distance * claim_distance;
+                // Same self-recollect bar as the normal claim path. Safe to
+                // apply even in the deadlock resolver because the bar itself
+                // expires on a timer (`blocked_recollect_player`), so it can
+                // never be the thing that keeps the ball stuck.
+                let blocked_recollect = self.blocked_recollect_player();
+                if let Some(nearest_player) = players
+                    .iter()
+                    .filter(|p| blocked_recollect != Some(p.id))
+                    .filter_map(|p| {
+                        let dx = p.position.x - self.position.x;
+                        let dy = p.position.y - self.position.y;
+                        let dist_sq = dx * dx + dy * dy;
+                        if dist_sq <= claim_distance_sq {
+                            Some((p, dist_sq))
+                        } else {
+                            None
+                        }
+                    })
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .map(|(p, _)| p)
+                {
+                    // Grant ownership
+                    self.current_owner = Some(nearest_player.id);
+                    #[cfg(feature = "match-logs")]
+                    {
+                        StrikeCensus::note_grant(GrantPath::SCAN, self.position.z);
+                        self.open_arrival(GrantPath::SCAN, nearest_player.position);
+                    }
+                    self.previous_owner = None;
+                    self.pass_target_player_id = None;
+                    self.ownership_duration = 0;
+                    self.flags.in_flight_state = 0;
+                    self.take_ball_notified_players.clear();
+                    self.notification_timeout = 0;
+                    self.claim_cooldown = 15; // Prevent immediate re-claiming by another player
+
+                    // The height is not written down here any more. A ball
+                    // up to `DEADLOCK_HEIGHT_THRESHOLD` (1.5 m) snapped to
+                    // the grass inside one 10 ms tick is a teleport on the
+                    // axis a replay shows most plainly, and it is the same
+                    // move the string-pull made. The grant is now enough on
+                    // its own: an owned ball above the deck settles to his
+                    // feet under gravity — see
+                    // [`Ball::settling_out_of_the_air`] — which for 1.5 m
+                    // is a bit over half a second and draws as a fall.
+
+                    self.unowned_stopped_ticks = 0;
+                    events.add_ball_event(BallEvent::Claimed(nearest_player.id));
+                } else if self.unowned_stopped_ticks >= TICK_PHASE_2
+                    && self.take_ball_notified_players.is_empty()
+                {
+                    // No one close enough - notify nearest players to come get it
+                    let notified = self.notify_nearest_player(players, events);
+                    self.take_ball_notified_players = notified;
+                    self.notification_timeout = 0;
+                }
+            }
+        } else {
+            if velocity_sq >= threshold_sq {
+                self.unowned_stopped_ticks = 0;
+            }
+        }
+    }
+
+    /// Unconditional safety net: if ball has been unowned for too long (regardless of speed/height),
+    /// force the nearest player from each team into TakeBall state.
+    pub(in crate::r#match::engine::ball::ball) fn force_takeball_if_unowned_too_long(
+        &mut self,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        const UNOWNED_THRESHOLD: u32 = 300;
+        /// Only a genuinely stuck stall is interesting — a single pass is
+        /// unowned briefly by design. 300 ticks is the same threshold as
+        /// the nuclear-option force-claim: if the system needed that
+        /// intervention, the stall was real. Emitted once per stall, on
+        /// resolution, with the full duration.
+        const STALL_RESOLVE_LOG_THRESHOLD: u32 = 300;
+
+        if self.current_owner.is_some() {
+            if self.unowned_ticks >= STALL_RESOLVE_LOG_THRESHOLD {
+                #[cfg(feature = "match-logs")]
+                {
+                    let claimed_by = self.current_owner.unwrap_or(0);
+                    let snapshot = self
+                        .stall_start_snapshot
+                        .as_deref()
+                        .unwrap_or("<no snapshot>");
+                    match_log_debug!(
+                        "ball stall resolved: uncontrolled for {} ticks, claimed by player {} at ({:.1}, {:.1})\n  [start of period]\n{}",
+                        self.unowned_ticks,
+                        claimed_by,
+                        self.position.x,
+                        self.position.y,
+                        snapshot,
+                    );
+                }
+            }
+            self.unowned_ticks = 0;
+            self.stall_start_snapshot = None;
+            return;
+        }
+
+        self.unowned_ticks += 1;
+
+        // Period just started — capture the state snapshot while it's
+        // still fresh. Only the stall-resolution log (match-logs builds)
+        // ever reads it, so production skips the capture entirely.
+        // Every transition from owned → unowned lands here — that is
+        // every pass, shot and clearance, several THOUSAND per match,
+        // not the ~100 the original estimate assumed — and the capture
+        // was ~25% of all engine allocations (alloc-site sampler,
+        // July 2026). The snapshot writes into a reused buffer inside
+        // `format_stall_snapshot`, so even match-logs builds no longer
+        // pay per-capture heap churn.
+        #[cfg(feature = "match-logs")]
+        if self.unowned_ticks == 1 {
+            self.stall_start_snapshot = Some(self.format_stall_snapshot(players));
+        }
+
+        // Force-takeball fires every UNOWNED_THRESHOLD ticks while the
+        // stall persists. The counter is NOT reset — it keeps climbing
+        // so the resolution log reports the true total duration.
+        if self.unowned_ticks > 0 && self.unowned_ticks.is_multiple_of(UNOWNED_THRESHOLD) {
+            let notified = self.notify_nearest_player(players, events);
+            if !notified.is_empty() {
+                self.take_ball_notified_players = notified;
+                self.notification_timeout = 0;
+            }
+        }
+    }
+
+    pub(in crate::r#match::engine::ball::ball) fn notify_nearest_player(
+        &self,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) -> Vec<u32> {
+        let ball_position = self.position;
+        const NOTIFICATION_RADIUS_SQ: f32 = 500.0 * 500.0;
+
+        // Only 2 teams — use fixed variables instead of HashMap
+        let mut team_a_id: u32 = 0;
+        let mut team_a_best: Option<(u32, f32)> = None; // (player_id, dist_sq)
+        let mut team_b_best: Option<(u32, f32)> = None;
+
+        for player in players {
+            let dx = player.position.x - ball_position.x;
+            let dy = player.position.y - ball_position.y;
+            let dist_sq = dx * dx + dy * dy;
+
+            if dist_sq >= NOTIFICATION_RADIUS_SQ {
+                continue;
+            }
+
+            // Assign first team encountered as team_a
+            if team_a_best.is_none() {
+                team_a_id = player.team_id;
+            }
+
+            let slot = if player.team_id == team_a_id {
+                &mut team_a_best
+            } else {
+                &mut team_b_best
+            };
+
+            match slot {
+                Some((_, best_dist)) if dist_sq < *best_dist => {
+                    *slot = Some((player.id, dist_sq));
+                }
+                None => {
+                    *slot = Some((player.id, dist_sq));
+                }
+                _ => {}
+            }
+        }
+
+        let mut notified_players = Vec::new();
+        if let Some((id, _)) = team_a_best {
+            events.add_ball_event(BallEvent::TakeMe(id));
+            notified_players.push(id);
+        }
+        if let Some((id, _)) = team_b_best {
+            events.add_ball_event(BallEvent::TakeMe(id));
+            notified_players.push(id);
+        }
+
+        notified_players
+    }
+
+    fn check_ball_ownership(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        // The ball is in the keeper's gloves. Nobody takes it off him —
+        // not the best tackler within 5u, not anybody. Without this the
+        // generic claim below treated a caught cross as a loose ball at
+        // the keeper's feet and handed it to whichever forward happened to
+        // be standing closest.
+        if self.held_in_hands {
+            self.ownership_duration += 1;
+            return;
+        }
+
+        // COOLDOWN CHECK: If cooldown is active and there's an owner, skip ownership checks
+        // This prevents rapid ping-pong between players
+        if self.claim_cooldown > 0 && self.current_owner.is_some() {
+            // Just increment ownership duration and return
+            self.ownership_duration += 1;
+            return;
+        }
+
+        // Distance threshold for claiming ball.
+        // Bumped from 3.5 → 5.0: a clearance that lands and bounces
+        // travels 4-5 units/tick horizontally. With a 3.5-unit claim
+        // zone the closest chaser only has a 1-tick window to touch
+        // the ball as it flies past, and a small positional error
+        // (plus Arrive's braking at the landing spot) means they
+        // routinely miss by 4-6 units and the ball runs free for
+        // 300+ ticks through multiple bounces before anyone catches
+        // up. 5.0 is still a realistic first-touch distance (one step
+        // to the ball) and gives a wider interception window without
+        // affecting actual contact semantics. Genuinely fast balls
+        // (> 10 u/t) still get the tighter 1-unit rule below.
+        const BALL_DISTANCE_THRESHOLD: f32 = LOOSE_CLAIM_DISTANCE;
+        const BALL_DISTANCE_THRESHOLD_SQUARED: f32 =
+            BALL_DISTANCE_THRESHOLD * BALL_DISTANCE_THRESHOLD;
+        // **The vertical reach belongs to the PLAYER, not to this scan.**
+        //
+        // This used to be a pair of hand-rolled literals — a flat 3.5 m
+        // jump reach for everybody and a 4.0 m "absolute max" half a
+        // metre above it — and they were two of the five different
+        // ceilings the engine carried for one question. They are now
+        // [`AerialReach`]: `HIGHEST` (3.1 m) is the whole-pitch early-out,
+        // the ceiling of the best leaper there could be, and the per-man
+        // test inside the loop below is his own `ceiling(jumping)`,
+        // 2.5-3.1 m. The best header of the ball in the division and the
+        // worst no longer have identical aerial range on the path that
+        // decides most of the possession in a match.
+        //
+        // The receiver claim's 2.8 m and the replay viewer's
+        // `Soundtrack::OVERHEAD` 2.8 were both copied off the old 2.8
+        // that preceded the 3.5; all of them are this same question, and
+        // [`PlayerReach`](crate::r#match::engine::ball::ball::PlayerReach)
+        // is where it now gets one answer.
+        const MAX_BALL_HEIGHT: f32 = AerialReach::HIGHEST;
+
+        // CRITICAL: Early validation - if current owner is too far AND ball is moving, clear ownership
+        // This catches cases where ball flies away from owner but ownership wasn't properly cleared
+        //
+        // ⚠ IT MUST READ THE LIVE ROSTER. This compared the ball against
+        // `context.players`, which is a copy of the squad taken before
+        // kick-off and never moved again — only substitutions write to it
+        // — so `owner.position` was the player's KICKOFF SLOT for the
+        // whole match. The test therefore read "is the ball more than
+        // 25 cm from where this man stood at kick-off", which is true
+        // from the first pass onward, and cleared possession from anyone
+        // carrying the ball away from his own starting position at pace.
+        // The live slice was already a parameter of this function and is
+        // used for the pass-target claim forty lines below.
+        //
+        // Signature of the resulting bug, from the stall diagnostic: the
+        // owner of a stuck ball was in a `TakeBall` state with
+        // `in_state_time` of 0 or 1 on **100%** of stuck ticks, standing
+        // **0.0 units** from the ball. Not a state that dwells — a state
+        // being re-entered every tick, because possession was granted and
+        // revoked in a two-tick cycle (claim → this check clears it → the
+        // dispatcher's loose-ball override forces `TakeBall` → claim …)
+        // while the ball sat still under his feet.
+        const MAX_OWNERSHIP_DISTANCE: f32 = Ball::AT_FEET;
+        const MAX_OWNERSHIP_DISTANCE_SQUARED: f32 = MAX_OWNERSHIP_DISTANCE * MAX_OWNERSHIP_DISTANCE;
+        const MIN_VELOCITY_FOR_DISTANCE_CHECK: f32 = 0.5; // Check distance if ball is moving at all
+
+        if let Some(current_owner_id) = self.current_owner {
+            if let Some(owner) = players.iter().find(|p| p.id == current_owner_id) {
+                let dx = owner.position.x - self.position.x;
+                let dy = owner.position.y - self.position.y;
+                let distance_squared = dx * dx + dy * dy;
+                let ball_speed_sq = self.velocity.norm_squared();
+                let min_vel_sq = MIN_VELOCITY_FOR_DISTANCE_CHECK * MIN_VELOCITY_FOR_DISTANCE_CHECK;
+
+                // Only clear ownership if ball is moving AND far from owner
+                // This prevents interference with deadlock claiming and boundary situations.
+                // A ball under his touch moves with him, so it is never one
+                // flying away from him.
+                if distance_squared > MAX_OWNERSHIP_DISTANCE_SQUARED
+                    && ball_speed_sq > min_vel_sq
+                    && !self.is_carried()
+                {
+                    // Use unnormalized dot product — sign is what matters
+                    // dot(velocity, to_owner) < 0 means ball moving away from owner
+                    let dot = self.velocity.x * dx + self.velocity.y * dy;
+
+                    if distance_squared > 0.01 && dot < 0.0 {
+                        // Ball is moving away from owner
+                        // Owner is too far and ball is flying away - clear ownership
+                        self.previous_owner = self.current_owner;
+                        self.current_owner = None;
+                        self.ownership_duration = 0;
+                        // Don't return - continue to allow new ownership claim
+                    }
+                }
+            } else {
+                // Owner player not found - clear ownership
+                self.previous_owner = self.current_owner;
+                self.current_owner = None;
+                self.ownership_duration = 0;
+            }
+        }
+
+        // Ball is too high to be claimed by any player (flying over everyone's heads)
+        if self.position.z > MAX_BALL_HEIGHT {
+            return;
+        }
+
+        // ── A BALL HANGING OFF A WON AERIAL CONTEST BELONGS TO THE
+        // HEADER ─────────────────────────────────────────────────────
+        // The contest resolved, the delivery arrived, and the ball is
+        // hanging in the heading band so the winner's heading state can
+        // strike it. Without this guard the ordinary claim scan below
+        // converted that hanging ball into ground possession — for
+        // whoever stood nearest, the winner included — on the very tick
+        // it arrived, and the header the contest had already awarded
+        // simply never happened. Measured 2026-08-31: contests won
+        // ~3.3/match, headers actually struck **0.5** — an 80% leak,
+        // and the reason `heading` measured null while `jumping` sat at
+        // −0.26 for a season of pins. The strike itself clears the
+        // grant through `record_touch`; a ball that drops through the
+        // band un-struck (the winner was beaten to the spot after all)
+        // lapses here and becomes an ordinary loose ball.
+        if self.aerial_contest_winner.is_some() {
+            if self.position.z >= 1.2 {
+                return;
+            }
+            self.aerial_contest_winner = None;
+        }
+
+        // Check if previous owner is still within range
+        // Clear previous_owner once they're far enough away to allow normal claiming
+        //
+        // Same frozen-snapshot fault as the block above: measured against
+        // a kick-off slot, "far enough away" was answered by where the
+        // man started rather than where he is, so `previous_owner` was
+        // dropped on the first tick after almost every release.
+        if let Some(previous_owner_id) = self.previous_owner {
+            if let Some(owner) = players.iter().find(|p| p.id == previous_owner_id) {
+                let dx = owner.position.x - self.position.x;
+                let dy = owner.position.y - self.position.y;
+                let dz = self.position.z;
+                let dist_3d_sq = dx * dx + dy * dy + dz * dz;
+
+                // Clear previous owner once they're far enough
+                if dist_3d_sq > BALL_DISTANCE_THRESHOLD_SQUARED {
+                    self.previous_owner = None;
+                }
+                // Don't block claiming - just track who previously had the ball
+            } else {
+                self.previous_owner = None;
+            }
+        }
+
+        // Priority claim for the pass target, ahead of the scan: the same
+        // touch as `try_pass_target_claim`, for a delivery that outlived
+        // its in-flight window.
+        if let Some(target_id) = self.pass_target_player_id
+            && let Some(target_player) = players.iter().find(|p| p.id == target_id)
+        {
+            if PlayerReach::can_touch(self, target_player) {
+                let passer_id = self.current_owner.or(self.previous_owner);
+                // First-touch resolution on the post-flight priority
+                // claim as well — same roll as the in-flight site so
+                // a slow arriving pass isn't a free clean control.
+                if let Some(pid) = passer_id.filter(|&id| id != target_id) {
+                    let outcome = self.roll_first_touch(context, target_player, players);
+                    if outcome != FirstTouchOutcome::Clean {
+                        let receiver_team = target_player.team_id;
+                        self.apply_failed_first_touch(
+                            context,
+                            target_id,
+                            receiver_team,
+                            pid,
+                            outcome,
+                            events,
+                        );
+                        return;
+                    }
+                }
+                self.previous_owner = self.current_owner;
+                self.current_owner = Some(target_id);
+                #[cfg(feature = "match-logs")]
+                {
+                    StrikeCensus::note_grant(GrantPath::RECEIVER, self.position.z);
+                    self.open_arrival(GrantPath::RECEIVER, target_player.position);
+                    reception_diag::record(
+                        (target_player.position.x - self.position.x)
+                            .hypot(target_player.position.y - self.position.y),
+                    );
+                }
+                self.touch(target_id, Carrier::of(target_player));
+                self.pass_target_player_id = None;
+                self.ownership_duration = 0;
+                self.claim_cooldown = 15;
+                if let Some(pid) = passer_id.filter(|&id| id != target_id) {
+                    events.add_ball_event(BallEvent::PassCompleted(target_id, pid));
+                } else {
+                    events.add_ball_event(BallEvent::Claimed(target_id));
+                }
+                return;
+            }
+        }
+
+        // Velocity threshold (squared for comparison without sqrt)
+        const MAX_CLAIMABLE_VELOCITY_SQ: f32 = 10.0 * 10.0;
+
+        let ball_speed_sq = self.velocity.norm_squared();
+
+        // Collect nearby player IDs into a small inline buffer (no heap allocation)
+        const MAX_NEARBY: usize = 8;
+        let mut nearby_ids: [u32; MAX_NEARBY] = [0; MAX_NEARBY];
+        let mut nearby_count: usize = 0;
+
+        // The man who just released the ball doesn't get it straight back
+        // while it is still sitting on top of him — see
+        // `blocked_recollect_player`. This is the generic half of the
+        // fix; the goalkeeper's own Standing-state door is guarded too,
+        // because his pick-up path grants ownership directly.
+        let blocked_recollect = self.blocked_recollect_player();
+
+        for player in players.iter() {
+            if blocked_recollect == Some(player.id) {
+                continue;
+            }
+
+            let dx = player.position.x - self.position.x;
+            let dy = player.position.y - self.position.y;
+            let dist_sq = dx * dx + dy * dy;
+
+            if dist_sq > BALL_DISTANCE_THRESHOLD_SQUARED {
+                continue;
+            }
+
+            // HIS ceiling, not a flat one. All three speed branches below
+            // asked the same height question against the same 3.5 m
+            // literal, so it factors out to one test — the only thing
+            // that changed is whose reach it is measured against.
+            if !PlayerReach::under_ceiling(self, player) {
+                continue;
+            }
+
+            // A ball flying past at speed has to be practically on him.
+            if ball_speed_sq > MAX_CLAIMABLE_VELOCITY_SQ && dist_sq > 1.0 {
+                continue;
+            }
+
+            if nearby_count < MAX_NEARBY {
+                nearby_ids[nearby_count] = player.id;
+                nearby_count += 1;
+            }
+        }
+
+        // Early exit if no nearby players
+        if nearby_count == 0 {
+            return;
+        }
+
+        let nearby_slice = &nearby_ids[..nearby_count];
+
+        // Check if current owner is nearby
+        if let Some(current_owner_id) = self.current_owner {
+            let current_owner_nearby = nearby_slice.contains(&current_owner_id);
+            let owner_team_id = context.players.by_id(current_owner_id).map(|p| p.team_id);
+            let opponent_nearby = owner_team_id.is_some_and(|team_id| {
+                nearby_slice.iter().any(|&id| {
+                    context
+                        .players
+                        .by_id(id)
+                        .is_some_and(|p| p.team_id != team_id)
+                })
+            });
+
+            // Nobody from the other side at the ball: it stays his. That
+            // covers an owner still on his way to it — `Ball::move_to` no
+            // longer drags the ball to him, so a team-mate standing over it
+            // while he closes the last stride is not a reason to take it
+            // off him. An opponent over it is: he got there first.
+            if !opponent_nearby {
+                self.ownership_duration += 1;
+                return;
+            }
+            if !current_owner_nearby {
+                self.previous_owner = self.current_owner;
+                self.current_owner = None;
+            }
+        }
+
+        // Ownership stability constants
+        let min_ownership_duration: u32 = if self.contested_claim_count > 3 {
+            60
+        } else {
+            25
+        };
+        const TAKEOVER_ADVANTAGE_THRESHOLD: f32 = 1.25;
+        // A ratio on a score that rose with the division would demand a
+        // bigger absolute edge the higher up the pyramid the match is
+        // played; the scores are of squads measured against the standard
+        // of the match (`MatchStandard::measure`), so it does not.
+        let takeover_margin =
+            |owner_score: f32| owner_score * (TAKEOVER_ADVANTAGE_THRESHOLD - 1.0);
+
+        // Minute derived from cached tick — `current_tick_cached` is
+        // refreshed every tick via `update*`, so it tracks the same
+        // wall-clock minute that the engine's tactical refresh uses.
+        let minute = sc::minute_from_ticks(self.current_tick_cached);
+
+        // Determine the best tackler from nearby players (no Vec allocation)
+        let best_tackler = if nearby_count == 1 {
+            players.iter().find(|p| p.id == nearby_ids[0])
+        } else {
+            let mut best: Option<&MatchPlayer> = None;
+            let mut best_score: f32 = -1.0;
+            for &pid in nearby_slice {
+                if let Some(p) = players.iter().find(|p| p.id == pid) {
+                    let score = Self::calculate_tackling_score(p, minute);
+                    if score > best_score {
+                        best_score = score;
+                        best = Some(p);
+                    }
+                }
+            }
+            best
+        };
+
+        // Transfer ownership to the best tackler (with stability checks)
+        if let Some(player) = best_tackler {
+            // Check if this is a new owner or maintaining current ownership
+            let is_ownership_change = self.current_owner != Some(player.id);
+
+            if is_ownership_change {
+                // Prevent rapid ownership changes by requiring significant advantage
+                if self.ownership_duration < min_ownership_duration
+                    && let Some(current_owner_id) = self.current_owner
+                {
+                    // Check if current owner is among nearby players
+                    if nearby_slice.contains(&current_owner_id) {
+                        // Live roster, not `context.players`: the
+                        // scores being compared are fatigue-scaled
+                        // (`calculate_tackling_score` reads condition
+                        // through the skill composites) and the
+                        // `best_tackler` selection twenty lines above
+                        // computes the same score from the live slice.
+                        // Read two different ways, the comparison was
+                        // between a kick-off-fresh challenger and a
+                        // kick-off-fresh owner in the 80th minute.
+                        if let (Some(current_owner_full), Some(challenger_full)) = (
+                            players.iter().find(|p| p.id == current_owner_id),
+                            players.iter().find(|p| p.id == player.id),
+                        ) {
+                            let current_score =
+                                Self::calculate_tackling_score(current_owner_full, minute);
+                            let challenger_score =
+                                Self::calculate_tackling_score(challenger_full, minute);
+
+                            // Require challenger to be significantly
+                            // better — by the same ABSOLUTE edge in
+                            // every division, not by a share of a
+                            // number that grows with the league.
+                            if challenger_score < current_score + takeover_margin(current_score) {
+                                // Challenger not strong enough - maintain current ownership
+                                self.ownership_duration += 1;
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                // Ownership change approved - reset duration and set cooldown
+                self.previous_owner = self.current_owner;
+                self.current_owner = Some(player.id);
+                if let Some(loser) = self.previous_owner
+                    && players
+                        .iter()
+                        .any(|p| p.id == loser && p.team_id != player.team_id)
+                {
+                    events.add_player_event(PlayerEvent::Dispossessed(loser));
+                }
+                #[cfg(feature = "match-logs")]
+                {
+                    StrikeCensus::note_grant(GrantPath::SCAN, self.position.z);
+                    self.open_arrival(GrantPath::SCAN, player.position);
+                }
+                self.pass_target_player_id = None;
+                self.ownership_duration = 0;
+
+                // Track contested ownership changes and escalate cooldown
+                self.contested_claim_count += 1;
+                let cooldown = if self.contested_claim_count > 6 {
+                    90 // ~1.5s - force resolution
+                } else if self.contested_claim_count > 3 {
+                    45 // ~0.75s
+                } else {
+                    15 // Normal cooldown
+                };
+                self.claim_cooldown = cooldown;
+                // Also set in_flight to prevent ClaimBall events from tackling states
+                self.flags.in_flight_state = cooldown as usize;
+
+                // A ball taken above standing reach is taken in the air.
+                //
+                // The height gate above has always allowed claims all the
+                // way to a jumping player's ceiling
+                // ([`PlayerReach::under_ceiling`]) while nothing anywhere
+                // made the player jump. So the commonest aerial moment in
+                // the match, a lofted ball dropping onto somebody's head,
+                // was resolved by a man standing still with the ball
+                // passing through his skull.
+                //
+                // WHO wins the ball is deliberately untouched here: the
+                // claim ranking is load-bearing for the possession model
+                // and changing its ceiling would move numbers this fix has
+                // no business moving. This adds the jump that the outcome
+                // already implies.
+                let leap = AerialReach::leap_for(self.position.z, player.skills.physical.jumping);
+                if leap > 0.0 {
+                    events.add_player_event(PlayerEvent::Leap(player.id, leap));
+                }
+
+                events.add_ball_event(BallEvent::Claimed(player.id));
+            } else {
+                // Same owner - just increment duration
+                self.ownership_duration += 1;
+                // Gradually decay contested counter when ownership is truly stable
+                // Require long stability AND no opponents nearby to consider it resolved
+                if self.ownership_duration > 100 && self.contested_claim_count > 0 {
+                    self.contested_claim_count = self.contested_claim_count.saturating_sub(1);
+                }
+            }
+        }
+    }
+
+    /// Per-tick ranking of who wins a contested ball claim. Blends:
+    ///
+    ///   * `tackle_timing`     — challenging an opponent in possession.
+    ///   * `loose_ball_claim`  — sprint/anticipation/strength on a 50/50.
+    ///   * `defensive_duel`    — raw tackling/marking/bravery duel.
+    ///
+    /// Routing through composites means fatigue, late-game mental
+    /// drift, and stamina mitigation all apply consistently with the
+    /// rest of the engine — a tired right-back loses the same
+    /// percentage of their challenge ability whether they are
+    /// pressing, dribbling, or contesting a loose ball.
+    ///
+    /// Output stays in roughly the same scale as the legacy raw-skill
+    /// formula (≈0..20) so the `TAKEOVER_ADVANTAGE_THRESHOLD` ratio
+    /// continues to behave as before.
+    fn calculate_tackling_score(player: &MatchPlayer, minute: u32) -> f32 {
+        let timing = sc::tackle_timing(player, minute);
+        let claim = sc::loose_ball_claim(player, minute);
+        let duel = sc::defensive_duel(player, minute);
+        // Blend favours `tackle_timing` (active challenge) but keeps
+        // `loose_ball_claim` heavy enough that a fast/anticipating
+        // player without elite tackling can still win a foot-race.
+        let composite = timing * 0.50 + duel * 0.30 + claim * 0.20;
+        // Map composite (0..1) to the historical 0..20 range so the
+        // takeover-advantage threshold continues to work.
+        composite * 20.0
+    }
+}

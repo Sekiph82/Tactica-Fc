@@ -1,0 +1,13 @@
+[workspace]
+members = ["src/shared", "src/match/builder"]
+exclude = ["src/match"]
+resolver = "3"
+
+[workspace.package]
+version = "1.8.183"
+authors = ["Artemov Ivan (ZOXEXIVO) <zoxexivo@gmail.com>"]
+edition = "2024"
+
+[workspace.lints.clippy]
+module_inception = "allow"
+too_many_arguments = "allow"

@@ -1,0 +1,1777 @@
+//! End-to-end tests over a real [`Player`], exercising the wired emit
+//! sites rather than the memory organ in isolation.
+//!
+//! The unit tests under `organs/memory/` prove each mechanism; these
+//! prove the mechanisms are actually reached by the simulation, and that
+//! the story they tell together is the right one.
+
+#![cfg(test)]
+
+use crate::club::player::builder::PlayerBuilder;
+use crate::club::player::core::player::{
+    ManagerPromise, ManagerPromiseKind, TransferRequestReason,
+};
+use crate::club::player::mind::{
+    ActorRef, CareerArc, EpisodeKind, FactClaim, GoalBlocker, GoalBridge, GoalEvidence, GoalKind,
+    GoalOrigin, GoalStatus, MindClock, MindSituation, RecallCue, SpellChange,
+};
+use crate::shared::fullname::FullName;
+use crate::{
+    PersonAttributes, Player, PlayerAttributes, PlayerClubContract, PlayerPosition,
+    PlayerPositionType, PlayerPositions, PlayerSkills, PlayerSquadStatus, PlayerStatusType,
+};
+use chrono::{Duration, NaiveDate};
+
+const CLUB: u32 = 7;
+const COACH: u32 = 412;
+
+/// Fixture builders for these tests. Grouped on a type rather than left
+/// loose so the file reads as `Fixture::player()` at every call site.
+struct Fixture;
+
+impl Fixture {
+    fn date(year: i32, month: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(year, month, day).expect("valid fixture date")
+    }
+
+    fn attributes() -> PersonAttributes {
+        PersonAttributes {
+            adaptability: 12.0,
+            ambition: 14.0,
+            controversy: 5.0,
+            loyalty: 12.0,
+            pressure: 12.0,
+            professionalism: 12.0,
+            sportsmanship: 12.0,
+            temperament: 10.0,
+            consistency: 12.0,
+            important_matches: 12.0,
+            dirtiness: 5.0,
+        }
+    }
+
+    /// A settled first-team regular with an empty mind.
+    fn player() -> Player {
+        let mut contract = PlayerClubContract::new(50_000, Self::date(2032, 6, 30));
+        contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
+
+        PlayerBuilder::new()
+            .id(1)
+            .full_name(FullName::new("Test".into(), "Player".into()))
+            .birth_date(Self::date(2002, 1, 1))
+            .country_id(1)
+            .attributes(Self::attributes())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::Striker,
+                    level: 20,
+                }],
+            })
+            .player_attributes(PlayerAttributes::default())
+            .contract(Some(contract))
+            .build()
+            .unwrap()
+    }
+
+    /// A starting-role promise whose deadline has passed. Judged broken
+    /// unless the player has the starts to meet `target_value`.
+    fn overdue_promise(made_on: NaiveDate, importance: u8, public: bool) -> ManagerPromise {
+        ManagerPromise {
+            kind: ManagerPromiseKind::StartingRole,
+            made_on,
+            deadline: made_on + Duration::days(90),
+            baseline_apps: 0,
+            baseline_starts: 0,
+            baseline_eligible: 0,
+            baseline_tracked: false,
+            target_value: 60,
+            made_by_staff_id: Some(COACH),
+            credibility_at_creation: 80,
+            importance_to_player: importance,
+            is_public: public,
+        }
+    }
+}
+
+#[test]
+fn a_broken_promise_is_filed_against_the_man_who_made_it() {
+    let mut p = Fixture::player();
+    for _ in 0..10 {
+        p.on_match_overlooked(false);
+    }
+    p.promises.push(Fixture::overdue_promise(
+        Fixture::date(2026, 1, 1),
+        80,
+        false,
+    ));
+
+    p.verify_promises(Fixture::date(2026, 6, 1), Some(CLUB));
+
+    let census = p.mind.census();
+    assert_eq!(census.episodes, 1, "the promise left a memory");
+    assert_eq!(census.accounts, 1, "and an account with the coach");
+
+    let ctx = p.mind_context(Fixture::date(2026, 6, 1), Some(CLUB));
+    assert!(
+        p.mind.standing_with(ActorRef::staff(COACH), &ctx) < 0.0,
+        "he thinks less of the man"
+    );
+}
+
+#[test]
+fn a_kept_promise_files_the_other_way() {
+    let mut p = Fixture::player();
+    // Met the starting-role target outright.
+    p.statistics.played = 20;
+    p.promises.push(ManagerPromise {
+        target_value: 50,
+        ..Fixture::overdue_promise(Fixture::date(2026, 1, 1), 80, false)
+    });
+
+    p.verify_promises(Fixture::date(2026, 6, 1), Some(CLUB));
+
+    let ctx = p.mind_context(Fixture::date(2026, 6, 1), Some(CLUB));
+    assert!(
+        p.mind.standing_with(ActorRef::staff(COACH), &ctx) > 0.0,
+        "keeping your word counts for something"
+    );
+    assert!(
+        p.mind
+            .memory()
+            .episodes
+            .find(|e| e.kind == EpisodeKind::ManagerPromiseKept)
+            .is_some()
+    );
+}
+
+#[test]
+fn how_much_the_promise_mattered_decides_how_deeply_it_lands() {
+    let encode = |importance: u8, public: bool| -> f32 {
+        let mut p = Fixture::player();
+        for _ in 0..10 {
+            p.happiness.note_official_non_appearance(true);
+        }
+        p.promises.push(Fixture::overdue_promise(
+            Fixture::date(2026, 1, 1),
+            importance,
+            public,
+        ));
+        p.verify_promises(Fixture::date(2026, 6, 1), Some(CLUB));
+        p.mind
+            .memory()
+            .episodes
+            .find(|e| e.kind == EpisodeKind::ManagerPromiseBroken)
+            .map(|e| e.encoding())
+            .unwrap_or(0.0)
+    };
+
+    let trivial = encode(20, false);
+    let important = encode(90, false);
+    let public_and_important = encode(90, true);
+
+    assert!(
+        important > trivial,
+        "a promise he cared about brands deeper: {important} vs {trivial}"
+    );
+    assert!(
+        public_and_important >= important,
+        "and one made in public deeper still"
+    );
+}
+
+#[test]
+fn a_promise_from_nobody_in_particular_still_registers_but_files_against_no_one() {
+    let mut p = Fixture::player();
+    for _ in 0..10 {
+        p.happiness.note_official_non_appearance(true);
+    }
+    p.promises.push(ManagerPromise {
+        made_by_staff_id: None,
+        ..Fixture::overdue_promise(Fixture::date(2026, 1, 1), 80, false)
+    });
+
+    p.verify_promises(Fixture::date(2026, 6, 1), Some(CLUB));
+
+    assert_eq!(
+        p.mind.census().episodes,
+        0,
+        "with no one to blame there is nothing to remember about anyone"
+    );
+    assert!(
+        p.happiness.recent_events.iter().any(|e| e.magnitude < 0.0),
+        "the morale hit still lands — memory is additive, not a replacement"
+    );
+}
+
+#[test]
+fn a_pattern_of_broken_promises_becomes_a_judgement_that_outlives_them() {
+    // The headline behaviour, driven entirely through the public API a
+    // real simulation uses.
+    let mut p = Fixture::player();
+
+    // Three promises, three failures, over a season and a half.
+    for (index, made_on) in [
+        Fixture::date(2026, 1, 1),
+        Fixture::date(2026, 8, 1),
+        Fixture::date(2027, 2, 1),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        p.promises
+            .push(Fixture::overdue_promise(made_on, 85, index == 2));
+        for _ in 0..10 {
+            p.happiness.note_official_non_appearance(true);
+        }
+        p.verify_promises(made_on + Duration::days(120), Some(CLUB));
+    }
+
+    // The monthly think banks what it meant.
+    let after = Fixture::date(2027, 7, 1);
+    p.mind.tick(&p.mind_context(after, Some(CLUB)));
+
+    assert!(
+        p.mind
+            .memory()
+            .believes(FactClaim::HisWordIsWorthless, ActorRef::staff(COACH))
+            > 0.0,
+        "three broken promises is not three bad weeks — it is a conclusion about a man"
+    );
+
+    // A decade on, at another club entirely. Every episode has long since
+    // been pushed out by a career's worth of newer memories.
+    p.mind.on_spell_change(SpellChange::transfer(CLUB, false));
+    let much_later = Fixture::date(2037, 7, 1);
+    let late_ctx = p.mind_context(much_later, Some(99));
+
+    assert!(
+        p.mind.standing_with(ActorRef::staff(COACH), &late_ctx) < -0.2,
+        "ten years later he still would not play for him, got {}",
+        p.mind.standing_with(ActorRef::staff(COACH), &late_ctx)
+    );
+}
+
+#[test]
+fn the_club_and_the_coach_are_remembered_separately() {
+    let mut p = Fixture::player();
+    for _ in 0..10 {
+        p.happiness.note_official_non_appearance(true);
+    }
+
+    // Good things at the club, a bad man in the dugout.
+    let ctx = p.mind_context(Fixture::date(2026, 1, 10), Some(CLUB));
+    p.mind
+        .remember(EpisodeKind::SeniorDebut, ActorRef::NONE, &ctx);
+    p.mind
+        .remember(EpisodeKind::WonLeagueTitle, ActorRef::NONE, &ctx);
+
+    p.promises.push(Fixture::overdue_promise(
+        Fixture::date(2026, 2, 1),
+        85,
+        false,
+    ));
+    p.verify_promises(Fixture::date(2026, 7, 1), Some(CLUB));
+
+    p.mind
+        .tick(&p.mind_context(Fixture::date(2026, 8, 1), Some(CLUB)));
+
+    let later = p.mind_context(Fixture::date(2034, 8, 1), Some(99));
+    assert!(
+        p.mind.club_sentiment(CLUB, &later) > 0.0,
+        "the club is still where he broke through"
+    );
+    assert!(
+        p.mind.standing_with(ActorRef::staff(COACH), &later) < 0.0,
+        "the manager is still the manager"
+    );
+}
+
+#[test]
+fn a_return_to_the_old_club_brings_it_back_and_makes_it_vivid_again() {
+    let mut p = Fixture::player();
+    let early = p.mind_context(Fixture::date(2026, 1, 10), Some(CLUB));
+    p.mind
+        .remember(EpisodeKind::SeniorDebut, ActorRef::NONE, &early);
+    p.mind.on_spell_change(SpellChange::transfer(CLUB, false));
+
+    let much_later = p.mind_context(Fixture::date(2036, 1, 10), Some(99));
+    let faded = p
+        .mind
+        .memory()
+        .episodes
+        .find(|e| e.kind == EpisodeKind::SeniorDebut)
+        .unwrap()
+        .encoding();
+
+    let recalled = p.mind.recall(RecallCue::Club(CLUB), &much_later);
+    assert!(!recalled.is_empty(), "the place comes back");
+
+    let after = p
+        .mind
+        .memory()
+        .episodes
+        .find(|e| e.kind == EpisodeKind::SeniorDebut)
+        .unwrap();
+    assert!(
+        after.encoding() > faded,
+        "and walking back in makes it vivid again: {faded} → {}",
+        after.encoding()
+    );
+    assert_eq!(after.recall_count, 1);
+}
+
+#[test]
+fn an_ordinary_career_never_fills_the_stores() {
+    // Budget guard at the `Player` level: a full career of promise
+    // traffic must not push any store past its cap.
+    let mut p = Fixture::player();
+    let mut made_on = Fixture::date(2026, 1, 1);
+    for _ in 0..60 {
+        p.promises
+            .push(Fixture::overdue_promise(made_on, 60, false));
+        made_on += Duration::days(100);
+        p.verify_promises(made_on + Duration::days(1), Some(CLUB));
+        p.mind
+            .tick(&p.mind_context(made_on + Duration::days(2), Some(CLUB)));
+    }
+
+    let census = p.mind.census();
+    assert!(census.episodes <= 32, "episodes: {}", census.episodes);
+    assert!(census.facts <= 24, "facts: {}", census.facts);
+    assert!(census.accounts <= 32, "accounts: {}", census.accounts);
+}
+
+// ── Goals (phase 3) ─────────────────────────────────────────────
+
+/// Drive the goal stack the way the weekly desire tick does: the same
+/// reason, seen again and again, week after week.
+struct DesireRun;
+
+impl DesireRun {
+    /// Feed `reason` for `weeks`, reviewing each week, and return the day
+    /// it finished on.
+    fn sustain(
+        player: &mut Player,
+        reason: TransferRequestReason,
+        weeks: u16,
+        from: NaiveDate,
+    ) -> NaiveDate {
+        let mapping = GoalBridge::from_transfer_request_reason(reason);
+        let mut day = from;
+        for _ in 0..weeks {
+            day += Duration::days(7);
+            let ctx = player.mind_context(day, Some(CLUB));
+            player.mind.pursue(
+                mapping.goal,
+                mapping.origin,
+                mapping.evidence,
+                mapping.weight,
+                &ctx,
+            );
+            player.mind.tick(&ctx);
+        }
+        day
+    }
+
+    /// Review only — nothing feeds the want any more.
+    fn silence(player: &mut Player, weeks: u16, from: NaiveDate) -> NaiveDate {
+        let mut day = from;
+        for _ in 0..weeks {
+            day += Duration::days(7);
+            let ctx = player.mind_context(day, Some(CLUB));
+            player.mind.tick(&ctx);
+        }
+        day
+    }
+}
+
+#[test]
+fn a_want_climbs_the_ladder_instead_of_being_rediscovered_every_week() {
+    // The headline behaviour of phase 3, through the public API.
+    let mut p = Fixture::player();
+    let start = Fixture::date(2026, 1, 1);
+
+    DesireRun::sustain(&mut p, TransferRequestReason::LongUnhappiness, 2, start);
+    let early = p.mind.goals().status_of(GoalKind::LeaveThisClub);
+    assert!(
+        !early.is_public(),
+        "a fortnight in, it colours what he decides and nobody has heard him say it: {early:?}"
+    );
+
+    let day = DesireRun::sustain(
+        &mut p,
+        TransferRequestReason::LongUnhappiness,
+        6,
+        start + Duration::days(14),
+    );
+    assert!(
+        p.mind
+            .goals()
+            .status_of(GoalKind::LeaveThisClub)
+            .shapes_decisions(),
+        "by two months it colours everything he decides"
+    );
+
+    DesireRun::sustain(&mut p, TransferRequestReason::LongUnhappiness, 12, day);
+    assert!(
+        p.mind.is_pressing(),
+        "and by half a season it is a formal demand"
+    );
+
+    let goal = p.mind.goals().get(GoalKind::LeaveThisClub).unwrap();
+    assert!(
+        goal.reinforcements > 15,
+        "one want, carried — not twenty separate rediscoveries"
+    );
+}
+
+#[test]
+fn a_grievance_that_resolves_fades_instead_of_vanishing() {
+    // The designed disagreement with the legacy path, asserted. `Req`
+    // clears the day the last reason stops firing; the want subsides.
+    let mut p = Fixture::player();
+    let start = Fixture::date(2026, 1, 1);
+    let day = DesireRun::sustain(&mut p, TransferRequestReason::LongUnhappiness, 20, start);
+    assert!(p.mind.is_pressing());
+    let at_peak = p.mind.pressure_of(GoalKind::LeaveThisClub);
+
+    // Two weeks of quiet: still there, and still wanted.
+    let day = DesireRun::silence(&mut p, 2, day);
+    assert!(
+        p.mind.pressure_of(GoalKind::LeaveThisClub) > at_peak * 0.8,
+        "a fortnight does not undo half a season"
+    );
+
+    // A year of quiet: no longer a demand, but he has not forgotten.
+    // `LeaveThisClub` carries the slowest decay in the catalog on
+    // purpose — a man who has decided he wants out does not quietly stop
+    // wanting it — so a year takes roughly a third off, not all of it.
+    let day = DesireRun::silence(&mut p, 52, day);
+    let after_a_year = p.mind.pressure_of(GoalKind::LeaveThisClub);
+    assert!(after_a_year < at_peak * 0.8, "a year takes the edge off");
+    assert!(
+        !p.mind.is_pressing(),
+        "and he is no longer demanding anything"
+    );
+    assert!(
+        after_a_year > at_peak * 0.4,
+        "but it is still there: {after_a_year} of {at_peak}"
+    );
+
+    // Three more, and it is gone.
+    DesireRun::silence(&mut p, 156, day);
+    assert!(
+        p.mind.pressure_of(GoalKind::LeaveThisClub) < at_peak * 0.25,
+        "four years on, he has genuinely moved on"
+    );
+}
+
+#[test]
+fn he_gives_it_until_the_window_before_he_demands() {
+    // A player who has just started wanting first-team football does not
+    // hand in a request that afternoon. The current model has no way to
+    // represent this at all.
+    let mut p = Fixture::player();
+    let start = Fixture::date(2026, 1, 1);
+
+    let ctx = p.mind_context(start, Some(CLUB));
+    let mapping =
+        GoalBridge::from_transfer_request_reason(TransferRequestReason::WantsFirstTeamFootball);
+    p.mind.pursue(
+        mapping.goal,
+        mapping.origin,
+        mapping.evidence,
+        mapping.weight,
+        &ctx,
+    );
+    p.mind
+        .goals_mut()
+        .commit_until(mapping.goal, MindClock::day(start) + 180);
+
+    // Six months of wanting it without it hardening into a demand.
+    let day = DesireRun::sustain(
+        &mut p,
+        TransferRequestReason::WantsFirstTeamFootball,
+        24,
+        start,
+    );
+    assert!(
+        p.mind
+            .goals()
+            .get(GoalKind::PlayFirstTeamFootball)
+            .is_some_and(|g| g.has_deadline()),
+        "he is still waiting on the date he set"
+    );
+
+    // The window comes and goes with nothing changed.
+    DesireRun::silence(&mut p, 4, day + Duration::days(180));
+    assert_eq!(
+        p.mind.goals().status_of(GoalKind::PlayFirstTeamFootball),
+        GoalStatus::Abandoned,
+        "the date he gave himself passed unmet and the want resolved"
+    );
+}
+
+#[test]
+fn what_he_wants_decides_what_he_remembers() {
+    // The two organs, coupled. Same event, same player, different mind.
+    let encode_after = |goal_weeks: u16| -> f32 {
+        let mut p = Fixture::player();
+        let start = Fixture::date(2026, 1, 1);
+        let day = if goal_weeks > 0 {
+            DesireRun::sustain(
+                &mut p,
+                TransferRequestReason::WantsFirstTeamFootball,
+                goal_weeks,
+                start,
+            )
+        } else {
+            start
+        };
+
+        let ctx = p.mind_context(day, Some(CLUB));
+        p.mind
+            .remember(EpisodeKind::LeftOutOfBigMatch, ActorRef::NONE, &ctx);
+        p.mind
+            .memory()
+            .episodes
+            .find(|e| e.kind == EpisodeKind::LeftOutOfBigMatch)
+            .map(|e| e.encoding())
+            .unwrap_or(0.0)
+    };
+
+    let settled = encode_after(0);
+    let desperate = encode_after(20);
+    assert!(
+        desperate > settled * 1.2,
+        "being left out brands itself on a man who wants to play: {settled} vs {desperate}"
+    );
+}
+
+#[test]
+fn moving_answers_what_he_wanted_out_of_but_not_what_he_is_owed() {
+    let mut p = Fixture::player();
+    let start = Fixture::date(2026, 1, 1);
+    DesireRun::sustain(&mut p, TransferRequestReason::LongUnhappiness, 16, start);
+    DesireRun::sustain(&mut p, TransferRequestReason::SalaryUnresolved, 16, start);
+    assert!(p.mind.goals().get(GoalKind::LeaveThisClub).is_some());
+
+    p.mind.on_spell_change(SpellChange::transfer(CLUB, false));
+
+    assert!(
+        p.mind.goals().get(GoalKind::LeaveThisClub).is_none(),
+        "he got out"
+    );
+    assert!(
+        p.mind.goals().get(GoalKind::BePaidWhatImWorth).is_some(),
+        "being underpaid is not settled by changing employer"
+    );
+}
+
+#[test]
+fn the_desire_tick_feeds_goals_without_touching_the_legacy_verdict() {
+    // The parallel run itself: the legacy path still owns `Req`, and the
+    // stack accumulates alongside it.
+    let mut p = Fixture::player();
+    let start = Fixture::date(2026, 1, 1);
+    DesireRun::sustain(
+        &mut p,
+        TransferRequestReason::WantsStrongerLeague,
+        10,
+        start,
+    );
+
+    assert!(
+        p.mind.pressure_of(GoalKind::PlayInAStrongerLeague) > 0.0,
+        "the stack heard it"
+    );
+    assert!(
+        p.transfer_request_reasons.is_empty(),
+        "and the legacy set is untouched by the stack"
+    );
+    assert!(
+        !p.statuses.has(PlayerStatusType::Req),
+        "nothing downstream has changed hands yet"
+    );
+}
+
+#[test]
+fn a_career_of_wanting_things_never_fills_the_stack() {
+    let mut p = Fixture::player();
+    let mut day = Fixture::date(2026, 1, 1);
+    for (index, reason) in GoalBridge::ALL_REASONS.iter().cycle().take(120).enumerate() {
+        day += Duration::days(7);
+        let mapping = GoalBridge::from_transfer_request_reason(*reason);
+        let ctx = p.mind_context(day, Some(CLUB));
+        p.mind.pursue(
+            mapping.goal,
+            mapping.origin,
+            mapping.evidence,
+            mapping.weight,
+            &ctx,
+        );
+        p.mind.tick(&ctx);
+        if index % 30 == 29 {
+            p.mind.on_spell_change(SpellChange::transfer(CLUB, false));
+        }
+    }
+
+    assert!(
+        p.mind.goals().len() <= 12,
+        "goals: {}",
+        p.mind.goals().len()
+    );
+    assert!(p.mind.census().episodes <= 32);
+}
+
+// ── Sub-minds (phase 4) ─────────────────────────────────────────
+
+impl Fixture {
+    /// A settled first-teamer under a named manager.
+    fn situation() -> MindSituation {
+        MindSituation {
+            days_at_club: 500,
+            starter_ratio: 0.7,
+            expected_start_share: 0.6,
+            manager: ActorRef::staff(COACH),
+            ..MindSituation::neutral()
+        }
+    }
+
+    /// The same man, out of the side.
+    fn benched() -> MindSituation {
+        MindSituation {
+            starter_ratio: 0.05,
+            expected_start_share: 0.70,
+            age: 29,
+            ..Self::situation()
+        }
+    }
+}
+
+/// Run the full weekly think against a real situation.
+struct Weeks;
+
+impl Weeks {
+    fn run(
+        player: &mut Player,
+        situation: &MindSituation,
+        count: u16,
+        from: NaiveDate,
+    ) -> NaiveDate {
+        let mut day = from;
+        for _ in 0..count {
+            day += Duration::days(7);
+            let ctx = player.mind_context(day, Some(CLUB));
+            player.mind.tick_with(&ctx, situation);
+        }
+        day
+    }
+}
+
+#[test]
+fn settling_in_lifts_the_hold_a_move_put_on_what_he_brought_with_him() {
+    let mut p = Fixture::player();
+    let ctx = p.mind_context(Fixture::date(2026, 6, 1), Some(CLUB));
+    p.mind.pursue(
+        GoalKind::BePaidWhatImWorth,
+        GoalOrigin::Grievance,
+        GoalEvidence::of(&[GoalEvidence::PAID_BELOW_HIS_PEERS]),
+        0.8,
+        &ctx,
+    );
+
+    // Sold. Being underpaid travels with him — on hold, because the new
+    // club is owed a fair look before he presses it.
+    p.mind.on_spell_change(SpellChange::transfer(CLUB, false));
+    let held = p
+        .mind
+        .goals()
+        .get(GoalKind::BePaidWhatImWorth)
+        .expect("a wage grievance is not settled by changing employer");
+    assert_eq!(held.blocked_by, GoalBlocker::JustArrived);
+
+    // His first month there.
+    let new_signing = MindSituation {
+        days_at_club: 20,
+        ..Fixture::situation()
+    };
+    let day = Weeks::run(&mut p, &new_signing, 4, Fixture::date(2026, 7, 1));
+    let still_new = p
+        .mind
+        .goals()
+        .get(GoalKind::BePaidWhatImWorth)
+        .expect("still underpaid");
+    assert_eq!(
+        still_new.blocked_by,
+        GoalBlocker::JustArrived,
+        "four weeks in he is the new signing"
+    );
+
+    // Settled. The hold went with the honeymoon, not with the want —
+    // this is the line that used to read "he has only just arrived"
+    // three seasons later.
+    let settled = MindSituation {
+        days_at_club: MindSituation::SETTLING_DAYS,
+        ..Fixture::situation()
+    };
+    Weeks::run(&mut p, &settled, 1, day);
+    let free = p
+        .mind
+        .goals()
+        .get(GoalKind::BePaidWhatImWorth)
+        .expect("still underpaid, and now able to say so");
+    assert_eq!(free.blocked_by, GoalBlocker::None);
+}
+
+#[test]
+fn an_episode_reaches_the_faculty_that_cares_about_it() {
+    let mut p = Fixture::player();
+    let ctx = p.mind_context(Fixture::date(2026, 1, 1), Some(CLUB));
+
+    p.mind
+        .remember(EpisodeKind::WonLeagueTitle, ActorRef::NONE, &ctx);
+    assert_eq!(p.mind.career.honours, 1, "a title is a career event");
+
+    p.mind
+        .remember(EpisodeKind::TeammateConflict, ActorRef::player(9), &ctx);
+    assert_eq!(p.mind.social.friction, 1, "a fallout is a social one");
+
+    p.mind.remember(
+        EpisodeKind::ManagerPromiseBroken,
+        ActorRef::staff(COACH),
+        &ctx,
+    );
+    assert!(
+        p.mind.professional.feels_rated() < 0.0,
+        "a broken promise is a professional one"
+    );
+
+    p.mind
+        .remember(EpisodeKind::WageBelowPeers, ActorRef::club(CLUB), &ctx);
+    assert!(p.mind.financial.envy() > 0.0, "a wage is a financial one");
+
+    p.mind
+        .remember(EpisodeKind::CostlyError, ActorRef::NONE, &ctx);
+    assert!(
+        p.mind.competitive.self_belief() < 0.0,
+        "a mistake is a competitive one"
+    );
+}
+
+#[test]
+fn the_body_and_life_reach_the_faculties_they_actually_land_on() {
+    let mut p = Fixture::player();
+    let ctx = p.mind_context(Fixture::date(2026, 1, 1), Some(CLUB));
+
+    p.mind
+        .remember(EpisodeKind::CareerThreateningInjury, ActorRef::NONE, &ctx);
+    assert!(
+        p.mind.competitive.self_belief() < 0.0,
+        "an injury is a blow to a player's belief, not only his fitness"
+    );
+
+    p.mind
+        .remember(EpisodeKind::ChildBorn, ActorRef::NONE, &ctx);
+    assert!(
+        p.mind.social.belonging() > 0.0,
+        "life outside the game reaches whether he feels at home"
+    );
+}
+
+#[test]
+fn a_tick_with_no_situation_does_not_let_the_faculties_think() {
+    // The trap this guards: a neutral situation is not a neutral input.
+    // To the competitive mind it reads as a man getting the minutes his
+    // role implies, which would quietly satisfy wants the caller knows
+    // nothing about.
+    let mut p = Fixture::player();
+    let ctx = p.mind_context(Fixture::date(2026, 1, 1), Some(CLUB));
+    p.mind.pursue(
+        GoalKind::PlayFirstTeamFootball,
+        GoalOrigin::Survival,
+        GoalEvidence::EMPTY,
+        0.8,
+        &ctx,
+    );
+    let before = p
+        .mind
+        .goals()
+        .get(GoalKind::PlayFirstTeamFootball)
+        .unwrap()
+        .progress();
+
+    for week in 1..20u16 {
+        let ctx = p.mind_context(
+            Fixture::date(2026, 1, 1) + Duration::days(week as i64 * 7),
+            Some(CLUB),
+        );
+        p.mind.tick(&ctx);
+    }
+
+    let after = p
+        .mind
+        .goals()
+        .get(GoalKind::PlayFirstTeamFootball)
+        .unwrap()
+        .progress();
+    assert_eq!(after, before, "no situation, no thinking");
+}
+
+#[test]
+fn the_faculties_form_wants_from_the_world_rather_than_from_a_bridge() {
+    // Phase 3 could only produce wants the legacy desire path handed it.
+    // The faculties read the situation themselves.
+    let mut p = Fixture::player();
+    Weeks::run(&mut p, &Fixture::benched(), 12, Fixture::date(2026, 1, 1));
+
+    assert!(
+        p.mind.pressure_of(GoalKind::WinBackMyPlace) > 0.0,
+        "nothing fed this in — the competitive mind saw it"
+    );
+    assert!(
+        p.transfer_request_reasons.is_empty(),
+        "and the legacy path was never involved"
+    );
+}
+
+#[test]
+fn a_player_tries_to_win_his_place_back_before_he_gives_up_on_it() {
+    let mut p = Fixture::player();
+    Weeks::run(&mut p, &Fixture::benched(), 6, Fixture::date(2026, 1, 1));
+    assert!(p.mind.pressure_of(GoalKind::WinBackMyPlace) > 0.0);
+    assert_eq!(
+        p.mind.pressure_of(GoalKind::PlayFirstTeamFootball),
+        0.0,
+        "he has not stopped believing yet"
+    );
+
+    // Dropped, repeatedly, until he has.
+    let start = Fixture::date(2027, 1, 1);
+    for week in 0..8u16 {
+        let ctx = p.mind_context(start + Duration::days(week as i64 * 7), Some(CLUB));
+        p.mind
+            .remember(EpisodeKind::DroppedToBench, ActorRef::staff(COACH), &ctx);
+    }
+    Weeks::run(&mut p, &Fixture::benched(), 6, start + Duration::days(60));
+
+    assert!(
+        p.mind.pressure_of(GoalKind::PlayFirstTeamFootball) > 0.0,
+        "now he wants to go somewhere he would play"
+    );
+}
+
+#[test]
+fn a_change_of_manager_can_rescue_a_career() {
+    let mut p = Fixture::player();
+    let start = Fixture::date(2026, 1, 1);
+
+    // Frozen out, repeatedly, by one man.
+    for week in 0..8u16 {
+        let ctx = p.mind_context(start + Duration::days(week as i64 * 7), Some(CLUB));
+        p.mind
+            .remember(EpisodeKind::ManagerFrozenOut, ActorRef::staff(COACH), &ctx);
+    }
+    let day = Weeks::run(&mut p, &Fixture::benched(), 8, start + Duration::days(60));
+    assert!(p.mind.professional.feels_rated() < 0.0);
+
+    // Somebody else takes over.
+    let under_someone_else = MindSituation {
+        manager: ActorRef::staff(777),
+        ..Fixture::benched()
+    };
+    Weeks::run(&mut p, &under_someone_else, 1, day);
+
+    assert_eq!(
+        p.mind.professional.feels_rated(),
+        0.0,
+        "the read of the new man starts from nothing"
+    );
+    assert!(
+        p.mind.pressure_of(GoalKind::WinTheManagersTrust) > 0.0,
+        "and a fresh start is a reason to fight for it"
+    );
+}
+
+#[test]
+fn a_grudge_stays_with_the_man_it_belongs_to() {
+    let mut p = Fixture::player();
+    let start = Fixture::date(2026, 1, 1);
+    for week in 0..6u16 {
+        let ctx = p.mind_context(start + Duration::days(week as i64 * 7), Some(CLUB));
+        p.mind.remember(
+            EpisodeKind::ManagerPromiseBroken,
+            ActorRef::staff(COACH),
+            &ctx,
+        );
+    }
+    let day = Weeks::run(&mut p, &Fixture::situation(), 8, start + Duration::days(50));
+
+    let later = p.mind_context(day, Some(CLUB));
+    assert!(
+        p.mind.standing_with(ActorRef::staff(COACH), &later) < 0.0,
+        "the man who broke his word is still that man"
+    );
+
+    // A successor arrives and inherits nothing.
+    let successor = MindSituation {
+        manager: ActorRef::staff(777),
+        ..Fixture::situation()
+    };
+    Weeks::run(&mut p, &successor, 4, day);
+    assert!(
+        p.mind.standing_with(ActorRef::staff(777), &later) >= 0.0,
+        "and his successor is not paying for it"
+    );
+}
+
+#[test]
+fn wanting_to_stay_pushes_back_on_wanting_to_go() {
+    // Career and social faculties in genuine opposition, through the
+    // real fan-out.
+    let mut p = Fixture::player();
+    let start = Fixture::date(2026, 1, 1);
+
+    // A decade at a club he loves, with the memories to match.
+    for week in 0..6u16 {
+        let ctx = p.mind_context(start + Duration::days(week as i64 * 7), Some(CLUB));
+        p.mind
+            .remember(EpisodeKind::FansAdoration, ActorRef::fans(CLUB), &ctx);
+        p.mind
+            .remember(EpisodeKind::SquadBackedHim, ActorRef::NONE, &ctx);
+    }
+    let ctx = p.mind_context(start, Some(CLUB));
+    p.mind
+        .remember(EpisodeKind::SeniorDebut, ActorRef::NONE, &ctx);
+    p.mind
+        .remember(EpisodeKind::WonLeagueTitle, ActorRef::NONE, &ctx);
+
+    // An ambitious man, a long time at a small club: the career mind
+    // wants out, the social mind wants to stay.
+    let torn = MindSituation {
+        days_at_club: 3000,
+        ambition: 18.0,
+        club_reputation: 0.35,
+        ..Fixture::situation()
+    };
+    Weeks::run(&mut p, &torn, 20, start + Duration::days(60));
+
+    assert!(
+        p.mind.pressure_of(GoalKind::StepUpToABiggerClub) > 0.0,
+        "the ambition is real"
+    );
+    assert!(
+        p.mind.pressure_of(GoalKind::StayAtThisClub) > 0.0,
+        "and so is the attachment"
+    );
+    assert!(
+        p.mind.wants_to_leave() < p.mind.pressure_of(GoalKind::StepUpToABiggerClub),
+        "the pull out is netted off by the reason to stay"
+    );
+}
+
+#[test]
+fn a_move_resets_belonging_and_the_manager_read_but_not_the_career() {
+    let mut p = Fixture::player();
+    let start = Fixture::date(2026, 1, 1);
+    let ctx = p.mind_context(start, Some(CLUB));
+    p.mind
+        .remember(EpisodeKind::WonLeagueTitle, ActorRef::NONE, &ctx);
+    p.mind
+        .remember(EpisodeKind::SquadBackedHim, ActorRef::NONE, &ctx);
+    p.mind.remember(
+        EpisodeKind::ManagerPrivateBacking,
+        ActorRef::staff(COACH),
+        &ctx,
+    );
+
+    assert!(p.mind.social.belonging() > 0.0);
+    assert!(p.mind.professional.feels_rated() > 0.0);
+    assert_eq!(p.mind.career.honours, 1);
+
+    p.mind.on_spell_change(SpellChange::transfer(CLUB, false));
+
+    assert_eq!(p.mind.social.belonging(), 0.0, "belonging is about a place");
+    assert_eq!(
+        p.mind.professional.feels_rated(),
+        0.0,
+        "and a read of a manager is about a person"
+    );
+    assert_eq!(
+        p.mind.career.honours, 1,
+        "a career is continuous — he still won that"
+    );
+}
+
+#[test]
+fn the_appraisal_covers_five_axes_and_says_how_much_it_knows() {
+    let mut p = Fixture::player();
+    let empty = p.mind.appraise();
+    assert!(
+        empty.coverage() < 0.5,
+        "a player with no history is barely readable, and the model should say so"
+    );
+
+    let start = Fixture::date(2026, 1, 1);
+    let ctx = p.mind_context(start, Some(CLUB));
+    for _ in 0..4 {
+        p.mind
+            .remember(EpisodeKind::ManagerFrozenOut, ActorRef::staff(COACH), &ctx);
+        p.mind
+            .remember(EpisodeKind::FeltIsolated, ActorRef::NONE, &ctx);
+    }
+    // Give the professional mind a manager to have a view about.
+    Weeks::run(&mut p, &Fixture::benched(), 2, start);
+
+    let profile = p.mind.appraise();
+    assert!(profile.coverage() > empty.coverage());
+    assert!(profile.net() < 0.0, "this is not a happy man");
+
+    let worst = profile.heaviest_concern().expect("something is weighing");
+    assert!(worst.weighted() < 0.0);
+}
+
+#[test]
+fn the_appraisal_runs_alongside_the_existing_morale_rather_than_replacing_it() {
+    let mut p = Fixture::player();
+    let start = Fixture::date(2026, 1, 1);
+    let ctx = p.mind_context(start, Some(CLUB));
+    for _ in 0..5 {
+        p.mind
+            .remember(EpisodeKind::ManagerFrozenOut, ActorRef::staff(COACH), &ctx);
+    }
+    Weeks::run(&mut p, &Fixture::benched(), 4, start);
+
+    // The faculties read him as unhappy...
+    assert!(p.mind.appraise().net() < 0.0);
+    // ...and `PlayerHappiness` is untouched by any of it.
+    assert_eq!(
+        p.happiness.morale,
+        crate::club::player::behaviour_config::HappinessConfig::default().default_morale,
+        "phase 4 builds the replacement; it does not switch anything over"
+    );
+}
+
+#[test]
+fn what_he_wants_still_decides_what_brands_itself_on_him() {
+    // The phase-3 coupling, re-checked now that the faculties are the
+    // ones forming the wants.
+    let mut settled = Fixture::player();
+    let mut desperate = Fixture::player();
+    let start = Fixture::date(2026, 1, 1);
+
+    Weeks::run(&mut settled, &Fixture::situation(), 16, start);
+    let day = Weeks::run(&mut desperate, &Fixture::benched(), 16, start);
+
+    let encode = |p: &mut Player| {
+        let ctx = p.mind_context(day, Some(CLUB));
+        p.mind
+            .remember(EpisodeKind::LeftOutOfBigMatch, ActorRef::NONE, &ctx);
+        p.mind
+            .memory()
+            .episodes
+            .find(|e| e.kind == EpisodeKind::LeftOutOfBigMatch)
+            .map(|e| e.encoding())
+            .unwrap_or(0.0)
+    };
+
+    assert!(
+        encode(&mut desperate) > encode(&mut settled),
+        "being left out means more to a man fighting for his place"
+    );
+}
+
+#[test]
+fn a_full_career_of_thinking_never_grows_the_mind() {
+    let mut p = Fixture::player();
+    let mut day = Fixture::date(2026, 1, 1);
+    let situations = [Fixture::situation(), Fixture::benched()];
+
+    for season in 0..15u16 {
+        let situation = &situations[(season % 2) as usize];
+        day = Weeks::run(&mut p, situation, 40, day);
+        if season % 3 == 2 {
+            p.mind.on_spell_change(SpellChange::transfer(CLUB, false));
+        }
+    }
+
+    assert!(
+        p.mind.goals().len() <= 12,
+        "goals: {}",
+        p.mind.goals().len()
+    );
+    assert!(p.mind.census().episodes <= 32);
+    assert!(p.mind.census().facts <= 24);
+}
+
+// ── The squad-standing pass (the situation the mind was blind to) ──
+
+impl Fixture {
+    /// A settled first-teamer whose side has been ranked: he is second
+    /// choice, and the man in front is his own age and no better.
+    fn behind_a_peer() -> MindSituation {
+        MindSituation {
+            age: 28,
+            days_at_club: 500,
+            starter_ratio: 0.15,
+            expected_start_share: 0.60,
+            manager: ActorRef::staff(COACH),
+            pecking_rank: 2,
+            rivals_at_position: 2,
+            top_rival: ActorRef::player(99),
+            top_rival_age: 28,
+            rival_gap: 8,
+            own_level: 140,
+            ..MindSituation::neutral()
+        }
+    }
+}
+
+#[test]
+fn the_professional_faculty_runs_once_a_manager_is_named() {
+    // The defect this whole pass exists to fix: `mind_situation`
+    // hard-coded `manager: NONE`, so `ProfessionalMind::reflect` returned
+    // on its first line and three goals in the catalog were unreachable
+    // in a live world.
+    let mut p = Fixture::player();
+    let start = Fixture::date(2030, 1, 1);
+
+    let no_manager = MindSituation {
+        manager: ActorRef::NONE,
+        ..Fixture::benched()
+    };
+    Weeks::run(&mut p, &no_manager, 10, start);
+    assert_eq!(
+        p.mind.pressure_of(GoalKind::WinTheManagersTrust),
+        0.0,
+        "with nobody named, the faculty has no view and forms nothing"
+    );
+
+    let mut with_manager = Fixture::player();
+    Weeks::run(&mut with_manager, &Fixture::benched(), 10, start);
+    assert!(
+        with_manager.mind.pressure_of(GoalKind::WinTheManagersTrust) > 0.0,
+        "an out-of-favour player under a named manager tries to win him over"
+    );
+}
+
+#[test]
+fn a_boy_behind_a_veteran_waits_and_a_man_behind_a_peer_does_not() {
+    let start = Fixture::date(2030, 1, 1);
+
+    let mut aggrieved = Fixture::player();
+    Weeks::run(&mut aggrieved, &Fixture::behind_a_peer(), 20, start);
+
+    let mut patient = Fixture::player();
+    let waiting_his_turn = MindSituation {
+        age: 20,
+        top_rival_age: 34,
+        rival_gap: -12,
+        ..Fixture::behind_a_peer()
+    };
+    Weeks::run(&mut patient, &waiting_his_turn, 20, start);
+
+    // Identical minutes, identical role, opposite conclusions.
+    assert!(
+        aggrieved.mind.pressure_of(GoalKind::PlayFirstTeamFootball)
+            > patient.mind.pressure_of(GoalKind::PlayFirstTeamFootball),
+        "a man kept out by his equal is wronged; a boy behind a veteran is queuing"
+    );
+}
+
+#[test]
+fn losing_the_man_who_signed_him_is_not_the_same_as_any_other_change() {
+    let start = Fixture::date(2030, 1, 1);
+
+    // Signed by the coach who is now leaving.
+    let mut sponsored = Fixture::player();
+    sponsored
+        .mind
+        .professional
+        .on_signed_by(ActorRef::staff(COACH));
+    let successor = MindSituation {
+        manager: ActorRef::staff(COACH + 1),
+        ..Fixture::situation()
+    };
+    Weeks::run(&mut sponsored, &successor, 1, start);
+
+    // Inherited by the same successor, but he was nobody's signing.
+    let mut inherited = Fixture::player();
+    inherited.mind.professional.manager = ActorRef::staff(COACH);
+    Weeks::run(&mut inherited, &successor, 1, start);
+
+    assert!(
+        sponsored.mind.pressure_of(GoalKind::WinTheManagersTrust)
+            > inherited.mind.pressure_of(GoalKind::WinTheManagersTrust),
+        "a man who has lost his advocate has more to prove than one who never had one"
+    );
+    assert!(
+        sponsored.mind.professional.lost_his_advocate,
+        "and he knows it"
+    );
+    let goal = sponsored
+        .mind
+        .goals()
+        .get(GoalKind::WinTheManagersTrust)
+        .expect("the want exists");
+    assert!(
+        goal.evidence.contains(GoalEvidence::LOST_HIS_ADVOCATE),
+        "and the reason is nameable"
+    );
+}
+
+#[test]
+fn a_fresh_start_takes_the_heat_out_of_wanting_away() {
+    let start = Fixture::date(2030, 1, 1);
+    let mut p = Fixture::player();
+
+    // Written off by a manager whose word he no longer believes.
+    let ctx = p.mind_context(start, Some(CLUB));
+    for _ in 0..6 {
+        p.mind.remember(
+            EpisodeKind::ManagerPromiseBroken,
+            ActorRef::staff(COACH),
+            &ctx,
+        );
+        p.mind
+            .remember(EpisodeKind::ManagerFrozenOut, ActorRef::staff(COACH), &ctx);
+    }
+    let under_him = MindSituation {
+        manager: ActorRef::staff(COACH),
+        ..Fixture::benched()
+    };
+    let after = Weeks::run(&mut p, &under_him, 12, start);
+    let before_change = p.mind.pressure_of(GoalKind::LeaveThisClub);
+    assert!(before_change > 0.0, "he wants out");
+
+    // The club sacks him.
+    let successor = MindSituation {
+        manager: ActorRef::staff(COACH + 1),
+        ..Fixture::benched()
+    };
+    Weeks::run(&mut p, &successor, 1, after);
+
+    assert!(
+        p.mind.pressure_of(GoalKind::LeaveThisClub) < before_change,
+        "a new manager is the commonest way an out-of-favour career gets rescued"
+    );
+}
+
+// ── Wanting to develop is not wanting a bigger club ───────────────
+
+#[test]
+fn a_stalled_young_player_wants_a_better_coach_before_a_bigger_club() {
+    let start = Fixture::date(2030, 1, 1);
+    let mut p = Fixture::player();
+
+    // Twenty-two, playing every week, going nowhere, at a club whose
+    // coaching bench cannot teach a player of his level anything more.
+    let stalled = MindSituation {
+        age: 22,
+        ambition: 16.0,
+        professionalism: 15.0,
+        days_at_club: 500,
+        starter_ratio: 0.8,
+        expected_start_share: 0.6,
+        manager: ActorRef::staff(COACH),
+        own_level: 150,
+        coaching_ceiling: 7.0,
+        club_reputation: 0.55,
+        ..MindSituation::neutral()
+    };
+    Weeks::run(&mut p, &stalled, 40, start);
+
+    assert!(
+        p.mind.career.feels_stalled(),
+        "forty weeks flat and he knows it"
+    );
+    assert!(
+        p.mind.pressure_of(GoalKind::KeepImproving) > 0.0,
+        "the first want is to start getting better again"
+    );
+    assert!(
+        p.mind.pressure_of(GoalKind::WorkWithABetterCoach) > 0.0,
+        "and he has worked out what is holding him back"
+    );
+    let goal = p
+        .mind
+        .goals()
+        .get(GoalKind::WorkWithABetterCoach)
+        .expect("the want exists");
+    assert!(goal.evidence.contains(GoalEvidence::COACHING_CEILING));
+    assert!(goal.evidence.contains(GoalEvidence::NO_LONGER_IMPROVING));
+
+    // And neither of them is a transfer request. That is the point: a
+    // club that hires a better coach keeps him.
+    assert!(
+        !GoalKind::WorkWithABetterCoach.points_away(),
+        "wanting a better teacher is answerable without him going anywhere"
+    );
+}
+
+#[test]
+fn a_player_who_is_still_improving_wants_none_of_it() {
+    let start = Fixture::date(2030, 1, 1);
+    let mut p = Fixture::player();
+
+    let rising = MindSituation {
+        age: 22,
+        ambition: 16.0,
+        days_at_club: 500,
+        starter_ratio: 0.8,
+        expected_start_share: 0.6,
+        manager: ActorRef::staff(COACH),
+        own_level: 120,
+        coaching_ceiling: 16.0,
+        ..MindSituation::neutral()
+    };
+    // A level that climbs steadily, week on week.
+    let mut day = start;
+    for week in 0..40u16 {
+        day += Duration::days(7);
+        let ctx = p.mind_context(day, Some(CLUB));
+        let climbing = MindSituation {
+            own_level: (120 + week / 2).min(200) as u8,
+            ..rising
+        };
+        p.mind.tick_with(&ctx, &climbing);
+    }
+
+    assert!(p.mind.career.improvement() > 0.0, "he is going somewhere");
+    assert_eq!(
+        p.mind.pressure_of(GoalKind::WorkWithABetterCoach),
+        0.0,
+        "nobody improving under a coach wants a different one"
+    );
+}
+
+// ── Three ways to be a long-serving player ────────────────────────
+
+#[test]
+fn a_loyal_ambitious_club_man_asks_the_club_to_match_him_rather_than_leaving() {
+    let start = Fixture::date(2030, 1, 1);
+
+    let base = MindSituation {
+        age: 27,
+        ambition: 17.0,
+        days_at_club: 1800,
+        starter_ratio: 0.8,
+        expected_start_share: 0.7,
+        manager: ActorRef::staff(COACH),
+        own_level: 165,
+        club_reputation: 0.45,
+        coaching_ceiling: 15.0,
+        ..MindSituation::neutral()
+    };
+
+    let mut loyal = Fixture::player();
+    Weeks::run(
+        &mut loyal,
+        &MindSituation {
+            loyalty: 18.0,
+            ..base
+        },
+        20,
+        start,
+    );
+
+    let mut rootless = Fixture::player();
+    Weeks::run(
+        &mut rootless,
+        &MindSituation {
+            loyalty: 3.0,
+            ..base
+        },
+        20,
+        start,
+    );
+
+    assert!(
+        loyal.mind.pressure_of(GoalKind::PlayWithBetterPlayers) > 0.0,
+        "the club man asks for signings — the player side of wanting to be backed"
+    );
+    assert!(
+        rootless.mind.pressure_of(GoalKind::StepUpToABiggerClub)
+            > loyal.mind.pressure_of(GoalKind::StepUpToABiggerClub),
+        "same club, same ability, same ambition, and only one of them is packing"
+    );
+}
+
+#[test]
+fn a_club_servant_passed_over_for_the_armband_wants_something_money_cannot_buy() {
+    let start = Fixture::date(2030, 1, 1);
+
+    let base = MindSituation {
+        age: 30,
+        loyalty: 17.0,
+        days_at_club: 2600,
+        starter_ratio: 0.8,
+        expected_start_share: 0.7,
+        manager: ActorRef::staff(COACH),
+        pecking_rank: 1,
+        own_level: 140,
+        ..MindSituation::neutral()
+    };
+
+    let mut passed_over = Fixture::player();
+    let ctx = passed_over.mind_context(start, Some(CLUB));
+    passed_over
+        .mind
+        .remember(EpisodeKind::WelcomedBySquad, ActorRef::club(CLUB), &ctx);
+    Weeks::run(&mut passed_over, &base, 12, start);
+
+    let mut captain = Fixture::player();
+    let ctx = captain.mind_context(start, Some(CLUB));
+    captain
+        .mind
+        .remember(EpisodeKind::WelcomedBySquad, ActorRef::club(CLUB), &ctx);
+    Weeks::run(
+        &mut captain,
+        &MindSituation {
+            is_captain: true,
+            ..base
+        },
+        12,
+        start,
+    );
+
+    assert!(
+        passed_over.mind.pressure_of(GoalKind::BecomeAClubLegend) > 0.0,
+        "eight years in and still not the captain"
+    );
+    assert!(
+        captain.mind.pressure_of(GoalKind::BecomeAClubLegend)
+            < passed_over.mind.pressure_of(GoalKind::BecomeAClubLegend),
+        "the armband is the recognition, and it answers the want"
+    );
+}
+
+// ── Frozen out is not benched ─────────────────────────────────────
+
+#[test]
+fn a_frozen_out_player_cannot_fight_for_a_place_he_is_not_considered_for() {
+    let start = Fixture::date(2030, 1, 1);
+    let mut p = Fixture::player();
+
+    // Bottom of a four-man queue despite being the better player, and
+    // out of the side for months.
+    let excluded = MindSituation {
+        age: 27,
+        days_at_club: 600,
+        starter_ratio: 0.0,
+        expected_start_share: 0.6,
+        manager: ActorRef::staff(COACH),
+        pecking_rank: 4,
+        rivals_at_position: 3,
+        top_rival: ActorRef::player(99),
+        top_rival_age: 26,
+        rival_gap: 15,
+        own_level: 150,
+        ..MindSituation::neutral()
+    };
+    let ctx = p.mind_context(start, Some(CLUB));
+    for _ in 0..10 {
+        p.mind
+            .remember(EpisodeKind::DroppedToBench, ActorRef::staff(COACH), &ctx);
+    }
+    Weeks::run(&mut p, &excluded, 8, start);
+
+    let goal = p
+        .mind
+        .goals()
+        .get(GoalKind::WinBackMyPlace)
+        .expect("he still wants his place");
+    assert!(
+        goal.blocked_by.is_blocked(),
+        "there is no competition to win, because he is not in it"
+    );
+    assert!(
+        p.mind.pressure_of(GoalKind::BeAllowedToLeave) > 0.0,
+        "so the want routes somewhere it can actually go"
+    );
+}
+
+// ── The tournament year ───────────────────────────────────────────
+
+#[test]
+fn a_tournament_on_the_horizon_makes_a_fringe_international_need_games() {
+    use crate::club::player::mind::NationalStanding;
+
+    let start = Fixture::date(2030, 1, 1);
+    let base = MindSituation {
+        age: 27,
+        days_at_club: 600,
+        starter_ratio: 0.1,
+        expected_start_share: 0.55,
+        manager: ActorRef::staff(COACH),
+        own_level: 150,
+        national_standing: NationalStanding::InContention,
+        ..MindSituation::neutral()
+    };
+
+    let mut before_the_cycle = Fixture::player();
+    Weeks::run(
+        &mut before_the_cycle,
+        &MindSituation {
+            months_to_tournament: 30,
+            ..base
+        },
+        20,
+        start,
+    );
+
+    let mut on_the_eve = Fixture::player();
+    Weeks::run(
+        &mut on_the_eve,
+        &MindSituation {
+            months_to_tournament: 4,
+            ..base
+        },
+        20,
+        start,
+    );
+
+    let urgency = |p: &Player, kind| p.mind.goals().get(kind).map(|g| g.urgency()).unwrap_or(0.0);
+
+    assert!(
+        urgency(&on_the_eve, GoalKind::GetIntoTheNationalSquad)
+            > urgency(&before_the_cycle, GoalKind::GetIntoTheNationalSquad),
+        "the calendar is the only thing in football that dates a club situation"
+    );
+    assert!(
+        urgency(&on_the_eve, GoalKind::PlayFirstTeamFootball)
+            >= urgency(&before_the_cycle, GoalKind::PlayFirstTeamFootball),
+        "and it sharpens the club want too, which is what empties benches in January"
+    );
+}
+
+// ── The mind answers ──────────────────────────────────────────────
+
+#[test]
+fn deliberation_returns_named_reasons_rather_than_a_number() {
+    use crate::club::player::mind::MindOption;
+
+    let start = Fixture::date(2030, 1, 1);
+    let mut p = Fixture::player();
+
+    // A man with nothing but "I will win my place back" has no argument
+    // for asking to leave, and the model is right to say nothing — so
+    // the fixture gives him one: a manager who has broken his word and
+    // a run out of the side he actually remembers.
+    let ctx = p.mind_context(start, Some(CLUB));
+    for _ in 0..4 {
+        p.mind.remember(
+            EpisodeKind::ManagerPromiseBroken,
+            ActorRef::staff(COACH),
+            &ctx,
+        );
+        p.mind
+            .remember(EpisodeKind::DroppedToBench, ActorRef::staff(COACH), &ctx);
+    }
+    Weeks::run(&mut p, &Fixture::benched(), 20, start);
+
+    let verdict = p.mind.deliberate(MindOption::RequestTransfer);
+    assert!(
+        !verdict.is_empty(),
+        "a player this far out of favour has a view on asking to leave"
+    );
+    assert!(
+        verdict.as_slice().iter().all(|r| r.goal != GoalKind::None),
+        "every reason names the want behind it, so a renderer can print it"
+    );
+}
+
+#[test]
+fn the_club_where_he_made_his_name_argues_for_itself_a_decade_later() {
+    use crate::club::player::mind::MindOption;
+
+    let start = Fixture::date(2030, 1, 1);
+    let mut p = Fixture::player();
+
+    // Three good years at CLUB, then he leaves.
+    let ctx = p.mind_context(start, Some(CLUB));
+    for _ in 0..6 {
+        p.mind
+            .remember(EpisodeKind::FirstGoalForClub, ActorRef::club(CLUB), &ctx);
+        p.mind
+            .remember(EpisodeKind::WonLeagueTitle, ActorRef::club(CLUB), &ctx);
+        p.mind
+            .remember(EpisodeKind::FansAdoration, ActorRef::fans(CLUB), &ctx);
+    }
+    p.mind.memory_mut().maybe_consolidate(&ctx.memory());
+    p.mind.on_spell_change(SpellChange::transfer(CLUB, false));
+
+    let elsewhere = 88;
+    let home = p.mind.deliberate(MindOption::JoinClub(CLUB));
+    let stranger = p.mind.deliberate(MindOption::JoinClub(elsewhere));
+
+    assert!(
+        home.net() > stranger.net(),
+        "the place he made his name is not the same as anywhere else"
+    );
+    assert!(
+        !home.is_empty(),
+        "and the reason is printable rather than a number"
+    );
+}
+
+/// A boy the club produced has no transfer to date his stay from, and
+/// five of the eight arcs are gated on how long he has been somewhere.
+/// Reading "no anchor" as "arrived this morning" left every homegrown
+/// player in the world with one arc he could form and four he could not.
+#[test]
+fn a_homegrown_boy_with_no_transfer_on_record_can_still_decide_something() {
+    let today = Fixture::date(2030, 6, 1);
+    let mut p = Fixture::player();
+    p.birth_date = Fixture::date(2010, 1, 1);
+    // Fourth choice, never picked, and a season of evidence for it.
+    p.happiness.starter_ratio = 0.05;
+    p.happiness.appearances_tracked = 8;
+    p.squad_standing_view = Some(crate::club::player::core::player::SquadStandingView {
+        pecking_rank: 4,
+        rivals_at_position: 5,
+        top_rival_age: 26,
+        observable_level: 95,
+        ..Default::default()
+    });
+
+    let situation = p.mind_situation(today, 1, "");
+    assert!(
+        situation.is_settled(),
+        "a club's own boy has been here all along"
+    );
+
+    let ctx = p.mind_context(today, Some(CLUB));
+    p.mind.tick_with(&ctx, &situation);
+
+    assert_eq!(
+        p.mind.career.plan.map(|plan| plan.arc),
+        Some(CareerArc::ProveOnLoan),
+        "he is going nowhere here and there is a season elsewhere in him"
+    );
+}
+
+/// The other end of the same anchor: long service is what makes a man
+/// the furniture, and a one-club man has the longest of all.
+#[test]
+fn a_one_club_man_at_his_own_level_means_to_stay_and_lead() {
+    let today = Fixture::date(2030, 6, 1);
+    let mut p = Fixture::player();
+    p.birth_date = Fixture::date(2000, 1, 1);
+    p.attributes.loyalty = 18.0;
+    p.happiness.starter_ratio = 0.8;
+    p.happiness.appearances_tracked = 30;
+    p.squad_standing_view = Some(crate::club::player::core::player::SquadStandingView {
+        pecking_rank: 1,
+        rivals_at_position: 2,
+        observable_level: 125,
+        ..Default::default()
+    });
+
+    let situation = p.mind_situation(today, 1, "");
+    let ctx = p.mind_context(today, Some(CLUB));
+    p.mind.tick_with(&ctx, &situation);
+
+    assert_eq!(
+        p.mind.career.plan.map(|plan| plan.arc),
+        Some(CareerArc::StayAndLead)
+    );
+}
+
+/// The page said he wanted the manager's trust six months after he last
+/// saw that manager.
+///
+/// A loan never reached the mind at all — only `complete_transfer` did —
+/// so a man playing his football somewhere else went on carrying the
+/// parent club's grievances, the parent manager, and the parent dressing
+/// room, and the profile printed all three as things he wants *here*.
+#[test]
+fn going_out_on_loan_leaves_the_old_club_behind() {
+    let today = Fixture::date(2030, 8, 1);
+    let mut p = Fixture::player();
+    let ctx = p.mind_context(today, Some(CLUB));
+
+    for (kind, origin) in [
+        (GoalKind::WinTheManagersTrust, GoalOrigin::SelfDrive),
+        (GoalKind::WinBackMyPlace, GoalOrigin::SelfDrive),
+        (GoalKind::LeaveThisClub, GoalOrigin::Grievance),
+        (GoalKind::ProveMyselfAtMyParentClub, GoalOrigin::SelfDrive),
+        (GoalKind::BePaidWhatImWorth, GoalOrigin::Grievance),
+    ] {
+        p.mind.pursue(kind, origin, GoalEvidence::EMPTY, 0.9, &ctx);
+    }
+
+    p.mind.on_spell_change(SpellChange::loan_out(false));
+
+    for gone in [
+        GoalKind::WinTheManagersTrust,
+        GoalKind::WinBackMyPlace,
+        GoalKind::LeaveThisClub,
+    ] {
+        assert!(
+            p.mind.goals().get(gone).is_none(),
+            "{gone:?} was about a club he is no longer playing for"
+        );
+    }
+    assert!(
+        p.mind
+            .goals()
+            .get(GoalKind::ProveMyselfAtMyParentClub)
+            .is_some(),
+        "the club that owns him did not change — that is what a loan is"
+    );
+    assert!(
+        p.mind.goals().get(GoalKind::BePaidWhatImWorth).is_some(),
+        "and his wage is his wage wherever he is playing"
+    );
+    assert!(
+        p.mind.career.plan_view(MindClock::day(today)).arc.is_none(),
+        "no plan was formed yet; the point is the loan does not clear one"
+    );
+}
+
+/// The other end of the same hole: a loanee who signs permanently
+/// somewhere else was still carrying what he wanted at the club that
+/// used to own him, and what he wanted at the one that borrowed him.
+#[test]
+fn a_loanee_sold_on_keeps_neither_club() {
+    let today = Fixture::date(2031, 1, 10);
+    let mut p = Fixture::player();
+    let ctx = p.mind_context(today, Some(CLUB));
+    p.mind.pursue(
+        GoalKind::ProveMyselfAtMyParentClub,
+        GoalOrigin::SelfDrive,
+        GoalEvidence::EMPTY,
+        0.9,
+        &ctx,
+    );
+    p.mind.pursue(
+        GoalKind::StayAtThisLoanClub,
+        GoalOrigin::Attachment,
+        GoalEvidence::EMPTY,
+        0.9,
+        &ctx,
+    );
+    p.mind.pursue(
+        GoalKind::GoHome,
+        GoalOrigin::Attachment,
+        GoalEvidence::of(&[GoalEvidence::HOMESICK]),
+        0.9,
+        &ctx,
+    );
+
+    p.mind.on_spell_change(SpellChange::transfer(CLUB, false));
+
+    assert!(
+        p.mind
+            .goals()
+            .get(GoalKind::ProveMyselfAtMyParentClub)
+            .is_none()
+    );
+    assert!(p.mind.goals().get(GoalKind::StayAtThisLoanClub).is_none());
+    assert!(
+        p.mind.goals().get(GoalKind::GoHome).is_some(),
+        "a third foreign club is not home"
+    );
+}

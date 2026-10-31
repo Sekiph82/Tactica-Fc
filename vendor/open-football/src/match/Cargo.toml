@@ -1,0 +1,179 @@
+[package]
+# Explicit rather than `*.workspace = true`: an EXCLUDED package cannot
+# inherit workspace fields — cargo fails with "failed to find a workspace
+# root" before it builds anything — and this crate is excluded on purpose.
+# `builder/` next door is a host crate and IS a member, so it inherits.
+name = "match_viewer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Deliberately excluded from the root workspace (see the root `Cargo.toml`
+# `exclude` list): this crate only ever builds for `wasm32-unknown-unknown`
+# with its own profile, and the web crate's `build.rs` drives that build
+# through a nested `cargo` invocation with a separate target dir.
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Bevy systems take their world access as parameters, so wide signatures and
+# nested `Query<(..), (With<..>, Without<..>)>` types are the idiom; Bevy's own
+# templates allow both lints.
+[lints.clippy]
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[dependencies]
+# Shared with the server, which is the whole point of it: the colour tables a
+# player's complexion is drawn from have to be the same ones his portrait was
+# drawn from, and an index that means "tone 8" here has to mean "tone 8"
+# there. Carries no dependencies of its own — see its manifest.
+shared = { path = "../shared" }
+# Hand-picked rather than a feature collection: the collections drag in audio,
+# glTF, sprites, gamepads and the desktop windowing backends, none of which a
+# replay viewer in a browser tab has any use for.
+# `default_font` is deliberately absent: it compiles in `FiraMono-subset.ttf`,
+# which cannot spell half the squad list. `Typeface` fills the same slot with the
+# faces the web UI uses — see `fonts/README.md`.
+bevy = { version = "0.20.1", default-features = false, features = [
+    "async_executor",
+    # FXAA, and only FXAA of the four it carries. It is what stands in for
+    # multisampling on hardware that cannot pay for multisampling — see
+    # `quality`, which explains why the choice is between two kinds of
+    # antialiasing rather than between having it and not. Costs a handful of
+    # kilobytes: SMAA's lookup tables are behind their own `smaa_luts` feature
+    # and are deliberately not taken, and TAA and DLSS compile to nothing
+    # without their components on a camera.
+    "bevy_anti_alias",
+    "bevy_asset",
+    "bevy_camera",
+    "bevy_color",
+    "bevy_core_pipeline",
+    "bevy_image",
+    "bevy_input_focus",
+    "bevy_light",
+    "bevy_log",
+    "bevy_material",
+    "bevy_mesh",
+    "bevy_pbr",
+    "bevy_render",
+    "bevy_shader",
+    "bevy_text",
+    "bevy_ui",
+    "bevy_ui_render",
+    "bevy_window",
+    "bevy_winit",
+    "keyboard",
+    "ktx2",
+    "mouse",
+    "std",
+    "tonemapping_luts",
+    # A finger is not a mouse: winit reports one through `WindowEvent::Touch`,
+    # and without this feature those messages have nowhere to land — every
+    # gesture over the canvas would simply never arrive. It is also what inserts
+    # `Touches`, which `bevy_ui`'s own focus system takes unconditionally, so it
+    # is what makes a TAP on the transport bar register at all.
+    "touch",
+    "webgl2",
+    "zstd_rust",
+] }
+# The rasteriser behind Bevy's own text, taken as a direct dependency so the
+# print on the back of a shirt can be set in the SAME face as the label over
+# the player's head — see `typeface::Stencil`. Costs nothing in the artefact:
+# `bevy_text` already compiles it in, this only names it.
+swash = "0.2.10"
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "0.4.79"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "console",
+    "Headers",
+    "Request",
+    "RequestInit",
+    "Response",
+    "Window",
+    # Real faces: a player's photograph (or the drawn portrait behind it) is
+    # fetched as a blob, handed to the browser's own PNG/SVG decoder through an
+    # image element, and read back off a canvas — see `portrait.rs`, which
+    # explains why it goes the long way round rather than decoding in here.
+    "Blob",
+    "Url",
+    # The chunk workshop: a plain dedicated worker, minted from a blob URL,
+    # that fetches and parses recording chunks off the main thread — see
+    # `loader.rs`. `Location` is for stitching the page's origin onto a
+    # root-relative chunk URL, which a blob-scripted worker cannot resolve.
+    "Worker",
+    "MessageEvent",
+    "ErrorEvent",
+    "Event",
+    "BlobPropertyBag",
+    "Location",
+    "HtmlImageElement",
+    "HtmlCanvasElement",
+    "CanvasRenderingContext2d",
+    "ImageData",
+    "MouseEvent",
+    "WheelEvent",
+    # Asking the browser what it is about to draw with, before anything is
+    # drawn — see `quality::Quality::probe`. A throwaway context on a
+    # throwaway canvas; the viewer's own canvas belongs to wgpu.
+    "WebGl2RenderingContext",
+    "WebglDebugRendererInfo",
+    # …and asking what KIND of machine it is, which the renderer string cannot
+    # say: Safari removed the extension above, so every iPhone and iPad answers
+    # nothing at all. A device whose primary pointer is a finger is a handheld
+    # — see `quality::Footprint::probe`.
+    "Navigator",
+    "MediaQueryList",
+    "KeyboardEvent",
+    "AddEventListenerOptions",
+    "Document",
+    "Element",
+    "EventTarget",
+    # How the viewer tells the page how far along its bring-up is: a
+    # `match-viewer-progress` event on the document, which the match page's
+    # loading overlay listens for. See `bringup.rs`.
+    "CustomEvent",
+    "CustomEventInit",
+    # Focusing the canvas on load, so the flight keys answer the first press.
+    "HtmlElement",
+    "FocusOptions",
+    # The stadium's own sound, synthesised in the browser rather than
+    # downloaded — see `sound/mod.rs`, which explains why `bevy_audio` is
+    # absent from the feature list above and why nothing here is a file. The
+    # whole soundtrack is these nodes and four seconds of pink noise the crate
+    # generates for itself.
+    "AudioContext",
+    "AudioContextState",
+    "BaseAudioContext",
+    "AudioNode",
+    "AudioParam",
+    "AudioDestinationNode",
+    "AudioBuffer",
+    "AudioBufferSourceNode",
+    "AudioScheduledSourceNode",
+    "BiquadFilterNode",
+    "BiquadFilterType",
+    "DynamicsCompressorNode",
+    "GainNode",
+    "OscillatorNode",
+    "OscillatorType",
+    "StereoPannerNode",
+] }
+serde = { version = "1.0.229", features = ["derive"] }
+# `raw_value` so a chunk can be opened in two passes: the envelope now, each
+# player's samples a few frames later. See `ChunkPayload`, which explains why
+# a chunk of JSON — 1.35 MB gzipped, 4.4 MB in the parser — read between two
+# animation frames is the single worst thing that happens in this viewer.
+serde_json = { version = "1.0.154", features = ["raw_value"] }
+console_error_panic_hook = "0.1.7"
+
+# `opt-level = "z"` over `3`: the replay viewer is not compute bound (a few
+# hundred transform writes per frame) and every megabyte here is embedded
+# into the web binary and shipped over the wire.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

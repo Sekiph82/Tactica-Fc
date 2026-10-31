@@ -1,0 +1,1312 @@
+use super::debt::DebtProfile;
+use super::revenue::ParachuteEntitlement;
+use crate::context::GlobalContext;
+use crate::shared::Currency;
+use crate::shared::CurrencyValue;
+use crate::{
+    ClubFinanceResult, ClubFinancialBalanceHistory, ClubPhilosophy, ClubSponsorship,
+    ClubSponsorshipContract,
+};
+use chrono::Duration;
+use chrono::NaiveDate;
+use log::debug;
+
+#[derive(Debug, Clone)]
+pub struct ClubFinances {
+    pub balance: ClubFinancialBalance,
+    pub history: ClubFinancialBalanceHistory,
+    pub sponsorship: ClubSponsorship,
+    pub transfer_budget: Option<CurrencyValue>,
+    pub wage_budget: Option<CurrencyValue>,
+    /// Outstanding amortization slices owed on previously bought players.
+    /// Each tick of `process_monthly_finances` charges one month from each.
+    pub transfer_obligations: Vec<TransferObligation>,
+    /// Home matches played this month — drives matchday revenue. Reset by
+    /// the monthly tick, incremented when a home match concludes.
+    pub home_matches_this_month: u32,
+    /// Where the club sits on the debt ladder, and any administration in
+    /// force. Recomputed every monthly tick.
+    pub debt: DebtProfile,
+    /// Parachute entitlement from a recent relegation, stepped down at each
+    /// season boundary.
+    pub parachute: Option<ParachuteEntitlement>,
+    /// Gross fees paid and received since the season opened.
+    ///
+    /// The board's financial score asks how much of the mandate the manager
+    /// has actually spent, and until now nothing could answer: the only
+    /// locally derivable figure was `(mandate − remaining)`, which conflates
+    /// genuine spending with a board-ordered cut and so punished a club
+    /// whose budget had just been slashed. These are the real thing,
+    /// accumulated at the two chokepoints every fee passes through and reset
+    /// at the season-start budget sync.
+    pub season_fees: SeasonTransferFees,
+    /// Distress classification from the last monthly tick.
+    ///
+    /// Stored rather than applied directly: the result-stage used to
+    /// *multiply* the stored budgets by a severity factor each month, which
+    /// compounded (0.70^12 ≈ 0.01) and, at insolvency's 0.0 factor,
+    /// permanently zeroed the transfer budget — every club in the world
+    /// showed a $0 chest. The board now reads this and recomputes budgets
+    /// from revenue instead.
+    pub distress_level: DistressLevel,
+}
+
+/// What the club has spent and taken in the market this season.
+///
+/// Gross, not net, and reset at the season turn — the board judges a
+/// campaign's trading, not a running total since the world began.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SeasonTransferFees {
+    /// Fees paid out on completed incoming permanent deals.
+    pub paid: f64,
+    /// Fees taken in on completed outgoing deals.
+    pub received: f64,
+}
+
+impl SeasonTransferFees {
+    /// Share of the season's transfer mandate already committed. Zero when
+    /// no mandate is set, which the financial score reads as "unknown"
+    /// rather than as "spent nothing".
+    pub fn usage_against(&self, mandate: i32) -> f32 {
+        if mandate <= 0 {
+            return 0.0;
+        }
+        (self.paid / mandate as f64) as f32
+    }
+
+    /// A new campaign opens with the books clear.
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+/// One amortization stream: a transfer fee spread across the contract
+/// length so each month the buying club's P&L recognises its share.
+#[derive(Debug, Clone)]
+pub struct TransferObligation {
+    pub monthly_amount: i64,
+    pub months_remaining: u32,
+}
+
+/// Severity of debt — drives the monthly interest rate and is consumed by
+/// the result-stage to decide how aggressively to cut budgets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DistressLevel {
+    None,
+    Distress,
+    Severe,
+    Insolvency,
+}
+
+impl DistressLevel {
+    /// `(transfer, wage)` multipliers applied to the board's seasonal
+    /// budget mandate.
+    ///
+    /// The transfer factor is deliberately never zero. These used to be
+    /// applied by multiplying the *stored* budget every month, and the
+    /// insolvency entry was `0.0` — which latched the transfer budget at
+    /// zero forever, because nothing can multiply its way back off zero.
+    /// The result was a world in which no club had a transfer budget, so
+    /// no club could sign anyone, so no club could recover. They are now
+    /// applied to the mandate on each recompute, and the floor keeps even
+    /// a stricken club able to do modest business.
+    pub fn budget_factors(self) -> (f64, f64) {
+        match self {
+            DistressLevel::None => (1.00, 1.00),
+            DistressLevel::Distress => (0.60, 1.00),
+            DistressLevel::Severe => (0.25, 0.95),
+            DistressLevel::Insolvency => (0.08, 0.90),
+        }
+    }
+}
+
+impl ClubFinances {
+    pub fn new(amount: i64, sponsorship_contract: Vec<ClubSponsorshipContract>) -> Self {
+        ClubFinances {
+            balance: ClubFinancialBalance::new(amount),
+            history: ClubFinancialBalanceHistory::new(),
+            sponsorship: ClubSponsorship::new(sponsorship_contract),
+            transfer_budget: None,
+            wage_budget: None,
+            transfer_obligations: Vec::new(),
+            home_matches_this_month: 0,
+            debt: DebtProfile::default(),
+            parachute: None,
+            season_fees: SeasonTransferFees::default(),
+            distress_level: DistressLevel::None,
+        }
+    }
+
+    pub fn with_budgets(
+        amount: i64,
+        sponsorship_contract: Vec<ClubSponsorshipContract>,
+        transfer_budget: Option<CurrencyValue>,
+        wage_budget: Option<CurrencyValue>,
+    ) -> Self {
+        ClubFinances {
+            balance: ClubFinancialBalance::new(amount),
+            history: ClubFinancialBalanceHistory::new(),
+            sponsorship: ClubSponsorship::new(sponsorship_contract),
+            transfer_budget,
+            wage_budget,
+            transfer_obligations: Vec::new(),
+            home_matches_this_month: 0,
+            debt: DebtProfile::default(),
+            parachute: None,
+            season_fees: SeasonTransferFees::default(),
+            distress_level: DistressLevel::None,
+        }
+    }
+
+    pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> ClubFinanceResult {
+        let mut result = ClubFinanceResult::new();
+        let club_name = ctx.club.as_ref().expect("no club found").name;
+        let club_id = ctx.club.as_ref().map(|c| c.id).unwrap_or(0);
+        result = result.with_club(club_id);
+
+        if ctx.simulation.is_month_beginning() {
+            debug!("club: {}, finance: start new month", club_name);
+            // Distress check uses the trailing wage average — read it
+            // BEFORE clearing the in-progress month, otherwise the
+            // post-clear `expense_player_wages` is zero and every club
+            // looks one dollar from administration.
+            let avg_wages = self.trailing_avg_monthly_wages(ctx.simulation.date.date());
+            let level = classify_distress(self.balance.balance, avg_wages);
+            result.is_in_distress = !matches!(level, DistressLevel::None);
+            result.distress_level = level;
+            // Persist for the board's budget recompute. See the field docs
+            // on `distress_level` for why this is stored rather than applied
+            // to the budgets in place.
+            self.distress_level = level;
+
+            self.start_new_month(club_name, ctx.simulation.date.date());
+
+            result.expired_sponsorships =
+                self.sponsorship.remove_expired(ctx.simulation.date.date());
+            // Signal the result-stage that the sponsorship book should be
+            // reconciled this tick — it re-signs expired deals and tops
+            // the portfolio up toward the reputation-tier target.
+            result.is_month_start = true;
+        }
+
+        result
+    }
+
+    fn start_new_month(&mut self, club_name: &str, date: NaiveDate) {
+        debug!(
+            "club: {}, finance: add history, date = {}, balance = {}, income={}, outcome={}",
+            club_name, date, self.balance.balance, self.balance.income, self.balance.outcome
+        );
+
+        self.history.add(date, self.balance.clone());
+        self.balance.clear();
+        // NOTE: home_matches_this_month is intentionally NOT reset here.
+        // `Club::process_monthly_finances` runs AFTER `start_new_month` in
+        // the same month-beginning tick and needs to read the counter
+        // accumulated through the just-ended month to compute matchday
+        // revenue. `take_home_match_count` is the right place to drain
+        // the counter, and it already does. Clearing here meant
+        // process_monthly_finances always saw zero matches and matchday
+        // income silently rounded to $0 for every club, every month.
+    }
+
+    /// Average monthly player wages charged across the trailing window of
+    /// completed-month snapshots. Falls back to the live (in-progress)
+    /// month's wages, then to the current annualized-wage estimate via
+    /// `current_monthly_wage_estimate`. A floor of $1 keeps comparisons
+    /// well-formed for a brand-new club with no history.
+    pub fn trailing_avg_monthly_wages(&self, today: NaiveDate) -> i64 {
+        let cutoff = today - Duration::days(95);
+        let mut total = 0i64;
+        let mut months = 0i64;
+        for (date, snap) in self.history.iter() {
+            if *date < cutoff {
+                continue;
+            }
+            if snap.expense_player_wages <= 0 {
+                continue;
+            }
+            total += snap.expense_player_wages;
+            months += 1;
+        }
+        if months > 0 {
+            return (total / months).max(1);
+        }
+        if self.balance.expense_player_wages > 0 {
+            return self.balance.expense_player_wages;
+        }
+        1
+    }
+
+    /// Schedule a home match for the current month. Called from the match
+    /// pipeline when a non-friendly home fixture concludes.
+    pub fn record_home_match(&mut self) {
+        self.home_matches_this_month = self.home_matches_this_month.saturating_add(1);
+    }
+
+    /// Pull and reset the month's home-match count. Used by
+    /// `process_monthly_finances` so the matchday revenue line scales with
+    /// actual fixtures rather than a hardcoded `* 2`.
+    pub fn take_home_match_count(&mut self) -> u32 {
+        let n = self.home_matches_this_month;
+        self.home_matches_this_month = 0;
+        n
+    }
+
+    /// Tick all outstanding amortization streams: each charges one month's
+    /// slice as `expense_amortization`. Streams that reach zero remaining
+    /// months are dropped.
+    pub fn tick_amortization(&mut self) -> i64 {
+        let mut total = 0i64;
+        for ob in self.transfer_obligations.iter_mut() {
+            if ob.months_remaining == 0 {
+                continue;
+            }
+            total += ob.monthly_amount;
+            ob.months_remaining -= 1;
+        }
+        self.transfer_obligations.retain(|o| o.months_remaining > 0);
+        if total > 0 {
+            self.balance.push_expense_amortization(total);
+        }
+        total
+    }
+
+    pub fn push_salary(&mut self, club_name: &str, amount: i64) {
+        debug!(
+            "club: {}, finance: push salary, amount = {}",
+            club_name, amount
+        );
+
+        self.balance.push_expense_player_wages(amount);
+    }
+
+    /// Buying-side bookkeeping for a permanent transfer. Cash leaves the
+    /// balance immediately; the P&L impact is spread across `contract_years`
+    /// as monthly amortization. Returns `false` when the transfer budget is
+    /// configured and can't cover the fee — caller should not proceed.
+    pub fn register_transfer_purchase(&mut self, amount: f64, contract_years: u8) -> bool {
+        let amount = amount.max(0.0);
+        if amount <= 0.0 {
+            return true;
+        }
+        if let Some(ref mut budget) = self.transfer_budget {
+            if budget.amount < amount {
+                return false;
+            }
+            budget.amount -= amount;
+        }
+        self.balance.push_cash_outflow(amount as i64);
+        self.season_fees.paid += amount;
+        let years = contract_years.max(1) as u32;
+        let months = years * 12;
+        let monthly = (amount as i64) / months as i64;
+        if monthly > 0 {
+            self.transfer_obligations.push(TransferObligation {
+                monthly_amount: monthly,
+                months_remaining: months,
+            });
+        }
+        true
+    }
+
+    /// Binding-obligation variant of [`Self::register_transfer_purchase`].
+    /// An obligation-to-buy commits the club contractually regardless of its
+    /// internal budget planning, so the purchase always books — cash flows
+    /// out and the amortization schedule starts — and the transfer budget
+    /// floors at zero instead of vetoing. Without this the obligation path
+    /// credited the seller while a budget-short buyer paid nothing. The
+    /// transfer executor books every completed purchase here for the same
+    /// reason: by then the move has happened, and whether the club could
+    /// afford it was settled (or deliberately skipped) before it did.
+    pub fn register_obligated_purchase(&mut self, amount: f64, contract_years: u8) {
+        let amount = amount.max(0.0);
+        if amount <= 0.0 {
+            return;
+        }
+        if let Some(ref mut budget) = self.transfer_budget {
+            budget.amount = (budget.amount - amount).max(0.0);
+        }
+        self.balance.push_cash_outflow(amount as i64);
+        self.season_fees.paid += amount;
+        let years = contract_years.max(1) as u32;
+        let months = years * 12;
+        let monthly = (amount as i64) / months as i64;
+        if monthly > 0 {
+            self.transfer_obligations.push(TransferObligation {
+                monthly_amount: monthly,
+                months_remaining: months,
+            });
+        }
+    }
+
+    /// Set `amount` aside from the transfer budget the moment a permanent
+    /// deal is AGREED, so two deals agreed in the same window can't both
+    /// bank on the same money and one then silently collapse when its
+    /// deferred execution finds the budget already gone. Returns `false`
+    /// (leaving the budget untouched) when it can't cover the fee — the
+    /// caller must then refuse the deal rather than agree one it can't
+    /// fund. Pure budget bookkeeping: no cash leaves and nothing amortizes
+    /// until the move actually executes (see [`Self::register_transfer_purchase`]).
+    /// A club with no transfer budget configured (`None`) is unconstrained,
+    /// so the reservation always succeeds.
+    pub fn reserve_transfer_budget(&mut self, amount: f64) -> bool {
+        let amount = amount.max(0.0);
+        if let Some(ref mut budget) = self.transfer_budget {
+            if budget.amount < amount {
+                return false;
+            }
+            budget.amount -= amount;
+        }
+        true
+    }
+
+    /// Release a reservation taken by [`Self::reserve_transfer_budget`].
+    /// Called at execution-start before the real purchase is booked (so the
+    /// normal `register_transfer_purchase` accounting runs against the
+    /// restored budget), and on a collapsed/abandoned deferred move (so the
+    /// set-aside money is never leaked). No-op when no transfer budget is set.
+    pub fn refund_transfer_budget(&mut self, amount: f64) {
+        let amount = amount.max(0.0);
+        if let Some(ref mut budget) = self.transfer_budget {
+            budget.amount += amount;
+        }
+    }
+
+    /// Buying-side loan fee payment — immediate cash + immediate P&L,
+    /// classified as `expense_loan_fees`. Loans use small fees and don't
+    /// amortize like a permanent purchase.
+    pub fn pay_loan_fee(&mut self, amount: f64) {
+        let amount = amount.max(0.0) as i64;
+        if amount <= 0 {
+            return;
+        }
+        if let Some(ref mut budget) = self.transfer_budget {
+            budget.amount = (budget.amount - amount as f64).max(0.0);
+        }
+        self.balance.push_expense_loan_fees(amount);
+    }
+
+    /// Selling-side loan fee receipt — immediate cash + immediate P&L,
+    /// classified as `income_loan_fees`.
+    pub fn receive_loan_fee(&mut self, amount: f64) {
+        let amount = amount.max(0.0) as i64;
+        if amount <= 0 {
+            return;
+        }
+        self.balance.push_income_loan_fees(amount);
+    }
+
+    /// Reverse a previously credited loan fee — used when the
+    /// borrowing-side rejects the move and the player has to come back.
+    pub fn refund_loan_fee(&mut self, amount: f64) {
+        let amount = amount.max(0.0) as i64;
+        if amount <= 0 {
+            return;
+        }
+        self.balance.income_loan_fees -= amount;
+        self.balance.income -= amount;
+        self.balance.balance -= amount;
+    }
+
+    /// Share of a sale that comes straight back as buying power for a club
+    /// that keeps its players by default. The rest stays on the balance
+    /// sheet as cash — which is what makes a sale genuinely change a club's
+    /// finances rather than merely rotating one asset into another.
+    pub const REINVEST_SHARE: f64 = 0.5;
+    /// The same share for a club whose whole model is to develop and sell.
+    /// It recycles more because the next signing IS the business: it sells
+    /// one peak asset and buys three or four younger, cheaper ones.
+    pub const REINVEST_SHARE_TRADER: f64 = 0.8;
+
+    // Helper method to add transfer income
+    pub fn add_transfer_income(&mut self, amount: f64) {
+        self.add_transfer_income_at(amount, Self::REINVEST_SHARE);
+    }
+
+    /// Share of a sale one club's model recycles into the market.
+    pub fn reinvest_share_for(philosophy: &ClubPhilosophy) -> f64 {
+        match philosophy {
+            ClubPhilosophy::DevelopAndSell => Self::REINVEST_SHARE_TRADER,
+            _ => Self::REINVEST_SHARE,
+        }
+    }
+
+    /// Book a sale and recycle `reinvest_share` of it into buying power.
+    ///
+    /// The share is the caller's because it is a property of the CLUB, not
+    /// of the money: a develop-and-sell side turns a sale straight back into
+    /// the market, while a club selling to balance its books does not. See
+    /// [`Self::REINVEST_SHARE`].
+    pub fn add_transfer_income_at(&mut self, amount: f64, reinvest_share: f64) {
+        self.balance.push_income(amount as i64);
+        self.season_fees.received += amount.max(0.0);
+
+        let recycled = amount * reinvest_share.clamp(0.0, 1.0);
+        if let Some(ref mut budget) = self.transfer_budget {
+            budget.amount += recycled;
+        } else {
+            self.transfer_budget = Some(CurrencyValue {
+                amount: recycled,
+                currency: Currency::Usd,
+            });
+        }
+    }
+
+    /// Pure cash movement that is NOT a player sale — sell-on payouts,
+    /// agent fees, and deferred installment / performance add-on
+    /// settlements. Unlike [`add_transfer_income`] it must NOT recycle a
+    /// fraction into the transfer budget: these are obligation
+    /// settlements, not "we sold a player" income, so inflating spendable
+    /// budget by half the amount (and, on an outflow, *reducing* budget by
+    /// half on top of the cash) silently corrupts the transfer budget.
+    /// Positive = cash in, negative = cash out.
+    pub fn adjust_cash(&mut self, amount: f64) {
+        let cents = amount.round() as i64;
+        if cents > 0 {
+            self.balance.push_income(cents);
+        } else if cents < 0 {
+            self.balance.push_cash_outflow(-cents);
+        }
+    }
+
+    /// True when the club's transfer budget (if configured) can cover
+    /// `amount`. Mirrors the budget check inside
+    /// [`register_transfer_purchase`] so a caller can pre-check
+    /// affordability before committing any roster / finance mutation.
+    /// A club with no configured transfer budget is treated as able to
+    /// afford the move (the budget gate is opt-in).
+    pub fn can_afford_transfer(&self, amount: f64) -> bool {
+        let amount = amount.max(0.0);
+        match self.transfer_budget {
+            Some(ref budget) => budget.amount >= amount,
+            None => true,
+        }
+    }
+
+    /// Number of completed-month snapshots inside the trailing 365 days.
+    /// Gates wealth policies that need a full year of revenue evidence
+    /// (e.g. `ExcessCashDeployment`) so a freshly generated world doesn't
+    /// sweep DB-seeded balances before the club has earned anything.
+    pub fn monthly_history_depth(&self, today: NaiveDate) -> usize {
+        let cutoff = today - Duration::days(365);
+        self.history
+            .iter()
+            .filter(|(date, _)| *date >= cutoff)
+            .count()
+    }
+
+    /// Trailing twelve months of total income across the history snapshots.
+    /// Used by the board to size next season's transfer/wage budgets from
+    /// projected revenue rather than current cash.
+    pub fn trailing_annual_income(&self, today: NaiveDate) -> i64 {
+        let cutoff = today - Duration::days(365);
+        let mut total = 0i64;
+        for (date, snap) in self.history.iter() {
+            if *date < cutoff {
+                continue;
+            }
+            total += snap.income;
+        }
+        total
+    }
+
+    /// Trailing income scaled to a full year by the number of funded
+    /// months actually inside the window.
+    ///
+    /// A world in its first year has only a handful of monthly snapshots,
+    /// and `trailing_annual_income` sums exactly those. Consumers that
+    /// treat the raw sum as "annual" — the wage-share news line, the debt
+    /// facility, the board's revenue-based budgets — understate income by
+    /// 12/N and every ratio built on top explodes: two months in, an
+    /// ordinary club paying ~100% of income in wages printed as paying
+    /// ~600%. Scaling by funded months keeps the estimate honest from the
+    /// first snapshot; at twelve or more months it is the plain sum.
+    pub fn estimated_annual_income(&self, today: NaiveDate) -> i64 {
+        Self::annualize(
+            self.trailing_annual_income(today),
+            self.monthly_history_depth(today),
+        )
+    }
+
+    /// Counterpart to [`Self::estimated_annual_income`] for expenses.
+    pub fn estimated_annual_outcome(&self, today: NaiveDate) -> i64 {
+        Self::annualize(
+            self.trailing_annual_outcome(today),
+            self.monthly_history_depth(today),
+        )
+    }
+
+    fn annualize(trailing_sum: i64, funded_months: usize) -> i64 {
+        if funded_months == 0 || funded_months >= 12 {
+            return trailing_sum;
+        }
+        trailing_sum.saturating_mul(12) / funded_months as i64
+    }
+
+    /// Trailing twelve months of total operating expenses across the
+    /// history snapshots — counterpart to `trailing_annual_income`.
+    pub fn trailing_annual_outcome(&self, today: NaiveDate) -> i64 {
+        let cutoff = today - Duration::days(365);
+        let mut total = 0i64;
+        for (date, snap) in self.history.iter() {
+            if *date < cutoff {
+                continue;
+            }
+            total += snap.outcome;
+        }
+        total
+    }
+
+    /// Net loss accumulated over the trailing three years, read from the
+    /// monthly history snapshots. Profitable months offset loss-making
+    /// ones; a non-positive return means the club is cash-neutral or
+    /// profitable over the period.
+    pub fn three_year_loss(&self, today: NaiveDate) -> i64 {
+        let cutoff = today - Duration::days(365 * 3);
+        let mut losses = 0i64;
+        for (date, snap) in self.history.iter() {
+            if *date < cutoff {
+                continue;
+            }
+            losses += snap.outcome - snap.income;
+        }
+        losses
+    }
+
+    /// Player wages paid over the trailing twelve months. Used as the
+    /// scale for the FFP breach threshold so wealthy clubs aren't flagged
+    /// for the same absolute losses that would cripple a smaller side.
+    pub fn trailing_annual_wages(&self, today: NaiveDate) -> u64 {
+        let cutoff = today - Duration::days(365);
+        let mut total = 0u64;
+        for (date, snap) in self.history.iter() {
+            if *date < cutoff {
+                continue;
+            }
+            total += snap.expense_player_wages.max(0) as u64;
+        }
+        total
+    }
+
+    /// Have the trailing three years of football operations pushed the
+    /// club into FFP breach territory? Threshold is twice the trailing
+    /// annual wage bill, with a floor of $20M so empty-history clubs get
+    /// a sensible default. Downstream code (transfer pipeline, board)
+    /// reads this to gate big spends.
+    pub fn is_ffp_breach(&self, today: NaiveDate) -> bool {
+        let loss = self.three_year_loss(today);
+        if loss <= 0 {
+            return false;
+        }
+        let annual_wages = self.trailing_annual_wages(today);
+        let threshold = ((annual_wages as i64).saturating_mul(2)).max(20_000_000);
+        loss > threshold
+    }
+
+    /// Soft FFP signal — the club has booked losses but still inside the
+    /// breach threshold. Used by the board to throttle spend before legal
+    /// trouble arrives.
+    pub fn is_ffp_watchlist(&self, today: NaiveDate) -> bool {
+        if self.is_ffp_breach(today) {
+            return false;
+        }
+        let loss = self.three_year_loss(today);
+        if loss <= 0 {
+            return false;
+        }
+        let annual_wages = self.trailing_annual_wages(today);
+        let breach_threshold = ((annual_wages as i64).saturating_mul(2)).max(20_000_000);
+        loss * 2 > breach_threshold
+    }
+}
+
+/// Classify the club's distress from cash balance and trailing wage scale.
+/// Wealth-relative — a small club is distressed at smaller absolute debt
+/// than a Premier League side.
+pub fn classify_distress(balance: i64, avg_monthly_wages: i64) -> DistressLevel {
+    let scale = avg_monthly_wages.max(1);
+    if balance < -(scale.saturating_mul(12)) {
+        DistressLevel::Insolvency
+    } else if balance < -(scale.saturating_mul(6)) {
+        DistressLevel::Severe
+    } else if balance < -(scale.saturating_mul(3)) {
+        DistressLevel::Distress
+    } else {
+        DistressLevel::None
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ClubFinancialBalance {
+    pub balance: i64,
+    pub income: i64,
+    pub outcome: i64,
+
+    // Income categories
+    pub income_tv: i64,
+    pub income_matchday: i64,
+    pub income_sponsorship: i64,
+    pub income_merchandising: i64,
+    pub income_prize_money: i64,
+    /// Merit slice of the broadcast pool earned above a bottom-of-the-table
+    /// finish.
+    pub income_tv_placement: i64,
+    /// Domestic cup prize money earned this period.
+    pub income_cup_prize: i64,
+    /// Continental (UCL/UEL) prize money earned this period.
+    pub income_continental_prize: i64,
+    /// Parachute payment carried down from a recent relegation.
+    pub income_parachute: i64,
+    /// Cash the owner put into the club to cover a shortfall. Not operating
+    /// revenue — kept out of `income` so it can't flatter the P&L, FFP
+    /// maths, or next season's budget.
+    pub income_owner_investment: i64,
+
+    // Expense categories
+    pub expense_player_wages: i64,
+    pub expense_staff_wages: i64,
+    pub expense_facilities: i64,
+    /// Amortized portion of player transfer fees charged this period.
+    pub expense_amortization: i64,
+    /// Interest charged on a negative balance this period.
+    pub expense_debt_interest: i64,
+
+    // Loan match fee tracking
+    pub income_loan_fees: i64,
+    pub expense_loan_fees: i64,
+}
+
+impl ClubFinancialBalance {
+    pub fn new(balance: i64) -> Self {
+        ClubFinancialBalance {
+            balance,
+            income: 0,
+            outcome: 0,
+            income_tv: 0,
+            income_matchday: 0,
+            income_sponsorship: 0,
+            income_merchandising: 0,
+            income_prize_money: 0,
+            income_tv_placement: 0,
+            income_cup_prize: 0,
+            income_continental_prize: 0,
+            income_parachute: 0,
+            income_owner_investment: 0,
+            expense_player_wages: 0,
+            expense_staff_wages: 0,
+            expense_facilities: 0,
+            expense_amortization: 0,
+            expense_debt_interest: 0,
+            income_loan_fees: 0,
+            expense_loan_fees: 0,
+        }
+    }
+
+    pub fn push_income(&mut self, amount: i64) {
+        self.balance += amount;
+        self.income += amount;
+    }
+
+    pub fn push_outcome(&mut self, amount: i64) {
+        self.balance -= amount;
+        self.outcome += amount;
+    }
+
+    /// Cash leaves the bank account but the cost is recognised over time
+    /// (amortization), not immediately as a P&L expense. Used for the
+    /// upfront leg of a permanent transfer purchase.
+    pub fn push_cash_outflow(&mut self, amount: i64) {
+        self.balance -= amount;
+    }
+
+    // Categorized income methods
+    pub fn push_income_tv(&mut self, amount: i64) {
+        self.income_tv += amount;
+        self.push_income(amount);
+    }
+
+    pub fn push_income_matchday(&mut self, amount: i64) {
+        self.income_matchday += amount;
+        self.push_income(amount);
+    }
+
+    pub fn push_income_sponsorship(&mut self, amount: i64) {
+        self.income_sponsorship += amount;
+        self.push_income(amount);
+    }
+
+    pub fn push_income_merchandising(&mut self, amount: i64) {
+        self.income_merchandising += amount;
+        self.push_income(amount);
+    }
+
+    pub fn push_income_prize_money(&mut self, amount: i64) {
+        self.income_prize_money += amount;
+        self.push_income(amount);
+    }
+
+    /// Merit slice of the broadcast pool, layered on top of the base award.
+    pub fn push_income_tv_placement(&mut self, amount: i64) {
+        self.income_tv_placement += amount;
+        self.push_income(amount);
+    }
+
+    /// Parachute payment following relegation.
+    pub fn push_income_parachute(&mut self, amount: i64) {
+        self.income_parachute += amount;
+        self.push_income(amount);
+    }
+
+    /// Owner cash injected to cover a shortfall. Credits the bank balance
+    /// only — this is funding, not revenue, so it must never appear in
+    /// `income`, where it would inflate the FFP calculation and next
+    /// season's revenue-derived budgets.
+    pub fn push_owner_investment(&mut self, amount: i64) {
+        self.income_owner_investment += amount;
+        self.balance += amount;
+    }
+
+    /// Credit from an administration debt write-down. Like an injection,
+    /// this is a balance-sheet event, not revenue.
+    pub fn push_debt_write_down(&mut self, amount: i64) {
+        self.balance += amount;
+    }
+
+    /// Domestic cup prize money — per round.
+    pub fn push_income_cup_prize(&mut self, amount: i64) {
+        self.income_cup_prize += amount;
+        self.income_prize_money += amount;
+        self.push_income(amount);
+    }
+
+    /// Continental (UCL/UEL) prize money — per round.
+    pub fn push_income_continental_prize(&mut self, amount: i64) {
+        self.income_continental_prize += amount;
+        self.income_prize_money += amount;
+        self.push_income(amount);
+    }
+
+    /// Amortized slice of a transfer fee this month. The full fee already
+    /// left the cash balance at purchase via `push_cash_outflow`, so this
+    /// only recognises the P&L leg — `outcome` and the categorised
+    /// `expense_amortization` bucket. Touching `balance` here would
+    /// double-debit the cash that was already paid upfront.
+    pub fn push_expense_amortization(&mut self, amount: i64) {
+        self.expense_amortization += amount;
+        self.outcome += amount;
+    }
+
+    /// Interest cost on a negative balance.
+    pub fn push_expense_debt_interest(&mut self, amount: i64) {
+        self.expense_debt_interest += amount;
+        self.push_outcome(amount);
+    }
+
+    // Categorized expense methods
+    pub fn push_expense_player_wages(&mut self, amount: i64) {
+        self.expense_player_wages += amount;
+        self.push_outcome(amount);
+    }
+
+    pub fn push_expense_staff_wages(&mut self, amount: i64) {
+        self.expense_staff_wages += amount;
+        self.push_outcome(amount);
+    }
+
+    pub fn push_expense_facilities(&mut self, amount: i64) {
+        self.expense_facilities += amount;
+        self.push_outcome(amount);
+    }
+
+    // Loan match fee methods
+    pub fn push_income_loan_fees(&mut self, amount: i64) {
+        self.income_loan_fees += amount;
+        self.push_income(amount);
+    }
+
+    pub fn push_expense_loan_fees(&mut self, amount: i64) {
+        self.expense_loan_fees += amount;
+        self.push_outcome(amount);
+    }
+
+    pub fn clear(&mut self) {
+        self.income = 0;
+        self.outcome = 0;
+        self.income_tv = 0;
+        self.income_matchday = 0;
+        self.income_sponsorship = 0;
+        self.income_merchandising = 0;
+        self.income_prize_money = 0;
+        self.income_tv_placement = 0;
+        self.income_cup_prize = 0;
+        self.income_continental_prize = 0;
+        self.income_parachute = 0;
+        self.income_owner_investment = 0;
+        self.expense_player_wages = 0;
+        self.expense_staff_wages = 0;
+        self.expense_facilities = 0;
+        self.expense_amortization = 0;
+        self.expense_debt_interest = 0;
+        self.income_loan_fees = 0;
+        self.expense_loan_fees = 0;
+    }
+}
+
+#[cfg(test)]
+mod ffp_tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    fn d(y: i32, m: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, 1).unwrap()
+    }
+
+    fn finances_with_history(months: Vec<(NaiveDate, i64, i64, i64)>) -> ClubFinances {
+        let mut f = ClubFinances::new(0, vec![]);
+        for (date, income, outcome, wages) in months {
+            let mut snap = ClubFinancialBalance::new(0);
+            snap.income = income;
+            snap.outcome = outcome;
+            snap.expense_player_wages = wages;
+            f.history.add(date, snap);
+        }
+        f
+    }
+
+    #[test]
+    fn no_history_means_no_breach() {
+        let f = ClubFinances::new(0, vec![]);
+        assert!(!f.is_ffp_breach(d(2025, 1)));
+        assert_eq!(f.three_year_loss(d(2025, 1)), 0);
+    }
+
+    #[test]
+    fn profitable_club_is_not_in_breach() {
+        let f = finances_with_history(vec![
+            (d(2024, 6), 5_000_000, 3_000_000, 2_500_000),
+            (d(2024, 7), 5_000_000, 3_000_000, 2_500_000),
+            (d(2024, 8), 5_000_000, 3_000_000, 2_500_000),
+        ]);
+        assert!(f.three_year_loss(d(2025, 1)) <= 0);
+        assert!(!f.is_ffp_breach(d(2025, 1)));
+    }
+
+    #[test]
+    fn loss_under_threshold_is_not_breach() {
+        // ~$15M loss, wage base $100M/yr → threshold $200M. Not a breach.
+        let f = finances_with_history(vec![
+            (d(2024, 6), 2_000_000, 7_000_000, 8_000_000),
+            (d(2024, 7), 2_000_000, 7_000_000, 8_000_000),
+            (d(2024, 8), 2_000_000, 7_000_000, 8_000_000),
+        ]);
+        assert!(f.three_year_loss(d(2025, 1)) > 0);
+        assert!(!f.is_ffp_breach(d(2025, 1)));
+    }
+
+    #[test]
+    fn loss_above_threshold_trips_breach() {
+        // Zero wage bill → threshold floors at $20M. Accumulate $24M loss.
+        let months: Vec<_> = (1..=12)
+            .map(|m| (d(2024, m), 0_i64, 2_000_000_i64, 0_i64))
+            .collect();
+        let f = finances_with_history(months);
+        let loss = f.three_year_loss(d(2025, 1));
+        assert!(loss > 20_000_000, "loss={loss}");
+        assert!(f.is_ffp_breach(d(2025, 1)));
+    }
+
+    #[test]
+    fn old_history_outside_three_year_window_is_ignored() {
+        let f = finances_with_history(vec![
+            (d(2020, 6), 0, 50_000_000, 0), // >3 years old — shouldn't count
+            (d(2024, 6), 1_000_000, 1_500_000, 100_000),
+        ]);
+        let loss = f.three_year_loss(d(2025, 1));
+        assert!(loss < 1_000_000, "old loss leaked in: {loss}");
+    }
+}
+
+#[cfg(test)]
+mod transfer_budget_reservation_tests {
+    use super::*;
+    use crate::shared::{Currency, CurrencyValue};
+
+    fn club_with_budget(budget: f64) -> ClubFinances {
+        ClubFinances::with_budgets(
+            0,
+            vec![],
+            Some(CurrencyValue::new(budget, Currency::Usd)),
+            None,
+        )
+    }
+
+    #[test]
+    fn reservation_gates_a_second_deal_that_would_overcommit() {
+        // Budget 100; the first 60 deal reserves; a second 60 deal can't be
+        // funded against the same money and is refused at agreement, not
+        // silently dropped when its deferred execution finds the budget gone.
+        let mut fin = club_with_budget(100.0);
+        assert!(
+            fin.reserve_transfer_budget(60.0),
+            "first deal fits the budget"
+        );
+        assert!(
+            !fin.reserve_transfer_budget(60.0),
+            "a second deal banking on the same money must be refused"
+        );
+    }
+
+    #[test]
+    fn refund_restores_a_reservation() {
+        // A collapsed / abandoned deal refunds its set-aside money so the
+        // budget is reusable and nothing leaks.
+        let mut fin = club_with_budget(100.0);
+        assert!(fin.reserve_transfer_budget(60.0));
+        fin.refund_transfer_budget(60.0);
+        assert!(
+            fin.reserve_transfer_budget(60.0),
+            "refund must free the budget for another deal"
+        );
+    }
+
+    #[test]
+    fn club_without_a_transfer_budget_is_unconstrained() {
+        // No mandate set (fresh world / test fixture): reservations always
+        // succeed and the refund is a harmless no-op.
+        let mut fin = ClubFinances::new(0, vec![]);
+        assert!(fin.reserve_transfer_budget(1_000_000.0));
+        fin.refund_transfer_budget(1_000_000.0);
+        assert!(fin.reserve_transfer_budget(5_000_000.0));
+    }
+}
+
+#[cfg(test)]
+mod finance_tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    fn d(y: i32, m: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, 1).unwrap()
+    }
+
+    #[test]
+    fn distress_uses_trailing_wage_average_not_cleared_current_month() {
+        // The bug we're guarding against: previously the distress check
+        // ran AFTER the monthly clear, so `expense_player_wages` was zero
+        // and any non-trivial debt tripped the alarm. With trailing
+        // history available, distress must scale with the actual wage
+        // bill — a club with $5M/month wages tolerates more debt than
+        // one with $200K/month.
+        let mut f = ClubFinances::new(-2_000_000, vec![]);
+        let mut prev = ClubFinancialBalance::new(0);
+        prev.expense_player_wages = 5_000_000;
+        f.history.add(d(2026, 3), prev);
+
+        let avg = f.trailing_avg_monthly_wages(d(2026, 4));
+        assert_eq!(avg, 5_000_000);
+        let level = classify_distress(f.balance.balance, avg);
+        // -$2M < -3 * $5M? No (since 3*5M=15M, -2M is not below -15M).
+        assert_eq!(level, DistressLevel::None);
+
+        // Now drop the cash deeper.
+        f.balance.balance = -50_000_000;
+        let level = classify_distress(f.balance.balance, avg);
+        // -50M < -3 * 5M=-15M (yes); < -6*5M=-30M (yes); < -12*5M=-60M (no)
+        assert_eq!(level, DistressLevel::Severe);
+    }
+
+    #[test]
+    fn distress_falls_back_to_floor_for_brand_new_club() {
+        // No history, no in-progress wages → floor of $1 keeps the
+        // comparison well-formed without tripping every fresh club into
+        // distress on day one.
+        let f = ClubFinances::new(0, vec![]);
+        let avg = f.trailing_avg_monthly_wages(d(2026, 4));
+        assert_eq!(avg, 1);
+    }
+
+    #[test]
+    fn budget_throttle_never_latches_at_zero() {
+        // The regression that gave every club in the world a $0 transfer
+        // budget: an insolvency factor of exactly 0.0, applied by
+        // multiplying the stored budget, is absorbing — no later
+        // multiplication recovers from it.
+        for level in [
+            DistressLevel::None,
+            DistressLevel::Distress,
+            DistressLevel::Severe,
+            DistressLevel::Insolvency,
+        ] {
+            let (transfer, wage) = level.budget_factors();
+            assert!(
+                transfer > 0.0,
+                "{level:?} zeroes the transfer budget — a club can never trade back out"
+            );
+            assert!(wage > 0.0, "{level:?} zeroes the wage budget");
+            assert!(transfer <= 1.0 && wage <= 1.0);
+        }
+    }
+
+    #[test]
+    fn budget_throttle_is_applied_to_the_mandate_not_compounded() {
+        // Applying the factor to the board's mandate is idempotent; the old
+        // code multiplied the previous month's value, so a season under
+        // insolvency compounded 0.70^12 to roughly 1% of the mandate.
+        let mandate = 100_000_000.0;
+        let (transfer, wage) = DistressLevel::Insolvency.budget_factors();
+
+        let mut recomputed_wage = 0.0;
+        let mut compounded_wage = mandate;
+        let mut compounded_transfer = mandate;
+        for _ in 0..12 {
+            recomputed_wage = mandate * wage;
+            compounded_wage *= wage;
+            compounded_transfer *= transfer;
+        }
+
+        // Recomputing is stable: a year of distress leaves the mandate
+        // scaled exactly once, not twelve times.
+        assert!((recomputed_wage - mandate * wage).abs() < 1.0);
+        assert!(recomputed_wage > mandate * 0.85);
+
+        // Compounding, by contrast, erodes the wage mandate to a fraction
+        // and annihilates the transfer chest entirely.
+        assert!(
+            compounded_wage < mandate * 0.35,
+            "compounding should have eroded the wage mandate, got {compounded_wage}"
+        );
+        assert!(
+            compounded_transfer < 1.0,
+            "compounding should have annihilated the chest, got {compounded_transfer}"
+        );
+    }
+
+    #[test]
+    fn distress_tightens_monotonically() {
+        let (t_none, w_none) = DistressLevel::None.budget_factors();
+        let (t_mild, w_mild) = DistressLevel::Distress.budget_factors();
+        let (t_severe, w_severe) = DistressLevel::Severe.budget_factors();
+        let (t_insolvent, w_insolvent) = DistressLevel::Insolvency.budget_factors();
+        assert!(t_none > t_mild && t_mild > t_severe && t_severe > t_insolvent);
+        assert!(w_none >= w_mild && w_mild >= w_severe && w_severe >= w_insolvent);
+    }
+
+    #[test]
+    fn classify_distress_thresholds() {
+        assert_eq!(classify_distress(0, 1_000_000), DistressLevel::None);
+        // Just above the distress line: -3 * 1M = -3M cutoff.
+        assert_eq!(
+            classify_distress(-2_999_999, 1_000_000),
+            DistressLevel::None
+        );
+        assert_eq!(
+            classify_distress(-3_500_000, 1_000_000),
+            DistressLevel::Distress
+        );
+        assert_eq!(
+            classify_distress(-7_000_000, 1_000_000),
+            DistressLevel::Severe
+        );
+        assert_eq!(
+            classify_distress(-13_000_000, 1_000_000),
+            DistressLevel::Insolvency
+        );
+    }
+
+    #[test]
+    fn home_match_counter_records_and_resets() {
+        let mut f = ClubFinances::new(0, vec![]);
+        f.record_home_match();
+        f.record_home_match();
+        assert_eq!(f.home_matches_this_month, 2);
+        let n = f.take_home_match_count();
+        assert_eq!(n, 2);
+        assert_eq!(f.home_matches_this_month, 0);
+    }
+
+    #[test]
+    fn register_transfer_purchase_decrements_cash_and_stages_amortization() {
+        let mut f = ClubFinances::new(100_000_000, vec![]);
+        let ok = f.register_transfer_purchase(48_000_000.0, 4);
+        assert!(ok);
+        // Cash dropped by full fee.
+        assert_eq!(f.balance.balance, 100_000_000 - 48_000_000);
+        // P&L (outcome) untouched at upfront.
+        assert_eq!(f.balance.outcome, 0);
+        assert_eq!(f.balance.expense_amortization, 0);
+        // One obligation: 48M / (4 * 12) = 1M/month for 48 months.
+        assert_eq!(f.transfer_obligations.len(), 1);
+        assert_eq!(f.transfer_obligations[0].monthly_amount, 1_000_000);
+        assert_eq!(f.transfer_obligations[0].months_remaining, 48);
+    }
+
+    #[test]
+    fn tick_amortization_charges_pl_without_double_debiting_balance() {
+        let mut f = ClubFinances::new(100_000_000, vec![]);
+        f.register_transfer_purchase(24_000_000.0, 2);
+        let cash_after_purchase = f.balance.balance;
+
+        let charged = f.tick_amortization();
+        assert_eq!(charged, 1_000_000); // 24M / 24 months
+        // P&L charged.
+        assert_eq!(f.balance.outcome, 1_000_000);
+        assert_eq!(f.balance.expense_amortization, 1_000_000);
+        // Cash NOT touched again — already paid upfront.
+        assert_eq!(f.balance.balance, cash_after_purchase);
+        assert_eq!(f.transfer_obligations[0].months_remaining, 23);
+    }
+
+    #[test]
+    fn tick_amortization_drops_finished_obligations() {
+        let mut f = ClubFinances::new(0, vec![]);
+        f.transfer_obligations.push(TransferObligation {
+            monthly_amount: 100,
+            months_remaining: 1,
+        });
+        let charged = f.tick_amortization();
+        assert_eq!(charged, 100);
+        assert!(f.transfer_obligations.is_empty());
+    }
+
+    #[test]
+    fn loan_fee_payment_is_immediate_pl_classified() {
+        let mut f = ClubFinances::new(10_000_000, vec![]);
+        f.pay_loan_fee(500_000.0);
+        assert_eq!(f.balance.balance, 10_000_000 - 500_000);
+        assert_eq!(f.balance.expense_loan_fees, 500_000);
+        assert_eq!(f.balance.outcome, 500_000);
+    }
+
+    #[test]
+    fn loan_fee_receipt_is_immediate_pl_classified() {
+        let mut f = ClubFinances::new(0, vec![]);
+        f.receive_loan_fee(500_000.0);
+        assert_eq!(f.balance.balance, 500_000);
+        assert_eq!(f.balance.income_loan_fees, 500_000);
+        assert_eq!(f.balance.income, 500_000);
+
+        f.refund_loan_fee(500_000.0);
+        assert_eq!(f.balance.balance, 0);
+        assert_eq!(f.balance.income_loan_fees, 0);
+        assert_eq!(f.balance.income, 0);
+    }
+
+    #[test]
+    fn trailing_annual_income_sums_history_within_window() {
+        let mut f = ClubFinances::new(0, vec![]);
+        let mut snap = ClubFinancialBalance::new(0);
+        snap.income = 5_000_000;
+        f.history.add(d(2025, 6), snap);
+        let mut snap_old = ClubFinancialBalance::new(0);
+        snap_old.income = 99_000_000;
+        // > 365 days old, must be ignored.
+        f.history.add(d(2024, 1), snap_old);
+        assert_eq!(f.trailing_annual_income(d(2026, 1)), 5_000_000);
+    }
+
+    #[test]
+    fn monthly_history_depth_counts_only_trailing_window() {
+        let mut f = ClubFinances::new(0, vec![]);
+        assert_eq!(f.monthly_history_depth(d(2026, 1)), 0);
+        for month in 1..=12u32 {
+            f.history.add(d(2025, month), ClubFinancialBalance::new(0));
+        }
+        // Stale snapshot outside the window must not count.
+        f.history.add(d(2023, 6), ClubFinancialBalance::new(0));
+        assert_eq!(f.monthly_history_depth(d(2026, 1)), 12);
+    }
+
+    #[test]
+    fn estimated_annual_income_annualizes_a_young_history() {
+        // Two funded months at 5M each: the raw trailing sum is 10M, and
+        // any full-year figure divided by it reads six times too large —
+        // the "597% of income goes out in wages" class of headline. The
+        // estimate scales to the year the run-rate implies.
+        let mut f = ClubFinances::new(0, vec![]);
+        for month in [5u32, 6] {
+            let mut snap = ClubFinancialBalance::new(0);
+            snap.income = 5_000_000;
+            snap.outcome = 4_000_000;
+            f.history.add(d(2026, month), snap);
+        }
+        assert_eq!(f.estimated_annual_income(d(2026, 7)), 60_000_000);
+        assert_eq!(f.estimated_annual_outcome(d(2026, 7)), 48_000_000);
+    }
+
+    #[test]
+    fn estimated_annual_income_is_the_plain_sum_once_a_year_exists() {
+        let mut f = ClubFinances::new(0, vec![]);
+        for month in 1..=12u32 {
+            let mut snap = ClubFinancialBalance::new(0);
+            snap.income = 1_000_000;
+            f.history.add(d(2025, month), snap);
+        }
+        let today = d(2026, 1);
+        assert_eq!(
+            f.estimated_annual_income(today),
+            f.trailing_annual_income(today)
+        );
+        // And with no history at all it stays at zero rather than inventing
+        // a run-rate out of nothing.
+        let empty = ClubFinances::new(0, vec![]);
+        assert_eq!(empty.estimated_annual_income(today), 0);
+    }
+}
+
+#[cfg(test)]
+mod transfer_cash_tests {
+    use super::ClubFinances;
+    use crate::shared::{Currency, CurrencyValue};
+
+    fn finances_with_budget(cash: i64, transfer_budget: f64) -> ClubFinances {
+        let mut f = ClubFinances::new(cash, Vec::new());
+        f.transfer_budget = Some(CurrencyValue {
+            amount: transfer_budget,
+            currency: Currency::Usd,
+        });
+        f
+    }
+
+    #[test]
+    fn adjust_cash_moves_balance_without_touching_transfer_budget() {
+        // Sell-on payouts and agent fees are pure cash movements: the
+        // balance moves but the transfer budget must stay put. The old path
+        // routed them through `add_transfer_income`, which shifted the
+        // budget by half the amount (a windfall on receipt, a double-hit on
+        // payment) — silently corrupting it.
+        let mut f = finances_with_budget(10_000_000, 5_000_000.0);
+        let bal0 = f.balance.balance;
+
+        f.adjust_cash(-1_000_000.0); // pay an agent fee
+        assert_eq!(f.balance.balance, bal0 - 1_000_000);
+        assert_eq!(f.transfer_budget.as_ref().unwrap().amount, 5_000_000.0);
+
+        f.adjust_cash(2_000_000.0); // receive a sell-on payout
+        assert_eq!(f.balance.balance, bal0 - 1_000_000 + 2_000_000);
+        assert_eq!(f.transfer_budget.as_ref().unwrap().amount, 5_000_000.0);
+    }
+
+    #[test]
+    fn add_transfer_income_still_recycles_half_into_budget() {
+        // Contrast with `adjust_cash`: a genuine player sale DOES reinvest
+        // half the fee into the transfer budget (intended behaviour, kept).
+        let mut f = finances_with_budget(0, 1_000_000.0);
+        f.add_transfer_income(4_000_000.0);
+        assert_eq!(
+            f.transfer_budget.as_ref().unwrap().amount,
+            1_000_000.0 + 2_000_000.0
+        );
+    }
+
+    #[test]
+    fn can_afford_transfer_respects_budget_and_opens_when_unset() {
+        let f = finances_with_budget(0, 3_000_000.0);
+        assert!(f.can_afford_transfer(3_000_000.0));
+        assert!(!f.can_afford_transfer(3_000_001.0));
+
+        // No configured transfer budget => the affordability gate is open.
+        let no_budget = ClubFinances::new(0, Vec::new());
+        assert!(no_budget.can_afford_transfer(999_999_999.0));
+    }
+}

@@ -1,0 +1,257 @@
+/// Facility quality levels for clubs.
+/// These affect training quality, youth development, and player generation.
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum FacilityLevel {
+    Best,
+    Exceptional,
+    Superb,
+    Excellent,
+    Great,
+    Good,
+    Adequate,
+    #[default]
+    Average,
+    BelowAverage,
+    FairlyBasic,
+    Basic,
+    Limited,
+    Poor,
+}
+
+impl From<&str> for FacilityLevel {
+    /// Parse from string (e.g. "Superb", "Below Average")
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().trim() {
+            "best" => FacilityLevel::Best,
+            "exceptional" => FacilityLevel::Exceptional,
+            "superb" => FacilityLevel::Superb,
+            "excellent" => FacilityLevel::Excellent,
+            "great" => FacilityLevel::Great,
+            "good" => FacilityLevel::Good,
+            "adequate" => FacilityLevel::Adequate,
+            "average" => FacilityLevel::Average,
+            "below average" => FacilityLevel::BelowAverage,
+            "fairly basic" => FacilityLevel::FairlyBasic,
+            "basic" => FacilityLevel::Basic,
+            "limited" => FacilityLevel::Limited,
+            "poor" | "unknown" => FacilityLevel::Poor,
+            _ => FacilityLevel::Average,
+        }
+    }
+}
+
+impl FacilityLevel {
+    /// Numeric value 1-20
+    pub fn to_rating(&self) -> u8 {
+        match self {
+            FacilityLevel::Best => 20,
+            FacilityLevel::Exceptional => 19,
+            FacilityLevel::Superb => 17,
+            FacilityLevel::Excellent => 15,
+            FacilityLevel::Great => 13,
+            FacilityLevel::Good => 11,
+            FacilityLevel::Adequate => 9,
+            FacilityLevel::Average => 7,
+            FacilityLevel::BelowAverage => 5,
+            FacilityLevel::FairlyBasic => 4,
+            FacilityLevel::Basic => 3,
+            FacilityLevel::Limited => 2,
+            FacilityLevel::Poor => 1,
+        }
+    }
+
+    /// Normalized 0.0 - 1.0 multiplier
+    pub fn multiplier(&self) -> f32 {
+        self.to_rating() as f32 / 20.0
+    }
+
+    /// The next level up, or `None` if already `Best`. Wrapped on the type
+    /// so the board's facility review doesn't hard-code the ladder.
+    pub fn next_better(&self) -> Option<FacilityLevel> {
+        use FacilityLevel::*;
+        Some(match self {
+            Poor => Limited,
+            Limited => Basic,
+            Basic => FairlyBasic,
+            FairlyBasic => BelowAverage,
+            BelowAverage => Average,
+            Average => Adequate,
+            Adequate => Good,
+            Good => Great,
+            Great => Excellent,
+            Excellent => Superb,
+            Superb => Exceptional,
+            Exceptional => Best,
+            Best => return None,
+        })
+    }
+
+    /// Indicative cost (USD) of upgrading *to* this level. Scales with the
+    /// square of the target rating so each rung costs progressively more —
+    /// going from world-class to elite is far dearer than from poor to
+    /// basic. The board's review gates this against the club's finances.
+    pub fn upgrade_cost(&self) -> i64 {
+        let r = self.to_rating() as i64;
+        r * r * 250_000
+    }
+}
+
+/// Club-level facilities that affect training, youth development, and player generation.
+#[derive(Debug, Clone)]
+pub struct ClubFacilities {
+    /// Quality of first-team training facilities
+    pub training: FacilityLevel,
+    /// Quality of youth team facilities
+    pub youth: FacilityLevel,
+    /// Quality of the youth academy (coaching, scouting, programs)
+    pub academy: FacilityLevel,
+    /// Reach and quality of youth recruitment network
+    pub recruitment: FacilityLevel,
+    /// Average match attendance
+    pub average_attendance: u32,
+    /// Ground capacity — a physical property of the club, seeded from the
+    /// database and only ever changed by a board-sanctioned expansion.
+    ///
+    /// Revenue used to size the gate from a reputation-tier lookup, which
+    /// meant a club that slipped a tier had its stadium shrink underneath
+    /// it: Liverpool relegated read as a 22,000-seat ground and matchday
+    /// income fell 60% overnight for reasons no groundsman would recognise.
+    /// Capacity is now permanent, and only utilisation responds to form.
+    pub stadium_capacity: u32,
+}
+
+impl Default for ClubFacilities {
+    fn default() -> Self {
+        ClubFacilities {
+            training: FacilityLevel::Average,
+            youth: FacilityLevel::Average,
+            academy: FacilityLevel::Average,
+            recruitment: FacilityLevel::Average,
+            average_attendance: 0,
+            stadium_capacity: 0,
+        }
+    }
+}
+
+impl ClubFacilities {
+    /// Typical league-match utilisation of a ground. The database gives an
+    /// *average attendance*, not a capacity; dividing by this recovers a
+    /// plausible capacity — grounds are neither routinely full nor empty.
+    const TYPICAL_UTILISATION: f32 = 0.82;
+
+    /// Seed [`Self::stadium_capacity`] for a club that has no explicit
+    /// capacity in the database.
+    ///
+    /// Preference order: the recorded average gate grossed up to a capacity,
+    /// else a reputation-derived estimate. `reputation_score` is the club's
+    /// blended 0..1 standing. The reputation fallback is quadratic so the
+    /// gap between a Regional ground and an Elite one is wide without the
+    /// six-step cliff a tier lookup produces.
+    pub fn seed_capacity(average_attendance: u32, reputation_score: f32) -> u32 {
+        if average_attendance > 0 {
+            return (average_attendance as f32 / Self::TYPICAL_UTILISATION).round() as u32;
+        }
+        let rep = reputation_score.clamp(0.0, 1.0);
+        (2_000.0 + rep * rep * 92_000.0).round() as u32
+    }
+
+    /// Ground capacity, falling back to the reputation estimate when the
+    /// club was built without one (legacy saves, procedurally generated
+    /// clubs). Never returns zero, so matchday revenue can't silently
+    /// vanish.
+    pub fn capacity_or_estimate(&self, reputation_score: f32) -> u32 {
+        if self.stadium_capacity > 0 {
+            return self.stadium_capacity;
+        }
+        Self::seed_capacity(self.average_attendance, reputation_score)
+    }
+
+    /// Training quality multiplier (affects player development speed)
+    pub fn training_multiplier(&self) -> f32 {
+        self.training.multiplier()
+    }
+
+    /// Youth development multiplier (affects academy player quality)
+    pub fn youth_multiplier(&self) -> f32 {
+        (self.youth.multiplier() + self.academy.multiplier()) / 2.0
+    }
+
+    /// Youth recruitment multiplier (affects academy intake quality)
+    pub fn recruitment_multiplier(&self) -> f32 {
+        self.recruitment.multiplier()
+    }
+
+    /// Dynamic attendance multiplier: responds to form and league position.
+    ///
+    /// - `recent_wins_ratio` is the club's win rate over the last ~5 games (0.0–1.0)
+    /// - `league_position` is the current league position (1-indexed)
+    /// - `total_teams` is the number of teams in the league
+    ///
+    /// Returns a multiplier around 1.0 — happy fans show up (1.1–1.25),
+    /// disillusioned fans stay home (0.7–0.9). Cup runs, top-of-table,
+    /// or relegation-battle drama all push attendance higher.
+    pub fn dynamic_attendance_multiplier(
+        &self,
+        recent_wins_ratio: f32,
+        league_position: u16,
+        total_teams: u16,
+    ) -> f32 {
+        // Form component: −0.20 at zero wins, +0.20 at all-win streak.
+        let form = (recent_wins_ratio - 0.5) * 0.4;
+
+        // Position component — spectators love top-half runs and relegation
+        // six-pointers; mid-table apathy drops attendance.
+        let tt = total_teams.max(1) as f32;
+        let pos = league_position.max(1) as f32;
+        let rel_pos = pos / tt; // 0.0 top, 1.0 bottom
+        let position = if rel_pos < 0.1 {
+            0.20 // Title race
+        } else if rel_pos < 0.25 || rel_pos > 0.85 {
+            0.10 // European places / relegation drama
+        } else if rel_pos > 0.7 {
+            0.03
+        } else {
+            -0.05 // Mid-table apathy
+        };
+
+        (1.0 + form + position).clamp(0.65, 1.30)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::club::facilities::ClubFacilities;
+
+    #[test]
+    fn capacity_is_grossed_up_from_the_recorded_gate() {
+        // The database records a typical attendance, not a capacity, so a
+        // ground that averages 60,000 must model as bigger than that.
+        let capacity = ClubFacilities::seed_capacity(60_000, 0.85);
+        assert!(
+            capacity > 60_000 && capacity < 80_000,
+            "implausible capacity {capacity} from a 60,000 gate"
+        );
+    }
+
+    #[test]
+    fn capacity_falls_back_to_reputation_without_attendance_data() {
+        let big = ClubFacilities::seed_capacity(0, 0.85);
+        let small = ClubFacilities::seed_capacity(0, 0.20);
+        assert!(big > small);
+        // Never zero — a zero capacity silently erases matchday income.
+        assert!(small > 0);
+    }
+
+    #[test]
+    fn capacity_does_not_track_current_reputation() {
+        // Anfield does not shrink when the team gets relegated. Once a club
+        // carries a real capacity, the reputation argument is ignored.
+        let facilities = ClubFacilities {
+            stadium_capacity: 61_000,
+            ..ClubFacilities::default()
+        };
+        assert_eq!(facilities.capacity_or_estimate(0.85), 61_000);
+        assert_eq!(facilities.capacity_or_estimate(0.30), 61_000);
+    }
+}

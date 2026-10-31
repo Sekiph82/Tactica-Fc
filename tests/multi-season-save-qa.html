@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TACTICA FC multi-season save check</title>
+    <style>
+      :root { color-scheme: dark; font: 16px system-ui, sans-serif; background: #07101d; color: #eff6ff; }
+      body { margin: 32px auto; padding: 0 20px; max-width: 760px; }
+      main { padding: 24px; border: 1px solid #1d3850; border-radius: 16px; background: #0b1929; }
+      #result { white-space: pre-wrap; line-height: 1.6; }
+      .running { color: #d5e4f4; } .pass { color: #71e0ad; } .fail { color: #ff8794; }
+      a { color: #7edcc7; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Multi-season career save check</h1>
+      <p id="result" class="running" role="status" aria-live="polite">Starting isolated browser QA…</p>
+        <a id="open-career" href="/tactica-fc/" hidden>Open the restored career in TACTICA FC</a>
+    </main>
+    <script type="module">
+      import { browserPlatform } from '../src/platform/browser';
+      import { configurePlatformServices } from '../src/platform/contracts';
+      import { runUntil } from '../src/game/sim';
+      import { gs, notify, setGame } from '../src/game/state';
+      import { listSaves, loadGame, saveGame } from '../src/game/save';
+
+      const result = document.querySelector('#result');
+      const openCareer = document.querySelector('#open-career');
+      const show = (text, state) => { result.textContent = text; result.className = state; };
+      const count = (value) => Object.keys(value ?? {}).length;
+      const summary = (g) => ({
+        id: g.id,
+        date: g.date,
+        season: g.season,
+        userClub: g.userClub,
+        players: count(g.players),
+        fixtures: count(g.fixtures),
+        reports: count(g.reports),
+        archivedSeasons: g.seasonHistory.length,
+        lastArchivedSeason: g.seasonHistory.at(-1)?.season ?? null,
+        rng: g.rng,
+      });
+
+      try {
+        configurePlatformServices(browserPlatform);
+        const saves = await listSaves();
+        const source = saves.find((save) => save.club === 'Fulham FC' && !save.id.startsWith('qa-multiseason-'))
+          ?? saves.find((save) => !save.id.startsWith('qa-multiseason-'));
+        if (!source) throw new Error('No existing QA career was found on isolated origin 5183.');
+        if (!(await loadGame(source.id))) throw new Error(`Could not load QA career ${source.id}.`);
+
+        const copy = structuredClone(gs());
+        if (copy.humans?.length) throw new Error('Online careers are excluded from this local save check.');
+        const sourceId = copy.id;
+        copy.id = `qa-multiseason-${crypto.randomUUID()}`;
+        setGame(copy);
+
+        const targetSeason = copy.season + 2;
+        const targetDate = `${targetSeason}-07-02`;
+        show(`Loaded a copy of ${source.club} from ${copy.date}. Advancing to ${targetDate}…`, 'running');
+        await runUntil({
+          untilDate: targetDate,
+          maxDays: 800,
+          autoPlay: true,
+          onProgress: (date) => { result.textContent = `Simulating the isolated QA copy: ${date} / ${targetDate}…`; },
+        });
+
+        // The save serializer copies the live RNG into the state before writing.
+        // Synchronize here so the pre/post comparison uses the same authority.
+        notify();
+        const before = gs();
+        const beforeSummary = summary(before);
+        if (before.date < targetDate || before.season < targetSeason) throw new Error(`Simulation stopped early: ${before.date}, season ${before.season}.`);
+        if (beforeSummary.archivedSeasons < 2 || beforeSummary.reports < 1) throw new Error('The two-season copy is missing season archives or match reports.');
+
+        await saveGame();
+        setGame(null);
+        if (!(await loadGame(copy.id))) throw new Error('The versioned IndexedDB save could not be loaded back.');
+        const afterSummary = summary(gs());
+        if (JSON.stringify(beforeSummary) !== JSON.stringify(afterSummary)) throw new Error(`Save/load summary changed: ${JSON.stringify({ beforeSummary, afterSummary })}`);
+
+        const listed = (await listSaves()).find((save) => save.id === copy.id);
+        if (!listed || listed.date !== afterSummary.date || listed.club !== gs().clubs[gs().userClub]?.name) throw new Error('The saved career metadata is missing or stale in the load list.');
+
+        const fullReport = {
+          sourceCareer: sourceId,
+          savedCareer: copy.id,
+          startDate: source.date,
+          ...afterSummary,
+          listedDate: listed.date,
+          listedClub: listed.club,
+        };
+        show(`PASS — browser IndexedDB save, reload, and save-list metadata match.\n\n${JSON.stringify(fullReport, null, 2)}\n\nThe copied career is now the last local save on this isolated QA origin.`, 'pass');
+        openCareer.hidden = false;
+      } catch (error) {
+        show(`FAIL — ${error instanceof Error ? error.message : String(error)}`, 'fail');
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,298 @@
+//! What a club of a given standing expects of a player.
+//!
+//! One continuous curve rather than six enum buckets: a club mid-Continental
+//! gets a different baseline from a top-of-Continental one, instead of both
+//! snapping to the same tier. Everything here is a function of a reputation
+//! SCORE (0..1) and a position group — no club, no player, no world.
+
+use crate::{ClubLevelAnchor, PlayerFieldPositionGroup, ReputationLevel};
+
+/// How good a club is for a player of a given level — one continuous
+/// reading, shared by the player's own plan and the club's pathway.
+///
+/// 1.0 is a starter here, 0.0 rotation depth, −0.5 out of his depth, 1.5
+/// too good for the place. Because both sides speak it, "drop one level to
+/// play" is a band delta rather than a reputation-tier step, and the same
+/// sentence means the same thing to a nineteen-year-old at a giant and a
+/// thirty-year-old in a second division.
+pub struct LevelBand;
+
+impl LevelBand {
+    /// Out of his depth at the bottom, plainly too good at the top.
+    pub const MIN: f32 = -1.0;
+    pub const MAX: f32 = 2.0;
+
+    /// A division, in band terms. The step a loan normally asks a player
+    /// to take, and the width every band tolerance is written against.
+    pub const ONE_LEVEL: f32 = 0.6;
+
+    /// The band `level` occupies at a club with this anchor.
+    ///
+    /// `level` is always an observable reading —
+    /// [`AbilityEstimator::observable_level`](crate::club::staff::perception::AbilityEstimator::observable_level).
+    /// A band is a statement about the player football can see, and the
+    /// plan's own floor and target are built on that scale; feeding it
+    /// hidden ability compares two different numbers.
+    pub fn of(level: u8, group: PlayerFieldPositionGroup, anchor: &ClubLevelAnchor) -> f32 {
+        let key = anchor.key_floor(group) as f32;
+        let rotation = anchor.rotation_floor(group) as f32;
+        let span = (key - rotation).max(1.0);
+        ((level as f32 - rotation) / span).clamp(Self::MIN, Self::MAX)
+    }
+
+    /// The same reading against a club known only by its reputation
+    /// `overall_score` (0..1) — the cross-border and summary paths.
+    pub fn at_reputation(level: u8, group: PlayerFieldPositionGroup, score: f32) -> f32 {
+        Self::of(level, group, &ClubLevelAnchor::for_reputation(score))
+    }
+
+    /// The band a player at `band` here occupies at a club whose standard
+    /// of football is `drop` lower (negative: higher), clamped to the band
+    /// range.
+    pub fn below_standard(band: f32, drop: f32) -> f32 {
+        (band + drop * Self::PER_STANDARD).clamp(Self::MIN, Self::MAX)
+    }
+
+    /// A unit of standard is a mean attribute of 20, which is 380 ability
+    /// points (CA = 19·avg − 110), over a band `ROTATION_BAND` points wide.
+    const PER_STANDARD: f32 = 19.0 * 20.0 / ClubLevelAnchor::ROTATION_BAND as f32;
+
+    /// How well a band matches what somebody meant him to be playing at,
+    /// 1.0 for a match and 0.0 a full level away.
+    pub fn fit(band: f32, target: f32) -> f32 {
+        1.0 - ((band - target).abs() / Self::ONE_LEVEL).clamp(0.0, 1.0)
+    }
+
+    /// How ready a player already is for his parent club's own first
+    /// team, 0..1 — measured against the parent's best in his position,
+    /// which is the standard he is actually judged by there. An unknown
+    /// parent standard reads as fully raw, which is what stands the
+    /// destination floors down.
+    pub fn readiness_of(level: u8, parent_best_in_group: u8) -> f32 {
+        if parent_best_in_group == 0 {
+            return 0.0;
+        }
+        const RAW_RATIO: f32 = 0.60;
+        const READY_RATIO: f32 = 0.90;
+        let ratio = level as f32 / parent_best_in_group as f32;
+        ((ratio - RAW_RATIO) / (READY_RATIO - RAW_RATIO)).clamp(0.0, 1.0)
+    }
+}
+
+/// The ability bands a club recruits in.
+pub(crate) struct TierBands;
+
+impl TierBands {
+    pub(in crate::transfers) fn rep_level_value(level: &ReputationLevel) -> u8 {
+        match level {
+            ReputationLevel::Elite => 5,
+            ReputationLevel::Continental => 4,
+            ReputationLevel::National => 3,
+            ReputationLevel::Regional => 2,
+            ReputationLevel::Local => 1,
+            ReputationLevel::Amateur => 0,
+        }
+    }
+
+    /// Baseline starter ability by continuous reputation score. Calibrated
+    /// so that the midpoint of each enum tier reproduces the bucketed
+    /// baseline the rest of the pipeline expects.
+    const BASELINE_ANCHORS: [(f32, f32); 7] = [
+        (0.000, 50.0),
+        (0.075, 55.0),
+        (0.225, 70.0),
+        (0.400, 88.0),
+        (0.575, 110.0),
+        (0.725, 130.0),
+        (0.900, 145.0),
+    ];
+    /// What a score of 1.0 demands — top-of-Elite (a generational Real
+    /// Madrid side) asks more than mid-Elite, so the curve keeps climbing
+    /// past its last anchor.
+    const BASELINE_AT_TOP: f32 = 162.0;
+
+    /// Linear-interpolated lookup of base baseline CA from a continuous
+    /// reputation score. Score is `Reputation::overall_score()` (0..1).
+    fn baseline_anchor_curve(score: f32) -> f32 {
+        let anchors = Self::BASELINE_ANCHORS;
+        let s = score.clamp(0.0, 1.0);
+        let (s_top, b_top) = anchors[anchors.len() - 1];
+        if s >= s_top {
+            return b_top + (s - s_top) * (Self::BASELINE_AT_TOP - b_top) / (1.0 - s_top).max(1e-6);
+        }
+        for window in anchors.windows(2) {
+            let (s0, b0) = window[0];
+            let (s1, b1) = window[1];
+            if s >= s0 && s <= s1 {
+                let t = (s - s0) / (s1 - s0).max(1e-6);
+                return b0 + (b1 - b0) * t;
+            }
+        }
+        anchors[0].1
+    }
+
+    /// The reputation score at which `base` is the at-tier starter
+    /// baseline — [`Self::baseline_anchor_curve`] read backwards, off the
+    /// same anchors, so a player placed by one is placed by the other.
+    fn baseline_anchor_score(base: f32) -> f32 {
+        let anchors = Self::BASELINE_ANCHORS;
+        let (s_top, b_top) = anchors[anchors.len() - 1];
+        if base >= b_top {
+            return (s_top + (base - b_top) * (1.0 - s_top) / (Self::BASELINE_AT_TOP - b_top))
+                .clamp(0.0, 1.0);
+        }
+        for window in anchors.windows(2) {
+            let (s0, b0) = window[0];
+            let (s1, b1) = window[1];
+            if base >= b0 && base <= b1 {
+                return s0 + (s1 - s0) * (base - b0) / (b1 - b0).max(1e-6);
+            }
+        }
+        0.0
+    }
+
+    /// Linear-interpolated headroom (max CA above baseline a club can
+    /// realistically pursue). Anchored at the same enum-tier midpoints
+    /// as [`baseline_anchor_curve`].
+    fn headroom_anchor_curve(score: f32) -> f32 {
+        const ANCHORS: [(f32, f32); 7] = [
+            (0.000, 6.0),
+            (0.075, 8.0),
+            (0.225, 10.0),
+            (0.400, 14.0),
+            (0.575, 22.0),
+            (0.725, 35.0),
+            (0.900, 55.0),
+        ];
+        let s = score.clamp(0.0, 1.0);
+        if s >= ANCHORS[ANCHORS.len() - 1].0 {
+            let (s_top, h_top) = ANCHORS[ANCHORS.len() - 1];
+            let extrapolation = (s - s_top) * (65.0 - h_top) / (1.0 - s_top).max(1e-6);
+            return h_top + extrapolation;
+        }
+        for window in ANCHORS.windows(2) {
+            let (s0, h0) = window[0];
+            let (s1, h1) = window[1];
+            if s >= s0 && s <= s1 {
+                let t = (s - s0) / (s1 - s0).max(1e-6);
+                return h0 + (h1 - h0) * t;
+            }
+        }
+        ANCHORS[0].1
+    }
+
+    /// Per-group offset applied on top of the base baseline. Goalkeepers
+    /// naturally score lower on the unified CA scale (fewer outfield-
+    /// style attributes feed the rating); forwards a touch higher. Kept
+    /// here as the single source of truth — neither evaluation nor
+    /// recommendations carries its own per-group adjustment.
+    fn group_baseline_offset(group: PlayerFieldPositionGroup) -> i16 {
+        match group {
+            PlayerFieldPositionGroup::Goalkeeper => -8,
+            PlayerFieldPositionGroup::Defender => -3,
+            PlayerFieldPositionGroup::Midfielder => 0,
+            PlayerFieldPositionGroup::Forward => 2,
+        }
+    }
+
+    /// Expected current-ability of an at-tier starter for a club whose
+    /// reputation `overall_score` is `score` (0..1). The continuous
+    /// version of [`tier_starter_ca`] — a club mid-Continental gets a
+    /// different baseline from a top-of-Continental club, instead of
+    /// snapping to the same enum bucket. Position offsets are applied
+    /// uniformly via [`group_baseline_offset`].
+    pub(crate) fn tier_starter_ca_score(score: f32, group: PlayerFieldPositionGroup) -> u8 {
+        let base = Self::baseline_anchor_curve(score);
+        let offset = Self::group_baseline_offset(group);
+        (base.round() as i16 + offset).clamp(20, 200) as u8
+    }
+
+    /// The reputation score (0..1) of a club whose at-tier starter in
+    /// this group plays at `level` — where an ability puts a man on the
+    /// same ladder the clubs are measured on.
+    pub(crate) fn level_score(level: u8, group: PlayerFieldPositionGroup) -> f32 {
+        Self::baseline_anchor_score(level as f32 - Self::group_baseline_offset(group) as f32)
+    }
+
+    /// Continuous-score counterpart of [`tier_target_ceiling`].
+    pub(crate) fn tier_target_ceiling_score(score: f32, group: PlayerFieldPositionGroup) -> u8 {
+        let baseline = TierBands::tier_starter_ca_score(score, group);
+        let headroom = Self::headroom_anchor_curve(score).round() as i16;
+        (baseline as i16 + headroom).clamp(20, 200) as u8
+    }
+
+    /// Continuous-score counterpart of [`tier_quality_tolerance`]. Top
+    /// clubs upgrade aggressively (small tolerance); small clubs
+    /// patient. Linear in 1 - score so that going up the reputation
+    /// ladder reduces tolerance smoothly, no enum cliff.
+    pub(crate) fn tier_quality_tolerance_score(score: f32) -> i16 {
+        let s = score.clamp(0.0, 1.0);
+        let raw = 4.0 + (1.0 - s) * 11.0; // 4 at top, 15 at the bottom
+        raw.round() as i16
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::staff::perception::AbilityEstimator;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills,
+    };
+    use chrono::NaiveDate;
+
+    /// A band is a statement about the player football can see. Every
+    /// producer of one has to hand it the same reading, or the plan's
+    /// floor and the agreement's fit are measuring two different men.
+    #[test]
+    fn the_band_and_the_hidden_ability_are_not_the_same_number() {
+        let attrs = PlayerAttributes {
+            // A well-regarded academy boy: a real hidden ability, and skills
+            // nobody watching would read that high.
+            current_ability: 160,
+            ..Default::default()
+        };
+        let player = PlayerBuilder::new()
+            .id(1)
+            .full_name(FullName::new("B".into(), "Band".into()))
+            .birth_date(NaiveDate::from_ymd_opt(2006, 1, 1).unwrap())
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::flat_for_ability(90))
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::Striker,
+                    level: 20,
+                }],
+            })
+            .player_attributes(attrs)
+            .build()
+            .unwrap();
+
+        let observable = AbilityEstimator::observable_level(&player);
+        let group = PlayerFieldPositionGroup::Forward;
+        assert_ne!(
+            observable, player.player_attributes.current_ability,
+            "the fixture only means anything while the two readings differ"
+        );
+        assert_ne!(
+            LevelBand::at_reputation(observable, group, 0.7),
+            LevelBand::at_reputation(player.player_attributes.current_ability, group, 0.7),
+            "so a band built on the wrong one places him at the wrong club"
+        );
+    }
+
+    #[test]
+    fn a_club_a_division_down_reads_a_division_up() {
+        // One level of the generator moves a squad's standard 0.0295 and its
+        // ability about eleven points, which is about one division of band.
+        let here = 0.2;
+        let below = LevelBand::below_standard(here, 0.0295);
+        assert!((below - here - LevelBand::ONE_LEVEL).abs() < 0.05, "{below}");
+        assert!(LevelBand::below_standard(here, -0.03) < here);
+        assert_eq!(LevelBand::below_standard(here, 1.0), LevelBand::MAX);
+    }
+}

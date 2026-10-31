@@ -1,0 +1,50 @@
+[package]
+name = "core"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+
+[features]
+default = []
+
+# ── Match engine features ──────────────────────────────────────────────
+# Off-by-default toggles that change what `FootballEngine::play` does or
+# emits. Production runs (web simulator, league batch simulation) leave
+# all of these off; dev/profiling harnesses opt in.
+#
+# `match` is an aggregate: `--features match` turns on every match-*
+# toggle at once. Sub-features stay individually selectable.
+#
+# match-logs : diagnostic logs from the match engine (shot reasons,
+#              blowout profile, per-tick ball decisions). Sites go
+#              through the `match_log_*!` macros in `match_logs.rs`
+#              which compile to no-ops when off.
+# match-stub : replaces the real simulation with a result drawn from
+#              the two squads (goals from the elevens' ability gap and
+#              the home edge; scorers, substitutions, minutes and
+#              ratings to match) that returns immediately — for
+#              profiling and long world censuses of the surrounding
+#              pipeline without paying the engine's CPU cost. NEVER
+#              enable for production runs: no match is played.
+match = ["match-logs", "match-stub"]
+match-logs = []
+match-stub = []
+
+[dependencies]
+chrono = { version = "0.4.45", features = ["serde"] }
+rand = "0.10.3"
+rayon = "1.12.0"
+serde = { version = "1.0.229", features = ["derive"] }
+log = "0.4.34"
+itertools = "0.15.0"
+serde_json = "1.0.154"
+nalgebra = { version = "0.35.0", features = ["serde-serialize", "rand"] }
+deunicode = "1.6"
+# Fast, deterministic hasher for internal integer-id maps. The default
+# SipHash is DoS-resistant but slow; the sim's hot ID lookups
+# (player/team resolution, per-player relations) don't need that and the
+# world is iteration-order-independent, so FxHash is a safe drop-in.
+rustc-hash = "2.1.3"
+
+[lints]
+workspace = true

@@ -1,0 +1,207 @@
+use crate::context::{HomeLeagueTable, TournamentClocks};
+use crate::country::national::{NationalTeam, NationalTeamLevel};
+use crate::league::{DomesticCup, LeagueCollection, LeaguePlayoff};
+use crate::transfers::market::TransferMarket;
+use crate::transfers::market::map::CountryTransferProfile;
+use crate::{
+    Club, Country, CountryEconomicFactors, CountryGeneratorData, CountryRegulations,
+    CountrySettings, InternationalCompetition, MediaCoverage,
+};
+
+#[derive(Default, Clone)]
+pub struct CountryBuilder {
+    id: Option<u32>,
+    code: Option<String>,
+    slug: Option<String>,
+    name: Option<String>,
+    background_color: Option<String>,
+    foreground_color: Option<String>,
+    continent_id: Option<u32>,
+    leagues: Option<LeagueCollection>,
+    domestic_cup: Option<DomesticCup>,
+    playoffs: Option<Vec<LeaguePlayoff>>,
+    clubs: Option<Vec<Club>>,
+    reputation: Option<u16>,
+    settings: Option<CountrySettings>,
+    generator_data: Option<CountryGeneratorData>,
+    transfer_market: Option<TransferMarket>,
+    economic_factors: Option<CountryEconomicFactors>,
+    national_team: Option<NationalTeam>,
+    u21_national_team: Option<NationalTeam>,
+    international_competitions: Option<Vec<InternationalCompetition>>,
+    media_coverage: Option<MediaCoverage>,
+    regulations: Option<CountryRegulations>,
+    transfer_profile: Option<CountryTransferProfile>,
+}
+
+impl CountryBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn id(mut self, id: u32) -> Self {
+        self.id = Some(id);
+        self
+    }
+
+    pub fn code(mut self, code: String) -> Self {
+        self.code = Some(code);
+        self
+    }
+
+    pub fn slug(mut self, slug: String) -> Self {
+        self.slug = Some(slug);
+        self
+    }
+
+    pub fn name(mut self, name: String) -> Self {
+        self.name = Some(name);
+        self
+    }
+
+    pub fn background_color(mut self, color: String) -> Self {
+        self.background_color = Some(color);
+        self
+    }
+
+    pub fn foreground_color(mut self, color: String) -> Self {
+        self.foreground_color = Some(color);
+        self
+    }
+
+    pub fn continent_id(mut self, continent_id: u32) -> Self {
+        self.continent_id = Some(continent_id);
+        self
+    }
+
+    pub fn leagues(mut self, leagues: LeagueCollection) -> Self {
+        self.leagues = Some(leagues);
+        self
+    }
+
+    pub fn domestic_cup(mut self, domestic_cup: Option<DomesticCup>) -> Self {
+        self.domestic_cup = domestic_cup;
+        self
+    }
+
+    pub fn playoffs(mut self, playoffs: Vec<LeaguePlayoff>) -> Self {
+        self.playoffs = Some(playoffs);
+        self
+    }
+
+    pub fn clubs(mut self, clubs: Vec<Club>) -> Self {
+        self.clubs = Some(clubs);
+        self
+    }
+
+    pub fn reputation(mut self, reputation: u16) -> Self {
+        self.reputation = Some(reputation);
+        self
+    }
+
+    pub fn settings(mut self, settings: CountrySettings) -> Self {
+        self.settings = Some(settings);
+        self
+    }
+
+    pub fn generator_data(mut self, generator_data: CountryGeneratorData) -> Self {
+        self.generator_data = Some(generator_data);
+        self
+    }
+
+    pub fn transfer_market(mut self, transfer_market: TransferMarket) -> Self {
+        self.transfer_market = Some(transfer_market);
+        self
+    }
+
+    pub fn economic_factors(mut self, economic_factors: CountryEconomicFactors) -> Self {
+        self.economic_factors = Some(economic_factors);
+        self
+    }
+
+    pub fn international_competitions(
+        mut self,
+        competitions: Vec<InternationalCompetition>,
+    ) -> Self {
+        self.international_competitions = Some(competitions);
+        self
+    }
+
+    pub fn media_coverage(mut self, media_coverage: MediaCoverage) -> Self {
+        self.media_coverage = Some(media_coverage);
+        self
+    }
+
+    pub fn national_team(mut self, national_team: NationalTeam) -> Self {
+        self.national_team = Some(national_team);
+        self
+    }
+
+    pub fn u21_national_team(mut self, u21_national_team: NationalTeam) -> Self {
+        self.u21_national_team = Some(u21_national_team);
+        self
+    }
+
+    pub fn transfer_profile(mut self, profile: CountryTransferProfile) -> Self {
+        self.transfer_profile = Some(profile);
+        self
+    }
+
+    pub fn regulations(mut self, regulations: CountryRegulations) -> Self {
+        self.regulations = Some(regulations);
+        self
+    }
+
+    pub fn build(self) -> Result<Country, String> {
+        let id = self.id.ok_or("id is required")?;
+        let generator_data = self
+            .generator_data
+            .unwrap_or_else(CountryGeneratorData::empty);
+        let national_team = self
+            .national_team
+            .unwrap_or_else(|| NationalTeam::new(id, &generator_data.people_names));
+        let u21_national_team = self.u21_national_team.unwrap_or_else(|| {
+            NationalTeam::new_with_level(
+                id,
+                &generator_data.people_names,
+                NationalTeamLevel::Under21,
+            )
+        });
+        Ok(Country {
+            id,
+            code: self.code.ok_or("code is required")?,
+            slug: self.slug.ok_or("slug is required")?,
+            name: self.name.ok_or("name is required")?,
+            background_color: self
+                .background_color
+                .unwrap_or_else(|| "#1e272d".to_string()),
+            foreground_color: self
+                .foreground_color
+                .unwrap_or_else(|| "#ffffff".to_string()),
+            continent_id: self.continent_id.ok_or("continent_id is required")?,
+            leagues: self.leagues.ok_or("leagues is required")?,
+            domestic_cup: self.domestic_cup,
+            playoffs: self.playoffs.unwrap_or_default(),
+            clubs: self.clubs.ok_or("clubs is required")?,
+            reputation: self.reputation.unwrap_or(500), // Default reputation
+            settings: self.settings.unwrap_or_default(),
+            generator_data,
+            national_team,
+            u21_national_team,
+            transfer_market: self.transfer_market.unwrap_or_default(),
+            economic_factors: self.economic_factors.unwrap_or_else(|| {
+                let rep = self.reputation.unwrap_or(500);
+                CountryEconomicFactors::from_reputation(rep)
+            }),
+            international_competitions: self.international_competitions.unwrap_or_default(),
+            media_coverage: self.media_coverage.unwrap_or_default(),
+            regulations: self.regulations.unwrap_or_default(),
+            transfer_profile: self.transfer_profile.unwrap_or_default(),
+            retired_players: Vec::new(),
+            last_snapshotted_season_year: None,
+            months_to_tournament: u8::MAX,
+            tournament_clocks: TournamentClocks::default(),
+            home_leagues: HomeLeagueTable::default(),
+        })
+    }
+}

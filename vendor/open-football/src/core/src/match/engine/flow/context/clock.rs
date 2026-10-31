@@ -1,0 +1,133 @@
+//! The match clock: the 10 ms tick, the period boundaries, stoppage-time
+//! accounting, and the goal/concede timestamps the rest of the engine
+//! measures "recently" against.
+
+use super::match_context::MatchContext;
+use crate::r#match::engine::result::PlayingTime;
+use crate::r#match::{
+    MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS, MATCH_TIME_MS, MatchState, MatchTime,
+    PassOriginRestart, PlayerSide,
+};
+
+/// How much match clock one engine tick is worth, in milliseconds.
+///
+/// Public because a tick is the unit every patience bound, cooldown and
+/// commitment clock in the engine is written in, so anything converting a
+/// duration into ticks needs this number rather than its own copy of `10`.
+pub const MATCH_TIME_INCREMENT_MS: u64 = 10;
+const MAX_STOPPAGE_PER_PERIOD_MS: u64 = 15 * 60 * 1000;
+
+impl MatchContext {
+    pub fn increment_time(&mut self) -> bool {
+        let new_time = self.time.increment(MATCH_TIME_INCREMENT_MS);
+
+        self.total_match_time += MATCH_TIME_INCREMENT_MS;
+
+        match self.state.match_state {
+            MatchState::FirstHalf | MatchState::SecondHalf => {
+                new_time < MATCH_HALF_TIME_MS + self.period_stoppage_time_ms
+            }
+            MatchState::ExtraTimeFirst | MatchState::ExtraTimeSecond => {
+                new_time < MATCH_EXTRA_TIME_MS + self.period_stoppage_time_ms
+            }
+            _ => false,
+        }
+    }
+
+    pub fn reset_period_time(&mut self) {
+        self.time = MatchTime::new();
+        self.period_stoppage_time_ms = 0;
+        self.stoppage_credit_ms = 0.0;
+        self.time_wasting.reset_period();
+    }
+
+    /// **The dead-ball ledger.** Every tick of a timed period is booked
+    /// once, with why the ball was dead if it was, and the referee adds the
+    /// share of it the Laws allow for to this period's stoppage time.
+    pub fn note_tick(&mut self, time: PlayingTime) {
+        self.tally.note_tick(time, MATCH_TIME_INCREMENT_MS);
+        let PlayingTime::Dead(why) = time else {
+            return;
+        };
+        self.stoppage_credit_ms += self.referee.add_back(why) * MATCH_TIME_INCREMENT_MS as f32;
+        let whole = self.stoppage_credit_ms.floor();
+        if whole >= 1.0 {
+            self.stoppage_credit_ms -= whole;
+            self.record_stoppage_time(whole as u64);
+        }
+    }
+
+    /// One tick of the game waiting on `origin` to be played.
+    pub fn note_restart_wait(&mut self, origin: PassOriginRestart) {
+        self.tally
+            .note_restart_wait(origin, MATCH_TIME_INCREMENT_MS);
+    }
+
+    fn record_stoppage_time(&mut self, time: u64) {
+        if !self.state.match_state.is_timed() {
+            return;
+        }
+
+        let room = MAX_STOPPAGE_PER_PERIOD_MS.saturating_sub(self.period_stoppage_time_ms);
+        let added = time.min(room);
+        self.period_stoppage_time_ms += added;
+        self.additional_time_ms += added;
+    }
+
+    /// The last third of the match has started. Read off the whole-match
+    /// clock: the period clock restarts at half time and never gets there.
+    pub fn is_running_out(&self) -> bool {
+        self.total_match_time > 2 * MATCH_TIME_MS / 3
+    }
+
+    pub fn current_tick(&self) -> u64 {
+        self.total_match_time / 10
+    }
+
+    /// How far into the closing stage of the match the clock is, 0..1:
+    /// the last third of the second half, and the last two thirds of the
+    /// second period of extra time. Zero everywhere else.
+    pub fn closing_stage(&self) -> f32 {
+        let (start, span) = match self.state.match_state {
+            MatchState::SecondHalf => (2 * MATCH_HALF_TIME_MS / 3, MATCH_HALF_TIME_MS / 3),
+            MatchState::ExtraTimeSecond => (MATCH_EXTRA_TIME_MS / 3, 2 * MATCH_EXTRA_TIME_MS / 3),
+            _ => return 0.0,
+        };
+        (self.time.time.saturating_sub(start) as f32 / span as f32).clamp(0.0, 1.0)
+    }
+
+    pub fn can_shoot_after_goal(&self) -> bool {
+        true
+    }
+
+    pub fn record_goal_tick(&mut self) {
+        self.last_goal_tick = self.current_tick();
+    }
+
+    /// Mark that the given side just conceded a goal. Read by the
+    /// forward shot decision to dampen willingness in the immediate
+    /// post-concede window. See `last_conceded_tick` docs for the
+    /// mechanism rationale.
+    pub fn record_conceded(&mut self, side: PlayerSide) {
+        let tick = self.current_tick();
+        let idx = match side {
+            PlayerSide::Left => 0,
+            PlayerSide::Right => 1,
+        };
+        self.last_conceded_tick[idx] = tick;
+    }
+
+    /// Did the given side concede within the last `window_ticks` ticks?
+    /// One tick is 10 ms of match time, so 6000 ticks ≈ 60 s.
+    pub fn conceded_recently(&self, side: PlayerSide, window_ticks: u64) -> bool {
+        let idx = match side {
+            PlayerSide::Left => 0,
+            PlayerSide::Right => 1,
+        };
+        let last = self.last_conceded_tick[idx];
+        if last == u64::MAX {
+            return false;
+        }
+        self.current_tick().saturating_sub(last) < window_ticks
+    }
+}

@@ -1,0 +1,769 @@
+use crate::r#match::engine::ball::ball::{BallRoll, CONTROL_DISTANCE, RunOff};
+use crate::r#match::position_ball::BallFieldData;
+use crate::r#match::{StateProcessingContext, SteeringBehavior};
+use nalgebra::Vector3;
+
+/// The ball's projected path, sampled once a tick, that every chase
+/// cost is read off.
+///
+/// A chase is priced in TIME — when a runner can first be on the ball —
+/// because distance to where the ball IS elects the man behind a
+/// rolling ball, the one man guaranteed never to reach it, over the
+/// team-mate downstream who can step into its line. Measured before
+/// this existed: a defender in `TakeBall` ran parallel to a genuinely
+/// loose ball on 68% of samples. The roll is [`BallRoll`]'s closed
+/// form, so the election and the steering that follows it
+/// ([`LooseBallChase::earliest_meeting`]) read the same ball; a ball in
+/// the air is priced at its landing spot, faded in over the height band
+/// [`LooseBallChase::aim`] uses.
+///
+/// Coarse on purpose: one projection serves every player on the pitch
+/// each tick, so the roll is a dozen samples and the crossing is linear
+/// between them. It is an ordering, not a steering target.
+///
+/// The path can END early — see [`Self::end_at`]: a pass in flight goes
+/// no further than the man it was played to.
+pub struct ChasePath {
+    /// The roll after `sample_t[i]` ticks is at `(sample_x[i],
+    /// sample_y[i])`, index 0 being the ball now. Kept by axis so a
+    /// runner is tested against every sample in one pass — see
+    /// [`Self::roll_time`].
+    sample_x: [f32; Self::SAMPLES + 1],
+    sample_y: [f32; Self::SAMPLES + 1],
+    sample_t: [f32; Self::SAMPLES + 1],
+    origin: Vector3<f32>,
+    dir: Vector3<f32>,
+    speed: f32,
+    bounds: (f32, f32, f32, f32),
+    rest: Vector3<f32>,
+    rest_ticks: f32,
+    landing: Vector3<f32>,
+    aerial: f32,
+}
+
+impl ChasePath {
+    /// A multiple of four — see the lanes in [`Self::roll_time`].
+    const SAMPLES: usize = 12;
+
+    pub fn project(ball: &BallFieldData, field_width: f32, field_height: f32) -> Self {
+        let flat = |v: Vector3<f32>| Vector3::new(v.x, v.y, 0.0);
+        let origin = flat(ball.position);
+        let velocity = flat(ball.velocity);
+        let speed = velocity.norm();
+        let dir = if speed < BallRoll::STOPPED {
+            Vector3::zeros()
+        } else {
+            velocity / speed
+        };
+        let rest_ticks = BallRoll::rest_ticks(speed);
+        let t = ((ball.position.z - LooseBallChase::GROUND_H)
+            / (LooseBallChase::AERIAL_H - LooseBallChase::GROUND_H))
+            .clamp(0.0, 1.0);
+        let mut path = ChasePath {
+            sample_x: [origin.x; Self::SAMPLES + 1],
+            sample_y: [origin.y; Self::SAMPLES + 1],
+            sample_t: [0.0; Self::SAMPLES + 1],
+            origin,
+            dir,
+            speed,
+            bounds: RunOff::ball_bounds(field_width, field_height),
+            rest: origin,
+            rest_ticks,
+            landing: flat(ball.landing_position),
+            aerial: t * t * (3.0 - 2.0 * t),
+        };
+        for i in 1..=Self::SAMPLES {
+            // Quadratic spacing: the near end of the roll, where almost
+            // every meeting happens, gets the resolution.
+            let share = i as f32 / Self::SAMPLES as f32;
+            let t = rest_ticks * share * share;
+            let at = path.roll_at(t);
+            path.sample_x[i] = at.x;
+            path.sample_y[i] = at.y;
+            path.sample_t[i] = t;
+        }
+        path.rest = Vector3::new(
+            path.sample_x[Self::SAMPLES],
+            path.sample_y[Self::SAMPLES],
+            0.0,
+        );
+        path
+    }
+
+    /// Where the roll is after `t` ticks — against the boards if it gets
+    /// that far.
+    fn roll_at(&self, t: f32) -> Vector3<f32> {
+        let there = self.origin + self.dir * BallRoll::distance(self.speed, t);
+        let (min_x, max_x, min_y, max_y) = self.bounds;
+        Vector3::new(
+            there.x.clamp(min_x, max_x),
+            there.y.clamp(min_y, max_y),
+            0.0,
+        )
+    }
+
+    /// Where the ball is after `t` ticks: the roll, or the landing spot
+    /// for a ball in the air, faded across the same band as everything
+    /// else here.
+    pub fn point_at(&self, t: f32) -> Vector3<f32> {
+        let roll = self.roll_at(t);
+        roll + (self.landing - roll) * self.aerial
+    }
+
+    /// End the path `t` ticks from now: the ball is taken there and goes
+    /// no further. Returns where.
+    ///
+    /// A pass in flight is its receiver's — its travel ends where he
+    /// takes it, and nobody else's chase is to a point beyond that.
+    /// Pricing the defending side against the whole roll sent its
+    /// nearest man after a ball he could only escort (45% of every tick
+    /// anybody spent in a `TakeBall` state, parallel to the pass on 61%
+    /// of them); pricing him against nothing at all left the receiver a
+    /// free first touch (shots struck with nobody inside 1.25 m went
+    /// 51% → 59%, goals 2.4 → 3.1 a match). His race is to where the
+    /// pass is collected, which is where a defender closing a receiver
+    /// down actually runs.
+    pub fn end_at(&mut self, t: f32) -> Vector3<f32> {
+        let t = t.min(self.rest_ticks);
+        let stop = self.roll_at(t);
+        for i in 0..=Self::SAMPLES {
+            if self.sample_t[i] > t {
+                self.sample_x[i] = stop.x;
+                self.sample_y[i] = stop.y;
+                self.sample_t[i] = t;
+            }
+        }
+        self.rest = stop;
+        self.rest_ticks = t;
+        self.point_at(t)
+    }
+
+    /// Where, and in how many ticks, the man a pass was played to takes
+    /// it: the point of its path nearest the spot it was played to, if he
+    /// can be there no later than the ball and no opponent can. `None`
+    /// otherwise, and he goes to meet it wherever he can, like any other
+    /// ball — a man with a defender on him comes to the ball.
+    ///
+    /// The receiver's steering and the chase table's end of the path both
+    /// read this, so the defending side closes the spot he actually takes
+    /// it at. Taken at the spot regardless, the man with a marker at his
+    /// shoulder stood still and let the ball come to him in shooting range:
+    /// shots doubled to 30 a team a match and long shots tripled.
+    pub fn receiving(
+        aim: Vector3<f32>,
+        receiver: Vector3<f32>,
+        max_speed: f32,
+        ball_pos: Vector3<f32>,
+        ball_vel: Vector3<f32>,
+        opponents: impl Iterator<Item = (Vector3<f32>, f32)>,
+    ) -> Option<(Vector3<f32>, f32)> {
+        let flat = |v: Vector3<f32>| Vector3::new(v.x, v.y, 0.0);
+        let spot = Self::receiving_spot(aim, ball_pos, ball_vel);
+        let ball_time = BallRoll::ticks_to(flat(ball_vel).norm(), (spot - flat(ball_pos)).norm());
+        let time_to_spot = |from: Vector3<f32>, speed: f32| {
+            ((spot - flat(from)).norm() - CONTROL_DISTANCE).max(0.0) / speed.max(1e-3)
+        };
+        let his = time_to_spot(receiver, max_speed) <= ball_time;
+        let contested = || {
+            opponents
+                .map(|(position, speed)| time_to_spot(position, speed))
+                .any(|theirs| theirs <= ball_time)
+        };
+        (his && !contested()).then_some((spot, ball_time))
+    }
+
+    /// The point of a delivery's path nearest `aim` — the spot itself for
+    /// a true ball, the nearest he can get to it for a sprayed one.
+    fn receiving_spot(
+        aim: Vector3<f32>,
+        ball_pos: Vector3<f32>,
+        ball_vel: Vector3<f32>,
+    ) -> Vector3<f32> {
+        let flat = |v: Vector3<f32>| Vector3::new(v.x, v.y, 0.0);
+        let Some(dir) = flat(ball_vel).try_normalize(1e-4) else {
+            return flat(ball_pos);
+        };
+        let along = (flat(aim) - flat(ball_pos)).dot(&dir).max(0.0);
+        flat(ball_pos) + dir * along
+    }
+
+    /// Ticks until a runner at `position` with top speed `speed` is
+    /// within `reach` of the ball.
+    pub fn time_to_reach(&self, position: Vector3<f32>, speed: f32, reach: f32) -> f32 {
+        let position = Vector3::new(position.x, position.y, 0.0);
+        let speed = speed.max(1e-3);
+        if self.aerial <= 0.0 {
+            return self.roll_time(position, speed, reach);
+        }
+        let land = ((self.landing - position).norm() - reach).max(0.0) / speed;
+        if self.aerial >= 1.0 {
+            return land;
+        }
+        let roll = self.roll_time(position, speed, reach);
+        roll + (land - roll) * self.aerial
+    }
+
+    fn roll_time(&self, position: Vector3<f32>, speed: f32, reach: f32) -> f32 {
+        // How far outside `reach` he still is at each sample, flat out.
+        // Squared until the crossing: only the sample either side of it
+        // needs the real shortfall, for the interpolation.
+        let gap_sq = |i: usize| {
+            let dx = self.sample_x[i] - position.x;
+            let dy = self.sample_y[i] - position.y;
+            dx * dx + dy * dy
+        };
+        if gap_sq(0) <= reach * reach {
+            return 0.0;
+        }
+        // Every sample at once, four lanes at a time, rather than a walk
+        // to the first one in reach: most of the pitch never reaches the
+        // path at all, and for them the walk was the whole roll anyway.
+        let mut inside = 0u32;
+        for block in 0..Self::SAMPLES / 4 {
+            let base = 1 + 4 * block;
+            let mut gap = [0.0f32; 4];
+            let mut limit = [0.0f32; 4];
+            for lane in 0..4 {
+                let within = reach + speed * self.sample_t[base + lane];
+                gap[lane] = gap_sq(base + lane);
+                limit[lane] = within * within;
+            }
+            for lane in 0..4 {
+                inside |= ((gap[lane] <= limit[lane]) as u32) << (base + lane);
+            }
+        }
+        if inside != 0 {
+            let i = inside.trailing_zeros() as usize;
+            let (t, prev_t) = (self.sample_t[i], self.sample_t[i - 1]);
+            let within = reach + speed * t;
+            // Clamped to their signs: the squared test and the real one
+            // can disagree by a rounding at the boundary.
+            let prev_short = (gap_sq(i - 1).sqrt() - reach - speed * prev_t).max(0.0);
+            let short = (gap_sq(i).sqrt() - within).min(0.0);
+            let span = prev_short - short;
+            return if span > 0.0 {
+                prev_t + (t - prev_t) * prev_short / span
+            } else {
+                prev_t
+            };
+        }
+        // Past the roll the ball is a fixed point.
+        (((self.rest - position).norm() - reach).max(0.0) / speed).max(self.rest_ticks)
+    }
+}
+
+/// The rule that keeps a race for a loose ball a RACE.
+///
+/// # Why this exists
+///
+/// All four `TakeBall` states add a plain repulsion from every player
+/// within 25u — team-mates AND opponents — to their pursuit of the ball,
+/// at up to 0.4 of top speed. So an opponent standing between the chaser
+/// and the ball produces a force pointing away from that opponent, which
+/// is to say **away from the ball**, and the chaser visibly hangs off
+/// while a rival who started FURTHER away arrives first. Reported from
+/// the viewer exactly that way: "defenders with Take Ball not running to
+/// the ball, and the opponent is first even though he was further".
+///
+/// It applies for the whole approach, too — the states' `separation_factor`
+/// is 1.0 at every distance beyond 10u and only ramps down inside that,
+/// i.e. only once the chaser is already within claim range.
+///
+/// Real players do not give way to the man they are racing; they run the
+/// same line and fight for it shoulder to shoulder. Separation still has
+/// a job here — stopping four players stacking on one point — and that
+/// job is entirely lateral, so keeping only the part of the force that
+/// does not oppose the chase preserves it while making it impossible for
+/// anybody to be pushed off the ball.
+pub struct LooseBallChase;
+
+impl LooseBallChase {
+    /// Ball height below which the aim point is the ball itself.
+    ///
+    /// Public because [`SteeringBehavior::Intercept`] keys its own
+    /// ground/aerial fade to the same band — two copies of "what counts
+    /// as a rolling ball" would drift.
+    pub const GROUND_H: f32 = 1.5;
+    /// Ball height above which the aim point is where it will land.
+    pub const AERIAL_H: f32 = 3.0;
+
+    /// How much later than the first opponent a man will still set off to
+    /// contest a ball — 0.10 s, in physics ticks. A race this close is a
+    /// contest, not a verdict.
+    pub const CONTEST_MARGIN_TICKS: f32 = 10.0;
+
+    /// **Can he get to `point` before the opposition?**
+    ///
+    /// The man CARRYING the ball is excluded: his distance to the
+    /// meeting point is zero, so including him makes this false for every
+    /// owned ball.
+    ///
+    /// ⚠ Both sides race at `max_speed`, in units per physics tick.
+    /// Three copies of this test divided distance by
+    /// `skills.physical.pace`, a 1-20 ATTRIBUTE — and because the real
+    /// relation is affine (`0.36 + pace01 * 0.27`) the error does not
+    /// cancel in the ratio either: pace 5 against pace 20 is 4.00:1 as an
+    /// attribute and 1.51:1 as a speed. Condition never entered at all.
+    pub fn wins_the_race(ctx: &StateProcessingContext, point: Vector3<f32>) -> bool {
+        let mine = (point - ctx.player.position).magnitude()
+            / ctx.player.max_speed_with_condition_cached().max(1e-3);
+        let carrier = ctx.ball().owner_id();
+        let theirs = ctx
+            .players()
+            .opponents()
+            .all()
+            .filter(|opponent| Some(opponent.id) != carrier)
+            .map(|opponent| {
+                let speed = ctx
+                    .tick_context
+                    .positions
+                    .players
+                    .max_speed(opponent.id)
+                    .max(1e-3);
+                (point - opponent.position).magnitude() / speed
+            })
+            .fold(f32::MAX, f32::min);
+        mine <= theirs + Self::CONTEST_MARGIN_TICKS
+    }
+
+    /// Where to run for a loose ball, and the velocity to run there with.
+    ///
+    /// Returns `(target, velocity)` — the target is also what the caller
+    /// measures its separation ramp against.
+    ///
+    /// # Why the aim point is blended
+    ///
+    /// This used to be `if ball.z > 2.3 { landing } else { ball_pos }`, with
+    /// the steering switching between `Arrive` and `Pursuit` on the same
+    /// test. A bouncing ball crosses 2.3 repeatedly, and the two targets can
+    /// be tens of units apart in DIFFERENT directions — so the chaser's
+    /// velocity **inverted on every crossing**. `dev_match trace` measured
+    /// 6.6-7.8 velocity reversals per second with the player never leaving
+    /// the state: a chaser visibly shivering next to a loose ball instead of
+    /// collecting it. Crossing both the target and the behaviour smoothly
+    /// across a height band means there is no height at which either can
+    /// jump. (Smoothstep, so the aim point has zero gradient at both ends
+    /// and no corner where it starts or finishes moving.)
+    ///
+    /// `Arrive` brakes into a landing spot; `Pursuit` leads a rolling ball.
+    /// Seek alone would chase a moving ball's *current* position and always
+    /// lag behind — fatal for a ground pass rolling through the chaser.
+    pub fn aim(ctx: &StateProcessingContext) -> (Vector3<f32>, Vector3<f32>) {
+        /// How hard the aerial branch brakes into the landing spot.
+        /// Every caller passed this same number; it is here rather than
+        /// in three argument lists.
+        const SLOWING_DISTANCE: f32 = 10.0;
+
+        let player = ctx.player;
+        let ball = &ctx.tick_context.positions.ball;
+        let (ball_pos, ball_vel, landing) = (ball.position, ball.velocity, ball.landing_position);
+
+        // **A pass played to him is not a loose ball.** He takes it where
+        // it was played, and the spot is a fixed point to arrive at, like a
+        // landing. Raced for, it was met at the first point of its path he
+        // could reach — up the line toward the passer, so a winger found on
+        // the touchline came ten metres infield for every ball: 23% of
+        // passes were aimed within 5-10 m of a touchline and 2.8% were
+        // received there. See [`Self::receiving`].
+        if ctx.tick_context.ball.pass_target == Some(player.id)
+            && let Some((spot, _)) = ctx.tick_context.ball.pass_aim.and_then(|aim| {
+                ChasePath::receiving(
+                    aim,
+                    player.position,
+                    player.max_speed_with_condition_cached(),
+                    ball_pos,
+                    ball_vel,
+                    ctx.tick_context
+                        .positions
+                        .players
+                        .on_pitch()
+                        .iter()
+                        .filter(|m| Some(m.side) != player.side)
+                        .map(|m| (m.position, m.max_speed)),
+                )
+            })
+        {
+            let velocity = SteeringBehavior::Arrive {
+                target: spot,
+                slowing_distance: SLOWING_DISTANCE,
+            }
+            .calculate(player)
+            .velocity;
+            return (spot, velocity);
+        }
+
+        let t = ((ball_pos.z - Self::GROUND_H) / (Self::AERIAL_H - Self::GROUND_H)).clamp(0.0, 1.0);
+        let aerial = t * t * (3.0 - 2.0 * t);
+        // The ground end of the aim point is where the ball is GOING, not
+        // where it is standing — see [`Self::meeting_point`]. The aerial
+        // end always was: `landing` is that same answer for a ball that
+        // has to come down before anybody can play it.
+        let (rolling, taken) = Self::meeting(ctx, ball_pos, ball_vel);
+        let target = rolling + (landing - rolling) * aerial;
+
+        // ⚠ THE TWO BRANCHES ARE NOT INTERCHANGEABLE, AND COLLAPSING THEM
+        // INTO ONE COSTS EVERYTHING THIS FIX BUYS.
+        //
+        // A ball in the air is going to come DOWN somewhere, and the only
+        // useful place to be is there — `Arrive` at the landing spot, a
+        // fixed point, braking into it. A ball on the grass is going to
+        // keep running, and the only useful thing to do is hold the
+        // bearing on it — `Intercept`, a feedback law on a moving target.
+        //
+        // Folding the aerial case into `Intercept` by handing it the
+        // ball's own position and a zeroed velocity looks equivalent and
+        // is not: it steers the chaser at the XY the ball is flying OVER
+        // rather than the XY it will land on, which is a tail chase in
+        // the air. Measured over 200 fixtures, that one substitution took
+        // the census from 55% aimed-ahead / 34% parallel back to 48% /
+        // 41% and tackles from 16.3 to 12.6 per team — i.e. it undid the
+        // whole change while every line of the ground path stayed intact.
+        let brake = || {
+            SteeringBehavior::Arrive {
+                target,
+                slowing_distance: SLOWING_DISTANCE,
+            }
+            .calculate(player)
+            .velocity
+        };
+        let cut_off = || {
+            SteeringBehavior::Intercept {
+                target: ball_pos,
+                target_velocity: ball_vel,
+            }
+            .calculate(player)
+            .velocity
+        };
+
+        // A ball somebody else is going to take first is a fixed point
+        // too — the place it stops — and is braked into like a landing
+        // spot. See [`ChasePath::end_at`].
+        let brake_share = aerial + (1.0 - aerial) * taken;
+        let velocity = if brake_share >= 1.0 {
+            brake()
+        } else if brake_share <= 0.0 {
+            cut_off()
+        } else {
+            cut_off() * (1.0 - brake_share) + brake() * brake_share
+        };
+
+        (target, velocity)
+    }
+
+    /// Diagnostic switch: with `OF_TAIL_CHASE` set, every state that runs
+    /// at a loose ball reverts to aiming at where the ball IS.
+    ///
+    /// [`Self::meeting_point`] returns the ball's own position, and
+    /// [`SteeringBehavior::Intercept`] falls back to the `Pursuit` it
+    /// replaced — together, the aim point and the steering the engine had
+    /// before 2026-08-22.
+    ///
+    /// ⚠ It is NOT the pre-2026-08-22 engine, and must not be read as
+    /// one. `Pursuit` runs across the whole height band here, where
+    /// [`Self::aim`] used to blend it against an `Arrive` at the landing
+    /// spot, and the goalkeeper's chase was a bare `Seek` rather than
+    /// either. Read it as "what does aiming at the ball do", not as
+    /// "what did the engine used to score" — the same caveat
+    /// `MovementEffort::chase_legacy` carries.
+    ///
+    /// This is the A/B control for the loose-ball chase work. It reaches
+    /// every chase on every tick, so "did the interception model cause
+    /// this?" cannot be read off the diff, and it must not be answered by
+    /// checking out an older revision either, because the working tree
+    /// moves underneath you. Same pattern and purpose as
+    /// `MovementEffort::chase_legacy` and `MatchContext::shape_off`; read
+    /// once per process. Debug infrastructure — do not remove.
+    pub fn tail_chase() -> bool {
+        use std::sync::OnceLock;
+        static LEGACY: OnceLock<bool> = OnceLock::new();
+        *LEGACY.get_or_init(|| std::env::var("OF_TAIL_CHASE").is_ok())
+    }
+
+    /// Diagnostic switch: with `OF_CONCEDE` set, a chase the bearing-hold
+    /// cannot win goes back to being CONCEDED, as it was between
+    /// 2026-08-22 and now — [`SteeringBehavior::Intercept`] spends
+    /// everything cross-track the moment the root closes, and
+    /// [`Self::meeting_point`] reverts to the closing-rate estimate that
+    /// saturates at the resting point.
+    ///
+    /// This is the A/B control for the lost-cause rescue, and it exists
+    /// because this exact repair has already been mis-measured once: two
+    /// versions of it were built on top of an `aim` that had broken its
+    /// own aerial branch, the regression appeared in BOTH arms of every
+    /// comparison, and the idea was written off on evidence that was
+    /// really about the other bug. A switch in the same binary is the
+    /// only comparison that survives the working tree moving. Same
+    /// pattern as [`Self::tail_chase`]; read once per process. Debug
+    /// infrastructure — do not remove.
+    pub fn concede() -> bool {
+        use std::sync::OnceLock;
+        static CONCEDE: OnceLock<bool> = OnceLock::new();
+        *CONCEDE.get_or_init(|| std::env::var("OF_CONCEDE").is_ok())
+    }
+
+    /// Where this player and a rolling ball can actually meet.
+    ///
+    /// # Why the engine had no answer for this
+    ///
+    /// `Ball::calculate_landing_position` returns the ball's own position
+    /// for anything already on the turf, so for a ground pass every
+    /// chaser in the engine was aiming at where the ball was standing —
+    /// and `SteeringBehavior::Pursuit`, the one thing that was supposed
+    /// to lead it, clamps its lead to 5 ticks (50 ms). Between them the
+    /// aim point sat within half a metre of the ball on every tick of
+    /// every ground chase, which is a tail chase however fast the chaser
+    /// runs. `SteeringBehavior::Intercept` carries the measurement.
+    ///
+    /// # The solve
+    ///
+    /// [`Self::earliest_meeting`] — the first point on the ball's
+    /// decaying roll this player can be at no later than the ball.
+    /// Shared verbatim with the lost-cause branch of
+    /// [`SteeringBehavior::Intercept`], so where a player is sent and
+    /// where he is steered can never become two different opinions.
+    ///
+    /// Clamped to the run-off rather than to the pitch for the reason
+    /// `calculate_landing_position` is: a ball on its way out of play
+    /// finishes against the boards, and the man fetching it should be
+    /// told where it actually comes to rest.
+    pub fn meeting_point(
+        ctx: &StateProcessingContext,
+        ball_pos: Vector3<f32>,
+        ball_vel: Vector3<f32>,
+    ) -> Vector3<f32> {
+        Self::meeting(ctx, ball_pos, ball_vel).0
+    }
+
+    /// Ticks either side of a receiver's collection time across which a
+    /// chase fades from cutting the ball out to closing down the man
+    /// collecting it. A race that close is a contest, not a verdict, and
+    /// a hard switch between the two targets would snap the heading.
+    const TAKEN_BAND: f32 = 50.0;
+
+    /// [`Self::meeting_point`], and how far it has been pulled back to
+    /// where a receiver takes the ball first — 0 is his own read of the
+    /// roll, 1 is the collection point. See [`ChasePath::end_at`].
+    pub fn meeting(
+        ctx: &StateProcessingContext,
+        ball_pos: Vector3<f32>,
+        ball_vel: Vector3<f32>,
+    ) -> (Vector3<f32>, f32) {
+        if Self::tail_chase() {
+            return (ball_pos, 0.0);
+        }
+        let flat = |v: Vector3<f32>| Vector3::new(v.x, v.y, 0.0);
+        let player_pos = flat(ctx.player.position);
+        let to_ball = flat(ball_pos) - player_pos;
+        let gap = to_ball.norm();
+        let ball_vel = flat(ball_vel);
+        let ball_speed = ball_vel.norm();
+        // Nothing to lead: a ball at rest, or one already at his feet.
+        if gap < 1e-3 || ball_speed < BallRoll::STOPPED {
+            return (ball_pos, 0.0);
+        }
+        let speed = ctx.player.max_speed_with_condition_cached().max(1e-3);
+
+        let (point, when) = if Self::concede() {
+            // The 2026-08-22 estimate, kept as the `OF_CONCEDE` arm:
+            // match the ball across the line of sight, call what is left
+            // the closing speed, and read the roll at `gap / closing`
+            // ticks. Exact enough while he can close — but a chaser who
+            // CANNOT close gets an unbounded horizon and is sent to the
+            // resting point, which for a ball on its way out of play is
+            // against the boards: he escorts it over the line instead of
+            // cutting it off while it is still in reach.
+            let line_of_sight = to_ball / gap;
+            let ball_dir = ball_vel / ball_speed;
+            let across = ball_vel - line_of_sight * ball_vel.dot(&line_of_sight);
+            let closing = (speed * speed - across.norm_squared()).max(0.0).sqrt()
+                - ball_vel.dot(&line_of_sight);
+            let ticks = gap / closing.max(1e-3);
+            (
+                flat(ball_pos) + ball_dir * BallRoll::distance(ball_speed, ticks),
+                ticks,
+            )
+        } else {
+            Self::earliest_meeting(player_pos, speed, flat(ball_pos), ball_vel)
+        };
+
+        // The end of the path is defined BY the receiver's meeting, so it
+        // cannot constrain him; everybody else's read stops there. For the
+        // receiver his own meeting IS the collection point, braked into
+        // like any other: the pass meets a man who has settled, not one
+        // still running at it, whose pace it would take and turn round on.
+        let (point, taken) = match ctx.tick_context.chase.path_end() {
+            Some(end) if end.receiver != ctx.player.id => {
+                let t = ((when - end.tick) / Self::TAKEN_BAND + 0.5).clamp(0.0, 1.0);
+                let taken = t * t * (3.0 - 2.0 * t);
+                (point + (end.point - point) * taken, taken)
+            }
+            Some(_) => (point, 1.0),
+            None => (point, 0.0),
+        };
+
+        let size = &ctx.context.field_size;
+        let (min_x, max_x, min_y, max_y) =
+            RunOff::ball_bounds(size.width as f32, size.height as f32);
+        (
+            Vector3::new(
+                point.x.clamp(min_x, max_x),
+                point.y.clamp(min_y, max_y),
+                0.0,
+            ),
+            taken,
+        )
+    }
+
+    /// The first point on a rolling ball's path this runner can reach no
+    /// later than the ball — the point a player who has read the roll
+    /// runs at.
+    ///
+    /// # Why "earliest", and not "where the closing rate says"
+    ///
+    /// The estimate this replaces decomposed the chase against the
+    /// current line of sight and asked how fast the gap shrinks NOW.
+    /// For a chase the runner is winning the two agree. For one he is
+    /// momentarily losing — a ball crossing his front faster than he can
+    /// run, the commonest loose ball there is at 0.892 u/tick against a
+    /// 0.45-0.63 sprint — the closing rate is zero or negative, the
+    /// horizon diverges, and the answer degenerates to the RESTING
+    /// point. But a rolling ball sheds speed every tick, so between
+    /// "where it is" and "where it stops" there is almost always a first
+    /// point he can make, and it can sit well upstream of the rest —
+    /// inside the pitch, say, when the rest is over the touchline.
+    /// Reported exactly so: *"defenders in TakeBall run parallel to the
+    /// ball and it rolls out of bounds, even though the defender could
+    /// have intercepted it."*
+    ///
+    /// # The solve
+    ///
+    /// Rolling is the one phase of a ball's life with a closed form, so
+    /// both sides of the race are exact: the ball is at
+    /// [`BallRoll::distance`]`(v, t)` along its line, the runner covers
+    /// `speed × t` on the straight. The shortfall between them starts at
+    /// the gap, is continuous, and is guaranteed to go negative — the
+    /// ball stops at [`BallRoll::range`] after [`BallRoll::rest_ticks`],
+    /// and a straight run reaches that point in finite time — so the
+    /// first crossing exists; a bracket and a bisection pin it. No model
+    /// of the steering, no feedback: positions, one speed, and the
+    /// friction constant the physics itself uses.
+    ///
+    /// The bracket is looked for where the roll passes nearest him first.
+    /// Short of that point the ball only ever gets closer while his reach
+    /// only ever grows, so if he can be there in time there is exactly one
+    /// crossing before it. Only when he cannot does a coarse march over the
+    /// whole roll look for the later one.
+    ///
+    /// ⚠ The march alone stepped OVER that window — sixteen samples across
+    /// a horizon of thirty seconds and more, against a ball that is in his
+    /// reach for a fraction of one. A pass played to a man's feet was read,
+    /// a second before it got to him, as meeting him at its resting point
+    /// thirty metres on: he turned and ran there, it rolled past him, and
+    /// **77% of a defender's lost passes went that way** — the largest
+    /// single source of the engine's throw-ins.
+    ///
+    /// Returns `(point, ticks)` — the when matters as much as the where,
+    /// because commitment is priced in TIME: the steering runs hard at a
+    /// meeting seconds away and declines one half a minute out.
+    ///
+    /// Works in the flat plane; hand it flat vectors. A flying ball is
+    /// not this function's subject — its horizontal speed does not decay
+    /// like a roll's — which is why the steering fades the lost-cause
+    /// branch out across the same height band `aim` uses.
+    pub fn earliest_meeting(
+        player_pos: Vector3<f32>,
+        max_speed: f32,
+        ball_pos: Vector3<f32>,
+        ball_vel: Vector3<f32>,
+    ) -> (Vector3<f32>, f32) {
+        let ball_speed = ball_vel.norm();
+        let gap = (ball_pos - player_pos).norm();
+        if gap < 1e-3 || ball_speed < BallRoll::STOPPED {
+            return (ball_pos, 0.0);
+        }
+        let dir = ball_vel / ball_speed;
+        let speed = max_speed.max(1e-3);
+
+        // Is he on the ball after `t` ticks — the ball on its decaying
+        // roll (`decay` = kᵗ), him flat out on the straight line? Squared,
+        // because only the sign of the shortfall is ever read.
+        let arrived = |t: f32, decay: f32| -> bool {
+            let there = ball_pos + dir * BallRoll::distance_decayed(ball_speed, decay);
+            let run = speed * t;
+            (there - player_pos).norm_squared() <= run * run
+        };
+
+        // The horizon that PROVES a meeting exists: from `rest_ticks` on
+        // the ball is a fixed point at `range`, and the straight run
+        // reaches it in `|rest − him| / speed` more — by then the
+        // shortfall is below zero by the whole of `speed × rest_ticks`.
+        let rest = ball_pos + dir * BallRoll::range(ball_speed);
+        let horizon = BallRoll::rest_ticks(ball_speed) + (rest - player_pos).norm() / speed;
+
+        const STEPS: usize = 16;
+        const HALVINGS: usize = 12;
+        let nearest = (player_pos - ball_pos).dot(&dir);
+        let mut bracket = (nearest > 0.0)
+            .then(|| BallRoll::ticks_to(ball_speed, nearest))
+            .map(|t| (t, BallRoll::decay(t)))
+            .filter(|&(t, decay)| arrived(t, decay))
+            .map(|nearest_pass| ((0.0, 1.0), nearest_pass));
+
+        // The decay is carried alongside the time — multiplied across the
+        // march, and the geometric mean of its ends across a halving (kᵗ
+        // at the midpoint of two times is exactly that) — so the whole
+        // solve costs one `exp` instead of one per probe.
+        if bracket.is_none() {
+            let step = horizon / STEPS as f32;
+            let step_decay = BallRoll::decay(step);
+            let mut decay = 1.0;
+            for i in 1..=STEPS {
+                let t = step * i as f32;
+                let prev_decay = decay;
+                decay *= step_decay;
+                if arrived(t, decay) {
+                    bracket = Some(((t - step, prev_decay), (t, decay)));
+                    break;
+                }
+            }
+        }
+        // Float dust at the far end of the horizon; out there the ball
+        // is at rest and the resting point IS the meeting.
+        let Some(((mut lo, mut lo_decay), (mut hi, mut hi_decay))) = bracket else {
+            return (rest, horizon);
+        };
+        for _ in 0..HALVINGS {
+            let mid = 0.5 * (lo + hi);
+            let mid_decay = (lo_decay * hi_decay).sqrt();
+            if arrived(mid, mid_decay) {
+                hi = mid;
+                hi_decay = mid_decay;
+            } else {
+                lo = mid;
+                lo_decay = mid_decay;
+            }
+        }
+        (
+            ball_pos + dir * BallRoll::distance_decayed(ball_speed, hi_decay),
+            hi,
+        )
+    }
+
+    /// Remove the component of `separation` that points against the run to
+    /// the ball, leaving the lateral part untouched.
+    ///
+    /// A component that happens to push the chaser TOWARD the ball is left
+    /// alone: it costs nothing, and stripping it as well would be its own
+    /// arbitrary rule rather than a consequence of anything physical.
+    pub fn keep_non_opposing(separation: Vector3<f32>, to_ball: Vector3<f32>) -> Vector3<f32> {
+        let Some(chase_dir) = to_ball.try_normalize(1e-3) else {
+            return separation;
+        };
+        let opposing = separation.dot(&chase_dir);
+        if opposing < 0.0 {
+            separation - chase_dir * opposing
+        } else {
+            separation
+        }
+    }
+}

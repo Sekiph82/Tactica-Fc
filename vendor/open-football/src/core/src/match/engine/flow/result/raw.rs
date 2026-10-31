@@ -1,0 +1,435 @@
+//! What the engine hands back when the whistle goes.
+//!
+//! [`MatchResultRaw`] is the full engine payload — squads, per-player
+//! stat lines, substitutions, chances, the position replay — and
+//! [`MatchResult`] is the league-facing wrapper that carries it (or
+//! carries only the score, once the replay has been stripped).
+//! [`FieldSquad`] is the roster identity both sides of that boundary
+//! agree on.
+
+use super::highlights::ChanceDetail;
+use super::player_stats::{PlayerMatchEndStats, PlayerMatchPhysicalSnapshot};
+use super::score::Score;
+use super::substitution::SubstitutionInfo;
+use super::tally::MatchTally;
+use crate::r#match::engine::environment::{Pitch, Weather};
+use crate::r#match::engine::teamplay::standard::MatchStandard;
+use crate::league::LeagueMatch;
+use crate::r#match::squad::OmittedPlayer;
+use crate::r#match::{MatchSquad, RecordingArtifacts, ResultMatchPositionData};
+use crate::{MatchTacticType, PlayerPositionType};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PenaltyShootoutKick {
+    pub team_id: u32,
+    pub taker_id: u32,
+    pub goalkeeper_id: Option<u32>,
+    pub round: u8,
+    pub scored: bool,
+    pub sudden_death: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MatchResultRaw {
+    pub score: Option<Score>,
+
+    /// Position-replay payload. Never serialised *as part of a result* —
+    /// `ResultMatchPositionData` is serialise-only (its `Serialize` writes the
+    /// shape the viewer's chunk files use, which nothing reads back), and every
+    /// other consumer of a serialised result wants the score and the stat
+    /// lines, not several MB of samples. Deserialising a result therefore
+    /// always yields `ResultMatchPositionData::empty()` here.
+    ///
+    /// The distributed worker protocol, which does need the replay, does not put
+    /// it back here at all: a worker bakes the track into the bytes the store
+    /// would have written and sends those, so a remotely-played match arrives
+    /// with this empty and `recording_artifacts` filled instead.
+    #[serde(skip, default = "ResultMatchPositionData::empty")]
+    pub position_data: ResultMatchPositionData,
+
+    /// The replay, already baked into the bytes that go on disk — set only when
+    /// somebody other than the storing process did the baking.
+    ///
+    /// A match played here leaves this `None` and the store bakes
+    /// `position_data` itself. A match played on a remote worker arrives with
+    /// it filled and `position_data` empty: the worker serialised and gzipped
+    /// the track on its own CPU, which is the one machine in the fleet with
+    /// spare capacity for it, and the coordinator only has to write the bytes
+    /// down. Skipped by serde for the same reason `position_data` is — it rides
+    /// beside the result on the worker protocol, not inside it.
+    #[serde(skip, default)]
+    pub recording_artifacts: Option<RecordingArtifacts>,
+
+    pub left_team_players: FieldSquad,
+    pub right_team_players: FieldSquad,
+
+    pub match_time_ms: u64,
+    pub additional_time_ms: u64,
+
+    pub player_stats: HashMap<u32, PlayerMatchEndStats>,
+
+    pub substitutions: Vec<SubstitutionInfo>,
+
+    /// The near misses worth watching again —
+    /// [`HighlightSelector::PER_TEAM`](super::highlights::HighlightSelector::PER_TEAM)
+    /// per side at most, already shortlisted by the time this is built. The
+    /// recording carries a clip around each one, so the two lists are written
+    /// together in `build_result` and must never be filtered apart afterwards:
+    /// a marker with no footage under it is a seek that lands in a grey zone.
+    ///
+    /// Defaulted for results written before chances were kept at all.
+    #[serde(default)]
+    pub chances: Vec<ChanceDetail>,
+
+    /// Final physical snapshot per player who appeared in this match.
+    /// Populated for every player on the pitch at full time AND every
+    /// player who was substituted off (snapshot taken at the swap).
+    /// Consumed by `LeagueResult::apply_post_match_physical_effects`
+    /// to feed `final_match_energy` into the new condition-drop
+    /// formula. Missing entries fall back to the legacy minutes-only
+    /// path so callers that don't construct `MatchResultRaw` via the
+    /// engine continue to work.
+    pub physical_snapshots: HashMap<u32, PlayerMatchPhysicalSnapshot>,
+
+    pub penalty_shootout: Vec<PenaltyShootoutKick>,
+
+    pub player_of_the_match_id: Option<u32>,
+
+    /// The shape each team STARTED the match in (taken from
+    /// `MatchSquad::tactics` at kickoff). Lets the result and the
+    /// downstream `MatchHistory` show a "starting → final" tactical
+    /// summary instead of just "what shape was on the pitch at the
+    /// final whistle".
+    pub starting_home_tactic: Option<MatchTacticType>,
+    pub starting_away_tactic: Option<MatchTacticType>,
+    /// The shape each team finished the match in. Differs from the
+    /// starting shape when the in-match coach probed a situational
+    /// override (`evaluate_situational_shape`) — e.g. 4-4-2 → 4-3-3
+    /// chasing a deficit, 4-4-2 → 4-5-1 protecting a lead. Surfaced so
+    /// the league pipeline can record it on `MatchHistory` and the
+    /// web tactics view can render "Plan: 4-4-2 — Last used: 4-3-3
+    /// (chase) vs Spurs".
+    pub final_home_tactic: Option<MatchTacticType>,
+    pub final_away_tactic: Option<MatchTacticType>,
+    /// Sim-minute at which the FIRST shape change fired for either
+    /// side (whichever came first). `None` when neither side changed
+    /// shape during the match. Stored as the marker the web view uses
+    /// to label a chip with "shifted at min X".
+    pub shape_change_minute: Option<u8>,
+    #[serde(default)]
+    pub tally: MatchTally,
+    /// What it was played in.
+    #[serde(default)]
+    pub weather: Weather,
+    #[serde(default)]
+    pub pitch: Pitch,
+    /// The standard of football the match read from both sides at
+    /// kickoff and played the whole match against — what each player
+    /// learns his assurance from afterwards. See `MatchStandard`.
+    #[serde(default)]
+    pub standard_of_football: f32,
+    /// One entry per penalty kept out during play, naming the keeper.
+    /// Shoot-out saves live in `penalty_shootout`.
+    #[serde(default)]
+    pub penalty_saves: Vec<u32>,
+    /// One entry per penalty not scored during play — saved, wide, over or
+    /// off the woodwork — naming the taker. Shoot-out misses live in
+    /// `penalty_shootout`.
+    #[serde(default)]
+    pub penalty_misses: Vec<u32>,
+}
+
+impl Clone for MatchResultRaw {
+    fn clone(&self) -> Self {
+        MatchResultRaw {
+            score: self.score.clone(),
+            position_data: self.position_data.clone(),
+            recording_artifacts: self.recording_artifacts.clone(),
+            left_team_players: self.left_team_players.clone(),
+            right_team_players: self.right_team_players.clone(),
+            match_time_ms: self.match_time_ms,
+            additional_time_ms: self.additional_time_ms,
+            player_stats: self.player_stats.clone(),
+            substitutions: self.substitutions.clone(),
+            chances: self.chances.clone(),
+            physical_snapshots: self.physical_snapshots.clone(),
+            penalty_shootout: self.penalty_shootout.clone(),
+            player_of_the_match_id: self.player_of_the_match_id,
+            starting_home_tactic: self.starting_home_tactic,
+            starting_away_tactic: self.starting_away_tactic,
+            final_home_tactic: self.final_home_tactic,
+            final_away_tactic: self.final_away_tactic,
+            shape_change_minute: self.shape_change_minute,
+            tally: self.tally.clone(),
+            weather: self.weather,
+            pitch: self.pitch,
+            standard_of_football: self.standard_of_football,
+            penalty_saves: self.penalty_saves.clone(),
+            penalty_misses: self.penalty_misses.clone(),
+        }
+    }
+}
+
+impl MatchResultRaw {
+    pub fn with_match_time(match_time_ms: u64) -> Self {
+        MatchResultRaw {
+            score: None,
+            position_data: ResultMatchPositionData::new(),
+            recording_artifacts: None,
+            left_team_players: FieldSquad::new(),
+            right_team_players: FieldSquad::new(),
+            match_time_ms,
+            additional_time_ms: 0,
+            player_stats: HashMap::new(),
+            substitutions: Vec::new(),
+            chances: Vec::new(),
+            physical_snapshots: HashMap::new(),
+            penalty_shootout: Vec::new(),
+            player_of_the_match_id: None,
+            starting_home_tactic: None,
+            starting_away_tactic: None,
+            final_home_tactic: None,
+            final_away_tactic: None,
+            shape_change_minute: None,
+            tally: MatchTally::default(),
+            weather: Weather::default(),
+            pitch: Pitch::default(),
+            standard_of_football: MatchStandard::CALIBRATION,
+            penalty_saves: Vec::new(),
+            penalty_misses: Vec::new(),
+        }
+    }
+
+    pub fn copy_without_data_positions(&self) -> Self {
+        MatchResultRaw {
+            score: self.score.clone(),
+            position_data: ResultMatchPositionData::new(),
+            recording_artifacts: None,
+            left_team_players: self.left_team_players.clone(),
+            right_team_players: self.right_team_players.clone(),
+            match_time_ms: self.match_time_ms,
+            additional_time_ms: self.additional_time_ms,
+            player_stats: self.player_stats.clone(),
+            substitutions: self.substitutions.clone(),
+            chances: self.chances.clone(),
+            physical_snapshots: self.physical_snapshots.clone(),
+            penalty_shootout: self.penalty_shootout.clone(),
+            player_of_the_match_id: self.player_of_the_match_id,
+            starting_home_tactic: self.starting_home_tactic,
+            starting_away_tactic: self.starting_away_tactic,
+            final_home_tactic: self.final_home_tactic,
+            final_away_tactic: self.final_away_tactic,
+            shape_change_minute: self.shape_change_minute,
+            tally: self.tally.clone(),
+            weather: self.weather,
+            pitch: self.pitch,
+            standard_of_football: self.standard_of_football,
+            penalty_saves: self.penalty_saves.clone(),
+            penalty_misses: self.penalty_misses.clone(),
+        }
+    }
+
+    /// Spot-kicks this keeper kept out, in play and in a shoot-out.
+    pub fn penalties_saved_by(&self, keeper_id: u32) -> u8 {
+        let in_play = self.penalty_saves.iter().filter(|&&k| k == keeper_id).count();
+        let shootout = self
+            .penalty_shootout
+            .iter()
+            .filter(|k| !k.scored && k.goalkeeper_id == Some(keeper_id))
+            .count();
+        (in_play + shootout).min(u8::MAX as usize) as u8
+    }
+
+    /// Spot-kicks this taker failed to score, in play and in a shoot-out.
+    pub fn penalties_missed_by(&self, taker_id: u32) -> u8 {
+        let in_play = self.penalty_misses.iter().filter(|&&t| t == taker_id).count();
+        let shootout = self
+            .penalty_shootout
+            .iter()
+            .filter(|k| !k.scored && k.taker_id == taker_id)
+            .count();
+        (in_play + shootout).min(u8::MAX as usize) as u8
+    }
+
+    pub fn write_team_players(
+        &mut self,
+        home_team_players: &FieldSquad,
+        away_team_players: &FieldSquad,
+    ) {
+        self.left_team_players = home_team_players.clone();
+        self.right_team_players = away_team_players.clone();
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FieldSquad {
+    pub team_id: u32,
+    pub main: Vec<u32>,
+    pub substitutes: Vec<u32>,
+    pub substitutes_used: Vec<u32>,
+    /// Important omissions surfaced at squad-selection time, threaded
+    /// through the match engine so the post-match dispatcher can call
+    /// `Player::on_match_dropped_with_context` with the right
+    /// explanation. Empty when nothing notable happened.
+    pub selection_omissions: Vec<OmittedPlayer>,
+    /// Own-roster players who were fit and named nowhere. The post-match
+    /// dispatcher books the overlooked match against each of them without
+    /// narrating it — see `Player::on_match_overlooked`.
+    #[serde(default)]
+    pub overlooked: Vec<u32>,
+    /// Slot each starter was assigned at kickoff. Drives the post-
+    /// match coach-memory observation's `role_fit` reading so a
+    /// player pressed into an emergency role (e.g. a midfielder
+    /// starting at fullback) registers as an out-of-position
+    /// appearance instead of a natural-slot start. Empty for
+    /// FieldSquads built outside the squad selector flow (tests,
+    /// dev_match harness) — the dispatcher falls back to assuming
+    /// a natural-role start in that case.
+    #[serde(default)]
+    pub starter_slots: Vec<(u32, PlayerPositionType)>,
+}
+
+impl Default for FieldSquad {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FieldSquad {
+    pub fn new() -> Self {
+        FieldSquad {
+            team_id: 0,
+            main: Vec::new(),
+            substitutes: Vec::new(),
+            substitutes_used: Vec::new(),
+            selection_omissions: Vec::new(),
+            overlooked: Vec::new(),
+            starter_slots: Vec::new(),
+        }
+    }
+
+    pub fn from_team(squad: &MatchSquad) -> Self {
+        FieldSquad {
+            team_id: squad.team_id,
+            main: squad.main_squad.iter().map(|p| p.id).collect(),
+            substitutes: squad.substitutes.iter().map(|p| p.id).collect(),
+            substitutes_used: Vec::new(),
+            selection_omissions: squad.selection_omissions.clone(),
+            overlooked: squad.overlooked.clone(),
+            starter_slots: squad
+                .main_squad
+                .iter()
+                .map(|p| (p.id, p.tactical_position.current_position))
+                .collect(),
+        }
+    }
+
+    pub fn mark_substitute_used(&mut self, player_id: u32) {
+        if self.substitutes.contains(&player_id) && !self.substitutes_used.contains(&player_id) {
+            self.substitutes_used.push(player_id);
+        }
+    }
+
+    pub fn count(&self) -> usize {
+        self.main.len() + self.substitutes.len()
+    }
+
+    /// Slot the starter played at kickoff, or `None` if the
+    /// `starter_slots` map was not populated (legacy paths) or the
+    /// player wasn't in the starting eleven.
+    pub fn starter_slot(&self, player_id: u32) -> Option<PlayerPositionType> {
+        self.starter_slots
+            .iter()
+            .find(|(id, _)| *id == player_id)
+            .map(|(_, slot)| *slot)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MatchResult {
+    pub id: String,
+    pub league_id: u32,
+    pub league_slug: String,
+    pub home_team_id: u32,
+    pub away_team_id: u32,
+    pub details: Option<MatchResultRaw>,
+    pub score: Score,
+    pub friendly: bool,
+}
+
+impl MatchResult {
+    pub fn copy_without_data_positions(&self) -> Self {
+        MatchResult {
+            id: String::from(&self.id),
+            league_id: self.league_id,
+            league_slug: String::from(&self.league_slug),
+            home_team_id: self.home_team_id,
+            away_team_id: self.away_team_id,
+            details: self
+                .details
+                .as_ref()
+                .map(|details| details.copy_without_data_positions()),
+            score: self.score.clone(),
+            friendly: self.friendly,
+        }
+    }
+}
+
+impl From<&LeagueMatch> for MatchResult {
+    fn from(m: &LeagueMatch) -> Self {
+        MatchResult {
+            id: m.id.clone(),
+            league_id: m.league_id,
+            league_slug: m.league_slug.clone(),
+            home_team_id: m.home_team_id,
+            away_team_id: m.away_team_id,
+            score: Score::new(m.home_team_id, m.away_team_id),
+            details: None,
+            friendly: false,
+        }
+    }
+}
+
+impl PartialEq for MatchResult {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn kick(goalkeeper_id: Option<u32>, scored: bool) -> PenaltyShootoutKick {
+        PenaltyShootoutKick {
+            team_id: 1,
+            taker_id: 9,
+            goalkeeper_id,
+            round: 1,
+            scored,
+            sudden_death: false,
+        }
+    }
+
+    #[test]
+    fn a_keeper_is_credited_with_every_spot_kick_he_kept_out() {
+        let mut result = MatchResultRaw::with_match_time(90 * 60 * 1000);
+        result.penalty_saves = vec![1, 2, 1];
+        result.penalty_shootout = vec![kick(Some(1), false), kick(Some(1), true), kick(Some(2), false)];
+        assert_eq!(result.penalties_saved_by(1), 3);
+        assert_eq!(result.penalties_saved_by(2), 2);
+        assert_eq!(result.penalties_saved_by(3), 0);
+    }
+
+    #[test]
+    fn a_taker_is_charged_with_every_spot_kick_he_failed_to_score() {
+        let mut result = MatchResultRaw::with_match_time(90 * 60 * 1000);
+        result.penalty_misses = vec![9, 7];
+        result.penalty_shootout = vec![kick(Some(1), false), kick(Some(1), true)];
+        assert_eq!(result.penalties_missed_by(9), 2);
+        assert_eq!(result.penalties_missed_by(7), 1);
+        assert_eq!(result.penalties_missed_by(3), 0);
+    }
+}

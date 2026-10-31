@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tactica FC · Pitch action preview</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import React, { useState } from 'react';
+      import { createRoot } from 'react-dom/client';
+      import { Pitch2D } from '../src/ui/Pitch2D';
+      import '../src/styles.css';
+
+      const players = Array.from({ length: 22 }, (_, i) => {
+        const team = i < 11 ? 0 : 1;
+        const slot = i % 11;
+        const forward = slot >= 8;
+        const x = slot === 0 ? (team === 0 ? 4 : 101) : team === 0
+          ? [22, 28, 35, 42, 52, 59, 66, 72, 78, 83][slot - 1]
+          : [83, 77, 70, 63, 53, 46, 39, 33, 27, 22][slot - 1];
+        const y = slot === 0 ? 50 : [50, 18, 38, 62, 82, 28, 50, 72, 20, 46, 74][slot];
+        return {
+          id: i + 1, team, num: slot + 1, gk: slot === 0,
+          ax: x, ay: y, dx: x, dy: y,
+          name: `${team === 0 ? 'Home' : 'Away'} ${slot === 0 ? 'GK' : `Player ${slot + 1}`}`,
+        };
+      });
+
+      const coordinates = {
+        pass: { actor: 6, target: 10, team: 0, from: [53, 28], to: [78, 46], ballFrom: [54, 29], ballTo: [79, 47], outcome: 'complete' },
+        shot: { actor: 10, target: 12, team: 0, from: [78, 46], to: [101, 50], ballFrom: [79, 47], ballTo: [101, 50], outcome: 'saved' },
+        tackle: { actor: 17, target: 10, team: 1, from: [68, 55], to: [78, 46], ballFrom: [79, 47], ballTo: [68, 55], outcome: 'won' },
+        keeper: { actor: 12, target: undefined, team: 1, from: [101, 50], to: [101, 50], ballFrom: [101, 50], ballTo: [99, 50], outcome: 'held' },
+        goal: { actor: 10, target: 12, team: 0, from: [78, 46], to: [105, 50], ballFrom: [79, 47], ballTo: [105, 50], outcome: 'goal' },
+        cross: { actor: 8, target: 12, team: 0, from: [72, 72], to: [96, 50], ballFrom: [73, 72], ballTo: [96, 50], outcome: 'claimed' },
+          longBall: { actor: 5, target: 10, team: 0, from: [42, 62], to: [78, 46], ballFrom: [43, 62], ballTo: [79, 47], outcome: 'complete' },
+      };
+      const moment = 40;
+      const frame = (mode) => {
+        const action = { moment, minute: 32, fromZone: 7, toZone: 9, fromPoss: 0, toPoss: 0, ...coordinates[mode], kind: mode === 'keeper' ? 'keeper' : mode === 'goal' ? 'shot' : mode };
+        const snap = {
+          zone: 9, poss: mode === 'tackle' || mode === 'keeper' ? 1 : 0,
+          holder: mode === 'keeper' ? 12 : mode === 'tackle' ? 17 : 10,
+          moment, shot: mode === 'goal' ? { team: 0, outcome: 'goal', zone: 9 } : null, players,
+        };
+        return { action, snap };
+      };
+
+      function Preview() {
+        const [mode, setMode] = useState('shot');
+        const current = frame(mode);
+        return React.createElement('main', { className: 'action-preview' },
+          React.createElement('h1', null, 'TACTICA FC · Match action preview'),
+          React.createElement('p', null, 'Isolated Pitch2D fixture. Each button renders an engine-shaped action sample without opening or changing a career.'),
+          React.createElement('nav', { className: 'action-preview-controls' }, ...Object.keys(coordinates).map((key) =>
+            React.createElement('button', { key, className: mode === key ? 'primary' : '', onClick: () => setMode(key) }, key))),
+          React.createElement('div', { className: 'match-stage action-preview-stage' },
+            React.createElement(Pitch2D, { snap: current.snap, me: 0, colors: ['#f4f4f4', '#161616', '#17315a', '#fff'], minute: '32:17', banner: `${mode}: ${current.action.outcome}`, bannerCls: mode === 'goal' ? 'goal' : '', stepMs: 520, action: current.action }))
+        );
+      }
+
+      createRoot(document.getElementById('root')).render(React.createElement(Preview));
+    </script>
+    <style>
+      body { margin: 0; background: #06111d; color: #edf4f7; font: 15px system-ui, sans-serif; }
+      .action-preview { max-width: 1440px; margin: 0 auto; padding: 18px; }
+      .action-preview h1 { margin: 0 0 5px; font-size: 22px; }
+      .action-preview p { margin: 0 0 12px; color: #a8bbc6; }
+      .action-preview-controls { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 12px; }
+      .action-preview-controls button { text-transform: capitalize; }
+      .action-preview-stage { width: 100%; aspect-ratio: 2.6 / 1; min-height: 300px; }
+      @media (max-width: 700px) { .action-preview { padding: 8px; } .action-preview-stage { aspect-ratio: 1.65 / 1; min-height: 280px; } }
+    </style>
+  </body>
+</html>

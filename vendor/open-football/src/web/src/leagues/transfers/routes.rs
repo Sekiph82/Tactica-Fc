@@ -1,0 +1,10 @@
+use crate::GameAppData;
+use axum::Router;
+use axum::routing::get;
+
+pub fn routes() -> Router<GameAppData> {
+    Router::new().route(
+        "/{lang}/leagues/{country_slug}/{league_slug}/transfers",
+        get(super::league_transfers_action),
+    )
+}

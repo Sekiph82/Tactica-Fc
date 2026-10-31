@@ -1,0 +1,519 @@
+//! Compiles the Bevy replay viewer to WebAssembly and stages it for embedding.
+//!
+//! Meant to be called from a `build.rs`; every entry point reports failure as a
+//! human-readable string rather than panicking, because a machine without the
+//! wasm target should still be able to build the rest of the project.
+
+use flate2::Compression;
+use flate2::write::GzEncoder;
+use std::collections::hash_map::DefaultHasher;
+use std::env;
+use std::fs;
+use std::hash::{Hash, Hasher};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+pub struct MatchViewer;
+
+impl MatchViewer {
+    pub const TARGET: &'static str = "wasm32-unknown-unknown";
+    pub const OUT_NAME: &'static str = "match_viewer";
+    /// Set to skip the (slow) wasm build and keep whatever is already staged.
+    pub const SKIP_ENV: &'static str = "OPEN_FOOTBALL_SKIP_MATCH_VIEWER";
+
+    pub fn script_file() -> String {
+        format!("{}.js.gz", Self::OUT_NAME)
+    }
+
+    pub fn wasm_file() -> String {
+        format!("{}_bg.wasm.gz", Self::OUT_NAME)
+    }
+
+    /// Tells cargo which viewer sources should trigger a rebuild.
+    pub fn watch(crate_dir: &Path) {
+        println!("cargo:rerun-if-changed={}", crate_dir.join("src").display());
+        println!(
+            "cargo:rerun-if-changed={}",
+            crate_dir.join("Cargo.toml").display()
+        );
+        // The viewer's one path dependency, and the only source outside its
+        // own directory that ends up inside the wasm. Left off this list it
+        // would go stale in exactly the way it exists to prevent: the server
+        // would rebuild against a new palette and the viewer would keep
+        // shipping the old one, and every player would change colour on the
+        // way to the pitch.
+        if let Some(workspace) = crate_dir.parent() {
+            println!(
+                "cargo:rerun-if-changed={}",
+                workspace.join("shared").join("src").display()
+            );
+        }
+        println!(
+            "cargo:rerun-if-changed={}",
+            crate_dir.join(".cargo").join("config.toml").display()
+        );
+        println!("cargo:rerun-if-env-changed={}", Self::SKIP_ENV);
+    }
+
+    pub fn skipped() -> bool {
+        env::var_os(Self::SKIP_ENV).is_some()
+    }
+
+    /// Builds the viewer and writes `match_viewer.js.gz` and
+    /// `match_viewer_bg.wasm.gz` into `assets_dir`.
+    ///
+    /// Cheap when nothing moved. The nested cargo build settles in well under a
+    /// second once its target dir is warm, but wasm-bindgen and a level-9 gzip
+    /// over ~30 MB of Bevy cost seconds every time, and the build script re-runs
+    /// for reasons that have nothing to do with the viewer — a stylesheet edit
+    /// is enough. So the compiled wasm is fingerprinted and the rest of the
+    /// pipeline is skipped whole when that fingerprint matches what is already
+    /// staged.
+    pub fn stage(crate_dir: &Path, assets_dir: &Path) -> Result<(), String> {
+        let wasm = Self::compile(crate_dir)?;
+        let fingerprint = Self::fingerprint(&wasm)?;
+        let staging = Self::staging(crate_dir, assets_dir);
+
+        if Self::staged(assets_dir) && Self::stamp(&staging).as_deref() == Some(&fingerprint) {
+            return Self::census(&staging, assets_dir);
+        }
+
+        Self::bindgen(&wasm, &staging)?;
+        Self::optimize(&staging)?;
+        Self::compress(&staging, assets_dir)?;
+        Self::stamp_write(&staging, &fingerprint)?;
+        Self::census(&staging, assets_dir)
+    }
+
+    /// Prints what the staged viewer costs a browser: its bytes, its bytes on
+    /// the wire, and its function count — the figure Safari's memory follows,
+    /// see [`Self::optimize`]. On a cache hit too, so every build that
+    /// considers the viewer says what it is shipping.
+    fn census(staging: &Path, assets_dir: &Path) -> Result<(), String> {
+        let wasm = staging.join(format!("{}_bg.wasm", Self::OUT_NAME));
+        let bytes = fs::read(&wasm)
+            .map_err(|error| format!("could not read {}: {}", wasm.display(), error))?;
+        let gzipped = fs::metadata(assets_dir.join(Self::wasm_file()))
+            .map(|meta| meta.len())
+            .map_err(|error| format!("could not read the staged wasm: {}", error))?;
+        let functions = Self::functions(&bytes)
+            .ok_or_else(|| format!("{} is not a wasm module", wasm.display()))?;
+        println!(
+            "cargo:warning=match viewer: {} bytes, {} gzipped, {} functions",
+            bytes.len(),
+            gzipped,
+            functions
+        );
+        Ok(())
+    }
+
+    /// How many function bodies the module defines: the entry count of its
+    /// code section (id 10). Imports have no body and are not counted, which
+    /// is right — an engine compiles bodies, not imports.
+    fn functions(wasm: &[u8]) -> Option<u32> {
+        // Past the magic number and the version.
+        let mut at = 8;
+        while at < wasm.len() {
+            let id = wasm[at];
+            at += 1;
+            let size = Self::leb128(wasm, &mut at)?;
+            if id == 10 {
+                return Self::leb128(wasm, &mut at);
+            }
+            at = at.checked_add(usize::try_from(size).ok()?)?;
+        }
+        Some(0)
+    }
+
+    fn leb128(bytes: &[u8], at: &mut usize) -> Option<u32> {
+        let mut value = 0u64;
+        for shift in (0..35).step_by(7) {
+            let byte = *bytes.get(*at)?;
+            *at += 1;
+            value |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return u32::try_from(value).ok();
+            }
+        }
+        None
+    }
+
+    /// Scratch space for the raw wasm-bindgen output, and the fingerprint that
+    /// decides whether any of it has to be produced again.
+    ///
+    /// Deliberately NOT `OUT_DIR`. The stamp is only worth keeping if it
+    /// outlives the thing it describes, and `OUT_DIR` moves whenever cargo
+    /// re-fingerprints the build script — a different profile, a feature
+    /// change, a bumped dependency. Under `OUT_DIR` the cache was missed on
+    /// every debug/release switch and left 42 staging directories holding 32
+    /// distinct fingerprints: ten full wasm-opt runs to arrive at bytes that
+    /// were already on disk. Rooted here it survives all of that, and CI keeps
+    /// it because `src/match/target` is already a cache mount.
+    ///
+    /// Keyed by `assets_dir` so two consumers — the server and the dev match
+    /// harness — never share a scratch directory. Their nested cargo builds are
+    /// serialised by cargo's lock on `src/match/target`; the pipeline that runs
+    /// after it is not, and interleaved wasm-bindgen output would stage a
+    /// corrupt viewer under a stamp claiming it was good.
+    fn staging(crate_dir: &Path, assets_dir: &Path) -> PathBuf {
+        let mut hasher = DefaultHasher::new();
+        assets_dir.hash(&mut hasher);
+        crate_dir
+            .join("target")
+            .join("viewer-staging")
+            .join(format!("{:x}", hasher.finish()))
+    }
+
+    /// Runs binaryen over the bindgen output, in place.
+    ///
+    /// **The pass that matters is inlining, and what it buys is not bytes.**
+    /// The module leaves LLVM with 167,840 function bodies whose median length
+    /// is 57 bytes — better than half of them fit in a cache line — because
+    /// `opt-level = "z"` is under instruction to outline rather than inline,
+    /// and fat LTO does not merge across the final link the way binaryen does.
+    /// A JavaScript engine is billed per FUNCTION at `WebAssembly.Module`
+    /// construction, not per byte: it materialises a callee and a metadata
+    /// vector for each one. V8 defers that until a function is first called and
+    /// so never pays for most of them; JavaScriptCore does it eagerly for the
+    /// whole module, which is why a module this shape opens in Chrome and
+    /// kills the tab in Safari on both macOS and iOS. Collapsing tens of
+    /// thousands of 57-byte bodies into their callers is the only lever in this
+    /// pipeline that moves that count.
+    ///
+    /// Measured on the artefact this replaced: 25,573,425 bytes to 20,815,970,
+    /// a fifth of the module, in about two minutes.
+    ///
+    /// ⚠ **The feature set has to be named.** `Bindgen` strips every custom
+    /// section, `target_features` included, so nothing in the artefact records
+    /// that `.cargo/config.toml` built it with `+simd128` — and binaryen
+    /// refuses to parse a `v128` opcode it was not told to expect. These are
+    /// the features LLVM emits for this target, not a wish list; dropping one
+    /// that is actually present fails the parse rather than degrading.
+    fn optimize(staging: &Path) -> Result<(), String> {
+        let wasm = staging.join(format!("{}_bg.wasm", Self::OUT_NAME));
+        let optimized = wasm.with_extension("opt.wasm");
+
+        wasm_opt::OptimizationOptions::new_optimize_for_size_aggressively()
+            .enable_feature(wasm_opt::Feature::Simd)
+            .enable_feature(wasm_opt::Feature::BulkMemory)
+            .enable_feature(wasm_opt::Feature::TruncSat)
+            .enable_feature(wasm_opt::Feature::SignExt)
+            .enable_feature(wasm_opt::Feature::MutableGlobals)
+            .enable_feature(wasm_opt::Feature::ReferenceTypes)
+            .enable_feature(wasm_opt::Feature::Multivalue)
+            .debug_info(false)
+            .run(&wasm, &optimized)
+            .map_err(|error| format!("wasm-opt: {}", error))?;
+
+        fs::rename(&optimized, &wasm)
+            .map_err(|error| format!("could not replace {}: {}", wasm.display(), error))
+    }
+
+    /// Content hash of the compiled wasm, used as the staging cache key.
+    fn fingerprint(wasm: &Path) -> Result<String, String> {
+        let bytes = fs::read(wasm)
+            .map_err(|error| format!("could not read {}: {}", wasm.display(), error))?;
+        let mut hasher = DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        Ok(format!("{:x}", hasher.finish()))
+    }
+
+    fn stamp_path(staging: &Path) -> PathBuf {
+        staging.join("input-fingerprint")
+    }
+
+    fn stamp(staging: &Path) -> Option<String> {
+        fs::read_to_string(Self::stamp_path(staging))
+            .ok()
+            .map(|stamp| stamp.trim().to_string())
+    }
+
+    /// Written last, so a run that dies half way through re-does the work
+    /// rather than declaring a partial staging directory good.
+    fn stamp_write(staging: &Path, fingerprint: &str) -> Result<(), String> {
+        let path = Self::stamp_path(staging);
+        fs::write(&path, fingerprint)
+            .map_err(|error| format!("could not write {}: {}", path.display(), error))
+    }
+
+    /// Creates empty stand-ins so a consumer that reaches for the staged files
+    /// unconditionally — `include_bytes!`, say — still compiles on a machine
+    /// with no wasm toolchain. [`MatchViewer::staged`] reports these as absent.
+    pub fn ensure_placeholders(assets_dir: &Path) -> Result<(), String> {
+        fs::create_dir_all(assets_dir)
+            .map_err(|error| format!("could not create {}: {}", assets_dir.display(), error))?;
+        for name in [Self::script_file(), Self::wasm_file()] {
+            let path = assets_dir.join(name);
+            if !path.exists() {
+                fs::write(&path, [])
+                    .map_err(|error| format!("could not create {}: {}", path.display(), error))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// True when a real viewer — not a placeholder — is sitting in `assets_dir`.
+    pub fn staged(assets_dir: &Path) -> bool {
+        [Self::script_file(), Self::wasm_file()]
+            .iter()
+            .all(|name| fs::metadata(assets_dir.join(name)).is_ok_and(|meta| meta.len() > 0))
+    }
+
+    /// How many bytes the staged wasm inflates to.
+    ///
+    /// Read off the gzip trailer rather than by inflating: the last four bytes
+    /// of a gzip stream are the uncompressed length, and thirty megabytes is a
+    /// long way inside the four gigabytes that field can hold. Zero when
+    /// nothing is staged.
+    ///
+    /// The match page needs it because the browser hands JavaScript the
+    /// INFLATED bytes as they arrive while `Content-Length` describes the
+    /// compressed ones — so a download bar drawn from the response's own
+    /// numbers reaches a hundred per cent about a fifth of the way through.
+    pub fn inflated_bytes(assets_dir: &Path) -> u64 {
+        let Ok(bytes) = fs::read(assets_dir.join(Self::wasm_file())) else {
+            return 0;
+        };
+        let Some(trailer) = bytes.len().checked_sub(4).map(|at| &bytes[at..]) else {
+            return 0;
+        };
+        u64::from(u32::from_le_bytes([
+            trailer[0], trailer[1], trailer[2], trailer[3],
+        ]))
+    }
+
+    /// Short content hash of the staged viewer, for cache busting. `"none"`
+    /// when nothing is staged.
+    pub fn version(assets_dir: &Path) -> String {
+        let Ok(bytes) = fs::read(assets_dir.join(Self::wasm_file())) else {
+            return "none".to_string();
+        };
+        if bytes.is_empty() {
+            return "none".to_string();
+        }
+        let mut hasher = DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        let hash = format!("{:x}", hasher.finish());
+        hash[..8.min(hash.len())].to_string()
+    }
+
+    fn compile(crate_dir: &Path) -> Result<PathBuf, String> {
+        if !crate_dir.join("Cargo.toml").exists() {
+            return Err(format!("{} is missing", crate_dir.display()));
+        }
+        if !Self::target_installed() {
+            return Err(format!(
+                "the {target} target is not installed — run `rustup target add {target}`",
+                target = Self::TARGET
+            ));
+        }
+
+        let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let mut command = Command::new(cargo);
+        command
+            .current_dir(crate_dir)
+            .args(["build", "--release", "--target", Self::TARGET]);
+
+        // A build script inherits the outer build's cargo environment whole:
+        // the outer target directory, the outer rustflags, the calling
+        // package's features, and — the one that actually bites — the host's
+        // `CARGO_CFG_*` view of the world. wgpu's build script reads
+        // `CARGO_CFG_WINDOWS` to decide whether to enable its Vulkan backend,
+        // so leaving it in place makes a WebAssembly build reach for Vulkan and
+        // fail to compile. Cargo sets the right values for the nested build
+        // itself; the job here is purely to stop the wrong ones from surviving.
+        for (key, _) in env::vars() {
+            if key.starts_with("CARGO_CFG_")
+                || key.starts_with("CARGO_FEATURE_")
+                || key.starts_with("CARGO_PKG_")
+                || key.starts_with("DEP_")
+            {
+                command.env_remove(key);
+            }
+        }
+        for leaked in [
+            "CARGO_ENCODED_RUSTFLAGS",
+            "RUSTFLAGS",
+            "CARGO_BUILD_RUSTFLAGS",
+            "CARGO_BUILD_TARGET",
+            "CARGO_BUILD_TARGET_DIR",
+            "CARGO_TARGET_DIR",
+            "CARGO_MAKEFLAGS",
+            "CARGO_MANIFEST_DIR",
+            "CARGO_MANIFEST_PATH",
+            "CARGO_MANIFEST_LINKS",
+            "RUSTC_WORKSPACE_WRAPPER",
+            "OUT_DIR",
+            "TARGET",
+            "HOST",
+            "PROFILE",
+            "DEBUG",
+            "OPT_LEVEL",
+            "NUM_JOBS",
+        ] {
+            command.env_remove(leaked);
+        }
+
+        let output = command
+            .output()
+            .map_err(|error| format!("could not run cargo: {}", error))?;
+
+        if !output.status.success() {
+            // Cargo hides a build script's own stderr, so the nested compiler
+            // errors have to be re-emitted as warnings or they vanish.
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let tail: Vec<&str> = stderr.lines().rev().take(25).collect();
+            for line in tail.into_iter().rev() {
+                println!("cargo:warning=  {}", line);
+            }
+            return Err("the viewer crate failed to compile".to_string());
+        }
+
+        let wasm = crate_dir
+            .join("target")
+            .join(Self::TARGET)
+            .join("release")
+            .join(format!("{}.wasm", Self::OUT_NAME));
+        if !wasm.exists() {
+            return Err(format!("{} was not produced", wasm.display()));
+        }
+        Ok(wasm)
+    }
+
+    fn bindgen(wasm: &Path, staging: &Path) -> Result<(), String> {
+        fs::create_dir_all(staging)
+            .map_err(|error| format!("could not create {}: {}", staging.display(), error))?;
+
+        let mut bindgen = wasm_bindgen_cli_support::Bindgen::new();
+        bindgen
+            .input_path(wasm)
+            .out_name(Self::OUT_NAME)
+            .typescript(false)
+            .debug(false)
+            .keep_debug(false)
+            .remove_name_section(true)
+            .remove_producers_section(true);
+        bindgen
+            .web(true)
+            .map_err(|error| format!("wasm-bindgen: {}", error))?;
+        bindgen
+            .generate(staging)
+            .map_err(|error| format!("wasm-bindgen: {}", error))
+    }
+
+    /// Moves the wasm-bindgen output into `assets_dir`, gzipped.
+    ///
+    /// The viewer is ~30 MB of Bevy, wgpu and naga. Storing it pre-compressed
+    /// cuts that to about a quarter both in the binary and on the wire, and the
+    /// servers pass the bytes through untouched under `Content-Encoding: gzip`
+    /// — nothing ever holds the inflated copy.
+    fn compress(staging: &Path, assets_dir: &Path) -> Result<(), String> {
+        fs::create_dir_all(assets_dir)
+            .map_err(|error| format!("could not create {}: {}", assets_dir.display(), error))?;
+
+        let staged = [Self::script_file(), Self::wasm_file()];
+
+        // Anything else in here gets embedded too, and an earlier build's
+        // uncompressed copy would double the binary for nothing. Swept rather
+        // than solved with `remove_dir_all` so the two files that belong here
+        // keep their timestamps — see `write_if_changed`.
+        Self::sweep(assets_dir, &staged);
+
+        for name in [
+            format!("{}.js", Self::OUT_NAME),
+            format!("{}_bg.wasm", Self::OUT_NAME),
+        ] {
+            let source = staging.join(&name);
+            let bytes = fs::read(&source)
+                .map_err(|error| format!("could not read {}: {}", source.display(), error))?;
+
+            let mut encoder = GzEncoder::new(Vec::new(), Compression::best());
+            encoder
+                .write_all(&bytes)
+                .and_then(|()| encoder.finish())
+                .map_err(|error| format!("could not compress {}: {}", name, error))
+                .and_then(|compressed| {
+                    Self::write_if_changed(&assets_dir.join(format!("{}.gz", name)), &compressed)
+                        .map_err(|error| format!("could not stage {}: {}", name, error))
+                })?;
+        }
+        Ok(())
+    }
+
+    /// Deletes everything in `dir` that is not one of `keep`.
+    fn sweep(dir: &Path, keep: &[String]) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if keep.iter().any(|kept| name == kept.as_str()) {
+                continue;
+            }
+            let path = entry.path();
+            let _ = if path.is_dir() {
+                fs::remove_dir_all(&path)
+            } else {
+                fs::remove_file(&path)
+            };
+        }
+    }
+
+    /// Writes only when the bytes actually differ.
+    ///
+    /// These files are embedded by `rust-embed`, which puts them in the
+    /// consuming crate's dependency list. Rewriting one with identical
+    /// contents still moves its mtime, and that alone is enough to recompile
+    /// the web crate and re-link the binary behind it — two minutes of LTO to
+    /// arrive back at the same bytes.
+    fn write_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        if fs::read(path).is_ok_and(|existing| existing == bytes) {
+            return Ok(());
+        }
+        fs::write(path, bytes)
+    }
+
+    fn target_installed() -> bool {
+        let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
+        Command::new(rustc)
+            .args(["--print", "target-libdir", "--target", Self::TARGET])
+            .output()
+            .map(|output| {
+                output.status.success()
+                    && Path::new(String::from_utf8_lossy(&output.stdout).trim()).exists()
+            })
+            .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One `() -> ()` type, two functions of it, two empty bodies.
+    const TWO_FUNCTIONS: [u8; 28] = [
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // magic, version
+        0x01, 0x04, 0x01, 0x60, 0x00, 0x00, // type section
+        0x03, 0x03, 0x02, 0x00, 0x00, // function section
+        0x0a, 0x07, 0x02, 0x02, 0x00, 0x0b, 0x02, 0x00, 0x0b, // code section
+    ];
+
+    #[test]
+    fn counts_the_bodies_in_the_code_section() {
+        assert_eq!(MatchViewer::functions(&TWO_FUNCTIONS), Some(2));
+    }
+
+    #[test]
+    fn a_module_without_code_has_no_functions() {
+        assert_eq!(MatchViewer::functions(&TWO_FUNCTIONS[..19]), Some(0));
+    }
+
+    #[test]
+    fn leb128_reads_multi_byte_counts() {
+        let mut at = 0;
+        assert_eq!(MatchViewer::leb128(&[0xac, 0x02], &mut at), Some(300));
+        assert_eq!(at, 2);
+        assert_eq!(MatchViewer::leb128(&[0x80], &mut 0), None);
+    }
+}

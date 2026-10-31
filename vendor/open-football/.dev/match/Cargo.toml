@@ -1,0 +1,71 @@
+[package]
+name = "dev_match"
+version = "0.1.0"
+edition = "2024"
+
+# Same policy as the host workspace, which this crate sits outside of.
+[lints.clippy]
+too_many_arguments = "allow"
+
+[dependencies]
+# Enable the core crate's `match-logs` feature so the dev analytic
+# harness gets per-shot / blowout diagnostics. Production runs
+# (src/web/simulator.rs) leave the feature off and the log sites
+# compile to no-ops.
+core = { path = "../../src/core", features = ["match-logs"] }
+# Same crate the server and the viewer share, so the harness's invented
+# footballers are coloured by the code the game uses rather than by a rule of
+# its own — the point of looking at them here is to see what the game draws.
+shared = { path = "../../src/shared" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+flate2 = "1"
+rayon = "1.12"
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+tower-http = { version = "0.7", features = ["cors"] }
+env_logger = "0.11"
+log = "0.4"
+rand = "0.10"
+
+# Compiles the Bevy replay viewer (../../src/match) to WebAssembly and stages
+# it into OUT_DIR, so `dev_match viewer` serves the same renderer the game does.
+[build-dependencies]
+match_viewer_build = { path = "../../src/match/builder" }
+
+# Match the optimized production profile so the bench reflects real
+# codegen. Fat LTO + a single codegen unit let the compiler inline across
+# the whole core crate (the entire AI hot path lives there). Bit-identical
+# results — Rust keeps IEEE-strict float math regardless of inlining. NB:
+# deliberately NOT `panic = "abort"` — the world sim relies on rayon's
+# per-continent catch_unwind isolation.
+[profile.release]
+lto = true
+codegen-units = 1
+
+# Optimized build that keeps full debug info + symbols so samply can
+# resolve match-engine stacks (same pattern as `.dev/simulate`):
+#   cargo build --profile profiling
+#   samply record --save-only -o prof.json.gz -r 4000 \
+#       ./target/profiling/dev_match bench 10 14
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
+
+# Low-inlining diagnostic build: same optimization level but no LTO and
+# many codegen units, so allocation backtraces keep the real call-site
+# frames instead of collapsing into play_with_config. Timing from this
+# profile is NOT comparable to release/profiling.
+[profile.diag]
+inherits = "release"
+lto = false
+codegen-units = 16
+debug = true
+strip = false
+
+[features]
+# Wraps the global allocator in an alloc/byte counter and makes `bench`
+# print allocation totals per match. Off by default — the counter's two
+# relaxed atomics per alloc would pollute the timing benchmark.
+alloc-count = []

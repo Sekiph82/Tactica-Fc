@@ -1,0 +1,1211 @@
+//! Set-piece intelligence: taker selection, penalty conversion model,
+//! free-kick shot/cross/short choice, wall sizing/blocking.
+//!
+//! All functions here are pure (no RNG, no mutation). Callers fold the
+//! returned probabilities/scores into their own random rolls. Skill
+//! attributes are the 0–20 scale exposed by `PlayerSkills` / `PersonAttributes`.
+
+use crate::r#match::engine::environment::{MatchEnvironment, Pitch, Weather};
+use std::cmp::Ordering;
+use std::env::var;
+use std::sync::OnceLock;
+
+/// Distance band of a direct free kick from goal, in field units (where
+/// 1u = 0.125 m). A direct free kick is never inside the area, so the
+/// nearest band starts at its edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreeKickBand {
+    /// Up to 160u (20 m) — the edge of the area and the D.
+    Close,
+    /// 160–200u (20–25 m) — the specialist's range.
+    Mid,
+    /// 200–256u (25–32 m) — a shot for the brave, usually a delivery.
+    Long,
+    /// Beyond 256u — too far to shoot, recycle or long delivery.
+    Far,
+}
+
+impl FreeKickBand {
+    pub fn from_distance(distance_u: f32) -> Self {
+        if distance_u <= 160.0 {
+            FreeKickBand::Close
+        } else if distance_u <= 200.0 {
+            FreeKickBand::Mid
+        } else if distance_u <= 256.0 {
+            FreeKickBand::Long
+        } else {
+            FreeKickBand::Far
+        }
+    }
+}
+
+/// What the FK taker chooses to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreeKickChoice {
+    /// Direct shot at goal.
+    DirectShot,
+    /// Whipped delivery to far/near post.
+    BoxDelivery,
+    /// Short layoff / pass to a teammate.
+    ShortRoutine,
+    /// Recycle to a deeper teammate (hold possession).
+    Recycle,
+}
+
+/// Taker scores: numeric ranking, no RNG. Caller picks max.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TakerScore {
+    pub player_id: u32,
+    pub score: f32,
+}
+
+/// Score for picking a penalty taker. Higher = better.
+///
+/// `penalty_taking*0.38 + finishing*0.18 + composure*0.18 + pressure_attr*0.14
+/// + technique*0.07 + confidence*0.05`
+///
+/// All skill inputs in 0–20 scale; `confidence_state` in -1..+1.
+pub fn score_penalty_taker(
+    penalty_taking_0_20: f32,
+    finishing_0_20: f32,
+    composure_0_20: f32,
+    pressure_attr_0_20: f32,
+    technique_0_20: f32,
+    confidence_state: f32,
+) -> f32 {
+    let pt = (penalty_taking_0_20 / 20.0).clamp(0.0, 1.0);
+    let fin = (finishing_0_20 / 20.0).clamp(0.0, 1.0);
+    let comp = (composure_0_20 / 20.0).clamp(0.0, 1.0);
+    let pres = (pressure_attr_0_20 / 20.0).clamp(0.0, 1.0);
+    let tech = (technique_0_20 / 20.0).clamp(0.0, 1.0);
+    let conf = ((confidence_state + 1.0) / 2.0).clamp(0.0, 1.0);
+    pt * 0.38 + fin * 0.18 + comp * 0.18 + pres * 0.14 + tech * 0.07 + conf * 0.05
+}
+
+/// Score for picking a direct free-kick taker. Higher = better.
+///
+/// `free_kicks*0.34 + technique*0.18 + long_shots*0.12 + crossing*0.12
+/// + vision*0.10 + composure*0.08 + pressure*0.06`.
+pub fn score_free_kick_taker(
+    free_kicks_0_20: f32,
+    technique_0_20: f32,
+    long_shots_0_20: f32,
+    crossing_0_20: f32,
+    vision_0_20: f32,
+    composure_0_20: f32,
+    pressure_attr_0_20: f32,
+) -> f32 {
+    let n = |x: f32| (x / 20.0).clamp(0.0, 1.0);
+    n(free_kicks_0_20) * 0.34
+        + n(technique_0_20) * 0.18
+        + n(long_shots_0_20) * 0.12
+        + n(crossing_0_20) * 0.12
+        + n(vision_0_20) * 0.10
+        + n(composure_0_20) * 0.08
+        + n(pressure_attr_0_20) * 0.06
+}
+
+/// Population mean of `skill_composites::penalty_execution` among the
+/// players actually *selected* as penalty takers by
+/// [`score_penalty_taker`]. Same role as [`CORNER_DELIVERY_REFERENCE`]:
+/// the penalty xG scale is centred on it so reading the taker's own
+/// composite redistributes conversion between good and bad takers
+/// instead of moving the league-wide penalty conversion rate (real:
+/// 70-82%).
+///
+/// Measured at 0.669, one sample per awarded penalty (`dev_match stats`,
+/// SET PIECES block). Penalties are rare enough that this needs a long
+/// run to settle — 59 samples over 250 matches.
+pub const PENALTY_EXECUTION_REFERENCE: f32 = 0.669;
+
+/// Score for picking a corner taker.
+///
+/// `corners*0.45 + crossing*0.30 + technique*0.15 + vision*0.10`.
+pub fn score_corner_taker(
+    corners_0_20: f32,
+    crossing_0_20: f32,
+    technique_0_20: f32,
+    vision_0_20: f32,
+) -> f32 {
+    let n = |x: f32| (x / 20.0).clamp(0.0, 1.0);
+    n(corners_0_20) * 0.45
+        + n(crossing_0_20) * 0.30
+        + n(technique_0_20) * 0.15
+        + n(vision_0_20) * 0.10
+}
+
+/// Penalty conversion probability.
+///
+/// Base 0.76 ± taker/keeper skill deltas, ± pressure. Clamped to 0.58–0.90
+/// per spec (real-world penalties: 70–82% goals; 10–18% saves; 7–14% off
+/// target — this returns *goal* probability, callers split off-target/save).
+///
+/// Inputs are scores already on 0..1 scale (use `score_penalty_taker` and
+/// `score_keeper_save` to compute them).
+pub fn penalty_conversion_prob(
+    taker_score: f32,
+    keeper_score: f32,
+    match_pressure_0_1: f32,
+    is_shootout: bool,
+) -> f32 {
+    let base = 0.76;
+    // The 0.5-centered baseline — taker_score above 0.5 boosts conversion,
+    // keeper_score above 0.5 reduces it.
+    let taker_delta = (taker_score - 0.5) * 2.0; // -1..+1
+    let keeper_delta = (keeper_score - 0.5) * 2.0;
+    let pressure = match_pressure_0_1.clamp(0.0, 1.0);
+    let shootout_pressure = if is_shootout { 1.0 } else { 0.0 };
+
+    let raw = base + taker_delta * 0.16
+        - keeper_delta * 0.10
+        - pressure * 0.04
+        - shootout_pressure * 0.03;
+    raw.clamp(0.58, 0.90)
+}
+
+/// Goalkeeper save score (0..1).
+///
+/// `reflexes*0.34 + agility*0.22 + handling*0.14 + anticipation*0.12
+/// + pressure*0.10 + concentration*0.08`. All 0–20 inputs.
+pub fn score_keeper_save(
+    reflexes_0_20: f32,
+    agility_0_20: f32,
+    handling_0_20: f32,
+    anticipation_0_20: f32,
+    pressure_attr_0_20: f32,
+    concentration_0_20: f32,
+) -> f32 {
+    let n = |x: f32| (x / 20.0).clamp(0.0, 1.0);
+    n(reflexes_0_20) * 0.34
+        + n(agility_0_20) * 0.22
+        + n(handling_0_20) * 0.14
+        + n(anticipation_0_20) * 0.12
+        + n(pressure_attr_0_20) * 0.10
+        + n(concentration_0_20) * 0.08
+}
+
+/// Wall size for a direct free kick. Increases close-in, drops at wide
+/// angles (caller passes `is_wide_angle=true` if y-offset/distance is high).
+///
+/// Banded sizing per spec:
+///   close (65–90u):  5–6  (centred), 4–5 wide
+///   mid   (90–130u): 4–5,  3–4 wide
+///   long  (130–180u): 3–4, 2–3 wide
+///   far   (>180u):    2 (token wall)
+pub fn wall_size_for(band: FreeKickBand, is_wide_angle: bool) -> u8 {
+    let base: u8 = match band {
+        FreeKickBand::Close => 6,
+        FreeKickBand::Mid => 5,
+        FreeKickBand::Long => 4,
+        FreeKickBand::Far => 2,
+    };
+    let adj = if is_wide_angle && band != FreeKickBand::Far {
+        base.saturating_sub(1)
+    } else {
+        base
+    };
+    adj.max(2)
+}
+
+/// An ordinary player's attribute read against the standard of his match:
+/// where the wall's skill terms are centred.
+const ORDINARY: f32 = 0.65;
+
+/// Probability that the wall blocks/deflects a direct free-kick shot.
+///
+/// A wall and a taker of the match's own standard stop a little over one
+/// direct free kick in five, more from the edge of the area and fewer from
+/// range; the wall's positioning and bravery and the taker's error move it
+/// either side of that. Every skill input is 0..1 and read against the
+/// standard of the match.
+pub fn wall_block_prob(
+    wall_positioning_0_1: f32,
+    wall_bravery_0_1: f32,
+    taker_error_0_1: f32,
+    band: FreeKickBand,
+) -> f32 {
+    let base = match band {
+        FreeKickBand::Close => 0.26,
+        FreeKickBand::Mid => 0.22,
+        FreeKickBand::Long => 0.16,
+        FreeKickBand::Far => 0.06,
+    };
+    let edge = (wall_positioning_0_1.clamp(0.0, 1.0) - ORDINARY) * 0.20
+        + (wall_bravery_0_1.clamp(0.0, 1.0) - ORDINARY) * 0.12
+        + (taker_error_0_1.clamp(0.0, 1.0) - (1.0 - ORDINARY)) * 0.24;
+    (base + edge).clamp(0.04, 0.34)
+}
+
+/// Score a free-kick choice for the given context. Returns weighted scores
+/// for each option; caller normalises to a probability distribution and
+/// rolls. Pure function — same inputs → same outputs.
+#[derive(Debug, Clone, Copy)]
+pub struct FreeKickChoiceScores {
+    pub direct_shot: f32,
+    pub box_delivery: f32,
+    pub short_routine: f32,
+    pub recycle: f32,
+}
+
+impl FreeKickChoiceScores {
+    /// Largest-score winner. Ties broken in priority order
+    /// DirectShot > BoxDelivery > ShortRoutine > Recycle.
+    pub fn winner(&self) -> FreeKickChoice {
+        let mut best = (FreeKickChoice::DirectShot, self.direct_shot);
+        if self.box_delivery > best.1 {
+            best = (FreeKickChoice::BoxDelivery, self.box_delivery);
+        }
+        if self.short_routine > best.1 {
+            best = (FreeKickChoice::ShortRoutine, self.short_routine);
+        }
+        if self.recycle > best.1 {
+            best = (FreeKickChoice::Recycle, self.recycle);
+        }
+        best.0
+    }
+}
+
+/// Goal-mouth angles, in radians, between which a direct shot goes from
+/// never to the first thing the taker thinks of: 12° is 35 m out in line
+/// with the goal, 22° the D.
+const SHOT_ANGLE_NONE: f32 = 0.209;
+const SHOT_ANGLE_FULL: f32 = 0.384;
+/// …and how often he shoots from the D: the rest are worked.
+const SHOT_PEAK: f32 = 0.85;
+
+pub fn score_free_kick_choices(
+    band: FreeKickBand,
+    goal_angle: f32,
+    is_indirect: bool,
+    taker_free_kicks_0_1: f32,
+    taker_crossing_0_1: f32,
+    target_aerial_advantage_0_1: f32,
+    chasing_late: bool,
+    protecting_lead_late: bool,
+    env: &MatchEnvironment,
+) -> FreeKickChoiceScores {
+    let fk = taker_free_kicks_0_1.clamp(0.0, 1.0);
+    let crossing = taker_crossing_0_1.clamp(0.0, 1.0);
+
+    // Whether to shoot is how much of the goal he can see, which covers
+    // distance and width with one number; a good free-kick taker shoots
+    // more of them and a poor one fewer.
+    let sight =
+        ((goal_angle - SHOT_ANGLE_NONE) / (SHOT_ANGLE_FULL - SHOT_ANGLE_NONE)).clamp(0.0, 1.0);
+    let mut shot = SHOT_PEAK * sight * sight * (3.0 - 2.0 * sight) * (0.7 + 0.6 * fk);
+    // …and the rest splits by distance between a ball into the box, a
+    // short routine and keeping it.
+    let (delivery, short, recycle) = match band {
+        FreeKickBand::Close => (0.58, 0.26, 0.16),
+        FreeKickBand::Mid => (0.59, 0.29, 0.12),
+        FreeKickBand::Long => (0.57, 0.31, 0.12),
+        FreeKickBand::Far => (0.40, 0.40, 0.20),
+    };
+    let rest = (1.0 - shot).max(0.0);
+    let (mut delivery, mut short, mut recycle) = (delivery * rest, short * rest, recycle * rest);
+    // Strong crossing biases toward box delivery.
+    delivery += (crossing - 0.5).max(0.0) * 0.10;
+
+    // Aerial advantage on targets pushes toward delivery.
+    delivery += (target_aerial_advantage_0_1 - 0.5).max(0.0) * 0.20;
+    // Poor aerial targets push toward short routines.
+    if target_aerial_advantage_0_1 < 0.4 {
+        short += 0.12;
+    }
+
+    // Match state.
+    if chasing_late {
+        delivery += 0.08;
+        recycle -= 0.06;
+    }
+    if protecting_lead_late {
+        short += 0.06;
+        recycle += 0.10;
+        shot -= 0.05;
+    }
+
+    // Wind suppresses long deliveries and shifts to short.
+    if env.weather == Weather::Wind {
+        delivery -= 0.10;
+        short += 0.07;
+        shot -= 0.03;
+    }
+
+    // Heavy rain / muddy pitch makes short routines safer.
+    if env.weather == Weather::HeavyRain || env.pitch == Pitch::Muddy {
+        short += 0.05;
+        delivery -= 0.03;
+    }
+
+    // Indirect FKs cannot be shot directly at goal — applied last so any
+    // skill/state bonuses to shot are zeroed out, redistributed to delivery.
+    if is_indirect {
+        delivery += shot;
+        shot = 0.0;
+    }
+
+    // Clamp non-negative; caller normalises if needed.
+    FreeKickChoiceScores {
+        direct_shot: shot.max(0.0),
+        box_delivery: delivery.max(0.0),
+        short_routine: short.max(0.0),
+        recycle: recycle.max(0.0),
+    }
+}
+
+/// Corner routine flavour. Drives delivery target + cross trajectory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CornerRoutine {
+    /// Inswing/outswing to near-post run.
+    NearPost,
+    /// High whipped cross to penalty spot.
+    PenaltySpot,
+    /// Floated/driven cross to far post.
+    FarPost,
+    /// Short pass to a teammate near the corner flag.
+    Short,
+    /// Cutback / lay-off to the edge of the box.
+    EdgeCutback,
+}
+
+/// Throw-in routine flavour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ThrowRoutine {
+    /// Long throw delivered into the box.
+    LongBox,
+    /// Short throw to recycle possession.
+    ShortRecycle,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CornerScores {
+    pub near_post: f32,
+    pub penalty_spot: f32,
+    pub far_post: f32,
+    pub short: f32,
+    pub edge_cutback: f32,
+}
+
+impl CornerScores {
+    pub fn winner(&self) -> CornerRoutine {
+        let mut best = (CornerRoutine::PenaltySpot, self.penalty_spot);
+        let candidates = [
+            (CornerRoutine::NearPost, self.near_post),
+            (CornerRoutine::FarPost, self.far_post),
+            (CornerRoutine::Short, self.short),
+            (CornerRoutine::EdgeCutback, self.edge_cutback),
+        ];
+        for (r, s) in candidates {
+            if s > best.1 {
+                best = (r, s);
+            }
+        }
+        best.0
+    }
+
+    /// The five routines with their weights, in a fixed order so the
+    /// sampling cursor below is reproducible.
+    fn weighted(&self) -> [(CornerRoutine, f32); 5] {
+        [
+            (CornerRoutine::NearPost, self.near_post),
+            (CornerRoutine::PenaltySpot, self.penalty_spot),
+            (CornerRoutine::FarPost, self.far_post),
+            (CornerRoutine::Short, self.short),
+            (CornerRoutine::EdgeCutback, self.edge_cutback),
+        ]
+    }
+}
+
+/// **A corner routine is drawn from the five, not maximised over them.**
+///
+/// `OF_CORNER_MIX_OFF=1` restores the pre-2026-08-26 argmax exactly. The
+/// A/B control for the channel — see [`pick_corner_routine`].
+pub struct CornerRoutineMix;
+
+impl CornerRoutineMix {
+    #[inline]
+    pub fn armed() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| {
+            !var("OF_CORNER_MIX_OFF")
+                .map(|v| v != "0" && !v.is_empty())
+                .unwrap_or(false)
+        })
+    }
+}
+
+/// Score the five corner routines.
+///
+/// Inputs:
+/// - taker_corners_0_20 — taker's corners attribute
+/// - taker_crossing_0_20 — taker's crossing attribute
+/// - target_aerial_advantage_0_1 — average attacking-target aerial advantage
+///   (heading + jumping + strength avg of attackers minus defenders, normalised)
+/// - opponent_gk_aerial_score_0_1 — GK command_of_area+aerial_reach combined
+///   (0..1, higher = better at claiming crosses)
+/// - chasing_late, protecting_lead — match state
+/// - env — for wind effects
+pub fn score_corner_routines(
+    taker_corners_0_1: f32,
+    taker_crossing_0_1: f32,
+    target_aerial_advantage_0_1: f32,
+    opponent_gk_aerial_score_0_1: f32,
+    chasing_late: bool,
+    protecting_lead: bool,
+    env: &MatchEnvironment,
+) -> CornerScores {
+    let corners = taker_corners_0_1.clamp(0.0, 1.0);
+    let crossing = taker_crossing_0_1.clamp(0.0, 1.0);
+
+    // Per-spec base probabilities.
+    let mut near = 0.22_f32;
+    let mut spot = 0.32_f32;
+    let mut far = 0.22_f32;
+    let mut short = 0.14_f32;
+    let mut edge = 0.10_f32;
+
+    let elite_corners = corners >= 0.75 || crossing >= 0.75;
+    if elite_corners {
+        spot += 0.05;
+        far += 0.03;
+    }
+
+    let poor_aerial = target_aerial_advantage_0_1 < 0.40;
+    if poor_aerial {
+        short += 0.07;
+        edge += 0.05;
+        near -= 0.04;
+        spot -= 0.04;
+        far -= 0.04;
+    }
+
+    // Strong opponent GK in the air — short/edge becomes more attractive.
+    if opponent_gk_aerial_score_0_1 >= 0.75 {
+        short += 0.06;
+        edge += 0.04;
+        spot -= 0.05;
+        far -= 0.05;
+    }
+
+    if chasing_late {
+        near += 0.03;
+        spot += 0.04;
+        far += 0.01;
+        short -= 0.04;
+        edge -= 0.04;
+    }
+    if protecting_lead {
+        short += 0.06;
+        edge += 0.04;
+        spot -= 0.04;
+        far -= 0.04;
+        near -= 0.02;
+    }
+
+    if env.weather == Weather::Wind {
+        short += 0.06;
+        near += 0.06;
+        far -= 0.10;
+        spot -= 0.02;
+    }
+    if env.weather == Weather::HeavyRain {
+        short += 0.04;
+        spot -= 0.02;
+        far -= 0.02;
+    }
+
+    CornerScores {
+        near_post: near.max(0.0),
+        penalty_spot: spot.max(0.0),
+        far_post: far.max(0.0),
+        short: short.max(0.0),
+        edge_cutback: edge.max(0.0),
+    }
+}
+
+/// Pick a throw-in routine — a ball hurled into the box, or the square
+/// one that the overwhelming majority of throw-ins are.
+///
+/// # Two skill cliffs, removed
+///
+/// This was `lt >= 0.70` (long_throws 14/20) with a `lt >= 0.55` (11/20)
+/// relaxation when chasing, over a boolean "is there anybody in there".
+/// Both bars were absolute reads on the raw attribute, which is what
+/// [`crate::r#match::engine::teamplay::standard::MatchStandard`] exists
+/// to stop: the generator's mean is 8.2 at level 8 and 15.1 at level 20,
+/// so the same bar meant "nobody in this league takes long throws" at one
+/// end of the pyramid and "everybody does" at the other. And a bar is a
+/// cliff — 13.9 never threw one, 14.0 always did.
+///
+/// The reach question now belongs to
+/// [`ThrowIn::can_reach_box`](crate::r#match::engine::ball::ball::ThrowIn::can_reach_box),
+/// which asks it as geometry. What is left here is the CHOICE, and it is
+/// continuous: how much of a weapon this throw is (his range against the
+/// division), how good the target in there is, and whether the game state
+/// says throw it anyway.
+///
+/// `aerial_advantage_0_1` is the best attacking aerial composite in the
+/// box.
+pub fn pick_throw_routine(
+    long_throws_0_20: f32,
+    in_attacking_third: bool,
+    aerial_advantage_0_1: f32,
+    chasing_late: bool,
+) -> ThrowRoutine {
+    if !in_attacking_third {
+        return ThrowRoutine::ShortRecycle;
+    }
+    if !ThrowAppetite::armed() {
+        // The pre-2026-08-26 pair of cliffs, restored exactly.
+        let lt = (long_throws_0_20 / 20.0).clamp(0.0, 1.0);
+        let have_target = aerial_advantage_0_1 >= 0.55;
+        if lt >= 0.70 && have_target {
+            return ThrowRoutine::LongBox;
+        }
+        if chasing_late && lt >= 0.55 {
+            return ThrowRoutine::LongBox;
+        }
+        return ThrowRoutine::ShortRecycle;
+    }
+    let weapon = ThrowAppetite::weapon(long_throws_0_20);
+    let target = ThrowAppetite::target(aerial_advantage_0_1);
+    if weapon * target >= ThrowAppetite::bar(chasing_late) {
+        ThrowRoutine::LongBox
+    } else {
+        ThrowRoutine::ShortRecycle
+    }
+}
+
+/// The three continuous reads behind [`pick_throw_routine`]: how much of
+/// a weapon this throw is, how much of a target is standing in there, and
+/// the bar the product has to clear.
+///
+/// Kept together on a type rather than left as loose helpers because they
+/// are one model — moving any one of the three without the others changes
+/// the population rate of long throws, and the band centring is only
+/// meaningful read as a set.
+pub struct ThrowAppetite;
+
+impl ThrowAppetite {
+    /// `OF_LONG_THROW_CURVE_OFF=1` restores the two skill cliffs this
+    /// replaced — `long_throws >= 14/20` for the routine and
+    /// `>= 14/20` again for the reach — plus the boolean target test. The
+    /// A/B control for the channel, covering both this chooser and
+    /// [`ThrowIn::can_reach_box`](crate::r#match::engine::ball::ball::ThrowIn::can_reach_box).
+    #[inline]
+    pub fn armed() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| {
+            !var("OF_LONG_THROW_CURVE_OFF")
+                .map(|v| v != "0" && !v.is_empty())
+                .unwrap_or(false)
+        })
+    }
+
+    /// A throw is a weapon in proportion to how much further than an
+    /// ordinary one it travels — not a step at 14/20.
+    ///
+    /// The band is centred so the population that actually throws one is
+    /// the population that threw one under the old bar: this removes the
+    /// cliff, it does not fill the league with Rory Delaps.
+    #[inline]
+    pub fn weapon(long_throws_0_20: f32) -> f32 {
+        Self::smoothstep(0.55, 0.95, long_throws_0_20 / 20.0)
+    }
+
+    /// …and it is worth aiming at a man in proportion to how much of an
+    /// aerial threat he is.
+    #[inline]
+    pub fn target(aerial_advantage_0_1: f32) -> f32 {
+        Self::smoothstep(0.30, 0.70, aerial_advantage_0_1)
+    }
+
+    /// Chasing a game late is the classic reason to throw one into the
+    /// box you would not throw at 0-0, so it LOWERS the bar rather than
+    /// inflating the appetite: a man who cannot make the delivery still
+    /// cannot make it in the 88th minute.
+    #[inline]
+    pub fn bar(chasing_late: bool) -> f32 {
+        if chasing_late { 0.18 } else { 0.35 }
+    }
+
+    /// Hermite smoothstep between two edges; `edge0 > edge1` inverts it.
+    #[inline]
+    fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+        if (edge0 - edge1).abs() < f32::EPSILON {
+            return if x < edge0 { 0.0 } else { 1.0 };
+        }
+        let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+}
+
+/// Tracks the most-recent set-piece routines per team. Used to suppress
+/// "same exact routine twice in a row" repetition unless the previous
+/// routine produced a high-quality chance.
+#[derive(Debug, Clone, Default)]
+pub struct SetPieceHistory {
+    /// Last two corner routines for the home team (most-recent last).
+    pub home_corners: Vec<CornerRoutine>,
+    /// Last two corner routines for the away team.
+    pub away_corners: Vec<CornerRoutine>,
+    /// xG produced by each entry above (parallel index).
+    pub home_corner_xg: Vec<f32>,
+    pub away_corner_xg: Vec<f32>,
+}
+
+const ROUTINE_HISTORY_DEPTH: usize = 3;
+/// xG threshold above which a routine is deemed successful enough to
+/// repeat without penalty.
+pub const ROUTINE_REPEAT_XG_THRESHOLD: f32 = 0.10;
+
+impl SetPieceHistory {
+    pub fn record_corner(&mut self, is_home: bool, routine: CornerRoutine, xg: f32) {
+        let (rs, xs) = if is_home {
+            (&mut self.home_corners, &mut self.home_corner_xg)
+        } else {
+            (&mut self.away_corners, &mut self.away_corner_xg)
+        };
+        rs.push(routine);
+        xs.push(xg);
+        if rs.len() > ROUTINE_HISTORY_DEPTH {
+            rs.remove(0);
+            xs.remove(0);
+        }
+    }
+
+    /// Should the team be blocked from repeating the same corner routine
+    /// they just used? True when the last 2 corners were the same routine
+    /// AND neither produced a chance above the xG threshold.
+    pub fn should_block_corner_repeat(&self, is_home: bool, routine: CornerRoutine) -> bool {
+        let (rs, xs) = if is_home {
+            (&self.home_corners, &self.home_corner_xg)
+        } else {
+            (&self.away_corners, &self.away_corner_xg)
+        };
+        if rs.len() < 2 {
+            return false;
+        }
+        let n = rs.len();
+        let last_two_same = rs[n - 1] == routine && rs[n - 2] == routine;
+        if !last_two_same {
+            return false;
+        }
+        let last_was_successful =
+            xs[n - 1] >= ROUTINE_REPEAT_XG_THRESHOLD || xs[n - 2] >= ROUTINE_REPEAT_XG_THRESHOLD;
+        !last_was_successful
+    }
+}
+
+/// Pick a corner routine, blocking the recent-history repeat per
+/// `SetPieceHistory::should_block_corner_repeat`.
+///
+/// # Why this is a draw and not an argmax
+///
+/// [`score_corner_routines`] returns a **distribution** — five per-spec
+/// base probabilities (0.22 / 0.32 / 0.22 / 0.14 / 0.10) with skill and
+/// context bumps of ±0.03-0.07 laid over them. Taking the maximum of a
+/// distribution throws the distribution away: the bumps are far too
+/// small to reorder the bases, so the answer is "penalty spot" in
+/// essentially every state of the world, and the two floor routines can
+/// never be reached at all.
+///
+/// Measured over `stats 300 14 14` before this change: near 2%, spot
+/// **82%**, far 15%, short 1%, **edge 0%**. Real corners run roughly
+/// near 15-20 / spot 25-30 / far 20 / short 15-20 / edge 10, and a side
+/// that takes the same corner eighty-two times out of a hundred is not
+/// one anybody has watched. Worse, the whole model above it was inert:
+/// an elite dead-ball taker, a gale, a 3-0 lead and a keeper who
+/// commands his box all moved the scores and none of them could move the
+/// ROUTINE.
+///
+/// Sampling the vector restores the bases as the mix and lets each bump
+/// do exactly what it is sized to do — a few points of share. Same
+/// construction as [`FreeKickResolver::decide`], for the same reason,
+/// and drawn ONCE per set piece by the caller (the award), never per
+/// tick.
+///
+/// The repeat-blocker keeps its meaning: a routine that has just failed
+/// twice running is removed from the draw rather than demoted by one
+/// place.
+///
+/// `roll` is a uniform sample in `[0, 1)` — the caller's own draw, per
+/// this module's no-RNG contract.
+///
+/// [`FreeKickResolver::decide`]: crate::r#match::player::strategies::players::ops::forward_shot_decision
+pub fn pick_corner_routine(
+    scores: &CornerScores,
+    history: &SetPieceHistory,
+    is_home: bool,
+    roll: f32,
+) -> CornerRoutine {
+    if !CornerRoutineMix::armed() {
+        let winner = scores.winner();
+        if !history.should_block_corner_repeat(is_home, winner) {
+            return winner;
+        }
+        return scores
+            .weighted()
+            .iter()
+            .filter(|(r, _)| *r != winner)
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal))
+            .map(|(r, _)| *r)
+            .unwrap_or(winner);
+    }
+
+    let mut weights = scores.weighted();
+    for (routine, w) in weights.iter_mut() {
+        if history.should_block_corner_repeat(is_home, *routine) {
+            *w = 0.0;
+        }
+        *w = w.max(0.0);
+    }
+    let total: f32 = weights.iter().map(|(_, w)| *w).sum();
+    if total <= 0.0 {
+        return scores.winner();
+    }
+    // `roll` is [0, 1); pinning the top of the range off the last
+    // bucket's edge keeps the cursor inside the vector for a caller that
+    // hands over an inclusive 1.0.
+    let mut cursor = roll.clamp(0.0, 0.999_999) * total;
+    let mut last = scores.winner();
+    for (routine, w) in weights {
+        if w <= 0.0 {
+            continue;
+        }
+        last = routine;
+        cursor -= w;
+        if cursor < 0.0 {
+            return routine;
+        }
+    }
+    last
+}
+
+/// Picks an explicit taker if they are still on the field; otherwise
+/// returns the candidate with the highest score from `candidates`.
+pub fn pick_taker(
+    explicit_id: Option<u32>,
+    on_field_ids: &[u32],
+    candidates: &[TakerScore],
+) -> Option<u32> {
+    if let Some(eid) = explicit_id
+        && on_field_ids.contains(&eid)
+    {
+        return Some(eid);
+    }
+    candidates
+        .iter()
+        .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(Ordering::Equal))
+        .map(|t| t.player_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn fk_band_classification() {
+        assert_eq!(FreeKickBand::from_distance(140.0), FreeKickBand::Close);
+        assert_eq!(FreeKickBand::from_distance(180.0), FreeKickBand::Mid);
+        assert_eq!(FreeKickBand::from_distance(230.0), FreeKickBand::Long);
+        assert_eq!(FreeKickBand::from_distance(300.0), FreeKickBand::Far);
+    }
+
+    #[test]
+    fn high_skilled_penalty_taker_outscores_low() {
+        let high = score_penalty_taker(18.0, 17.0, 16.0, 15.0, 17.0, 0.3);
+        let low = score_penalty_taker(8.0, 9.0, 10.0, 8.0, 10.0, -0.2);
+        assert!(high > low);
+        assert!(high <= 1.0 && low >= 0.0);
+    }
+
+    #[test]
+    fn high_skilled_fk_taker_outscores_low() {
+        let high = score_free_kick_taker(18.0, 17.0, 16.0, 16.0, 15.0, 16.0, 14.0);
+        let low = score_free_kick_taker(8.0, 9.0, 8.0, 9.0, 10.0, 10.0, 10.0);
+        assert!(high > low);
+    }
+
+    #[test]
+    fn penalty_prob_clamped_into_band() {
+        // Even an elite taker vs a very weak keeper shouldn't break 0.90.
+        let taker = score_penalty_taker(20.0, 20.0, 20.0, 20.0, 20.0, 1.0);
+        let keeper = score_keeper_save(2.0, 2.0, 2.0, 2.0, 2.0, 2.0);
+        let p = penalty_conversion_prob(taker, keeper, 0.0, false);
+        assert!((0.58..=0.90).contains(&p));
+        assert!(p > 0.80);
+
+        // Worst case still floors at 0.58.
+        let taker_low = score_penalty_taker(2.0, 2.0, 2.0, 2.0, 2.0, -1.0);
+        let keeper_high = score_keeper_save(20.0, 20.0, 20.0, 20.0, 20.0, 20.0);
+        let p_low = penalty_conversion_prob(taker_low, keeper_high, 1.0, true);
+        assert!((0.58..=0.90).contains(&p_low));
+    }
+
+    #[test]
+    fn shootout_pressure_lowers_conversion() {
+        let taker = score_penalty_taker(15.0, 15.0, 15.0, 15.0, 15.0, 0.0);
+        let keeper = score_keeper_save(15.0, 15.0, 15.0, 15.0, 15.0, 15.0);
+        let normal = penalty_conversion_prob(taker, keeper, 0.5, false);
+        let shootout = penalty_conversion_prob(taker, keeper, 0.5, true);
+        assert!(shootout <= normal);
+    }
+
+    #[test]
+    fn wall_size_scales_with_distance() {
+        assert!(
+            wall_size_for(FreeKickBand::Close, false) >= wall_size_for(FreeKickBand::Mid, false)
+        );
+        assert!(
+            wall_size_for(FreeKickBand::Mid, false) >= wall_size_for(FreeKickBand::Long, false)
+        );
+        assert!(
+            wall_size_for(FreeKickBand::Long, false) >= wall_size_for(FreeKickBand::Far, false)
+        );
+    }
+
+    #[test]
+    fn wide_angle_reduces_wall_size_except_far() {
+        let close_centre = wall_size_for(FreeKickBand::Close, false);
+        let close_wide = wall_size_for(FreeKickBand::Close, true);
+        assert!(close_wide < close_centre);
+        // Far band already at minimum, no further reduction.
+        assert_eq!(
+            wall_size_for(FreeKickBand::Far, false),
+            wall_size_for(FreeKickBand::Far, true)
+        );
+    }
+
+    #[test]
+    fn wall_block_prob_clamped() {
+        let p_low = wall_block_prob(0.0, 0.0, 0.0, FreeKickBand::Far);
+        let p_high = wall_block_prob(1.0, 1.0, 1.0, FreeKickBand::Close);
+        assert!((0.04..=0.34).contains(&p_low));
+        assert!((0.04..=0.34).contains(&p_high));
+        assert!(p_high > p_low);
+    }
+
+    #[test]
+    fn indirect_fk_never_chooses_direct_shot() {
+        let env = MatchEnvironment::default();
+        let scores = score_free_kick_choices(
+            FreeKickBand::Close,
+            0.40,
+            true,
+            0.9,
+            0.5,
+            0.5,
+            false,
+            false,
+            &env,
+        );
+        assert_eq!(scores.direct_shot, 0.0);
+        assert_ne!(scores.winner(), FreeKickChoice::DirectShot);
+    }
+
+    #[test]
+    fn long_distance_fk_avoids_direct_shot() {
+        let env = MatchEnvironment::default();
+        let scores = score_free_kick_choices(
+            FreeKickBand::Far,
+            0.12,
+            false,
+            0.9,
+            0.7,
+            0.5,
+            false,
+            false,
+            &env,
+        );
+        assert_eq!(scores.direct_shot, 0.0);
+    }
+
+    #[test]
+    fn wind_pushes_fk_choice_toward_short() {
+        let calm = MatchEnvironment::default();
+        let windy = MatchEnvironment {
+            weather: crate::r#match::engine::environment::Weather::Wind,
+            ..Default::default()
+        };
+        let calm_scores = score_free_kick_choices(
+            FreeKickBand::Long,
+            0.22,
+            false,
+            0.7,
+            0.7,
+            0.55,
+            false,
+            false,
+            &calm,
+        );
+        let windy_scores = score_free_kick_choices(
+            FreeKickBand::Long,
+            0.22,
+            false,
+            0.7,
+            0.7,
+            0.55,
+            false,
+            false,
+            &windy,
+        );
+        assert!(windy_scores.box_delivery < calm_scores.box_delivery);
+        assert!(windy_scores.short_routine > calm_scores.short_routine);
+    }
+
+    #[test]
+    fn pick_taker_prefers_explicit_when_on_field() {
+        let candidates = vec![
+            TakerScore {
+                player_id: 1,
+                score: 0.5,
+            },
+            TakerScore {
+                player_id: 2,
+                score: 0.9,
+            },
+        ];
+        // Explicit taker on field — wins regardless of score.
+        let on_field = vec![1, 2, 3];
+        assert_eq!(pick_taker(Some(1), &on_field, &candidates), Some(1));
+        // Explicit taker off field — falls back to highest score.
+        let on_field = vec![2, 3];
+        assert_eq!(pick_taker(Some(1), &on_field, &candidates), Some(2));
+        // No explicit — highest score.
+        assert_eq!(pick_taker(None, &on_field, &candidates), Some(2));
+    }
+
+    #[test]
+    fn pick_taker_handles_empty() {
+        assert_eq!(pick_taker(None, &[1], &[]), None);
+        assert_eq!(pick_taker(Some(1), &[2], &[]), None);
+    }
+
+    #[test]
+    fn corner_short_increases_against_strong_gk() {
+        let env = MatchEnvironment::default();
+        let weak_gk = score_corner_routines(0.75, 0.75, 0.55, 0.30, false, false, &env);
+        let strong_gk = score_corner_routines(0.75, 0.75, 0.55, 0.85, false, false, &env);
+        assert!(strong_gk.short > weak_gk.short);
+        assert!(strong_gk.penalty_spot < weak_gk.penalty_spot);
+    }
+
+    #[test]
+    fn corner_short_increases_with_poor_aerial_targets() {
+        let env = MatchEnvironment::default();
+        let aerial = score_corner_routines(0.75, 0.75, 0.85, 0.50, false, false, &env);
+        let no_aerial = score_corner_routines(0.75, 0.75, 0.20, 0.50, false, false, &env);
+        assert!(no_aerial.short > aerial.short);
+    }
+
+    #[test]
+    fn corner_wind_pushes_short_and_near_post() {
+        let calm = MatchEnvironment::default();
+        let windy = MatchEnvironment {
+            weather: crate::r#match::engine::environment::Weather::Wind,
+            ..Default::default()
+        };
+        let calm_scores = score_corner_routines(0.75, 0.75, 0.55, 0.50, false, false, &calm);
+        let wind_scores = score_corner_routines(0.75, 0.75, 0.55, 0.50, false, false, &windy);
+        assert!(wind_scores.short > calm_scores.short);
+        assert!(wind_scores.near_post > calm_scores.near_post);
+        assert!(wind_scores.far_post < calm_scores.far_post);
+    }
+
+    #[test]
+    fn corner_protecting_lead_pushes_short_recycle() {
+        let env = MatchEnvironment::default();
+        let neutral = score_corner_routines(0.75, 0.75, 0.55, 0.50, false, false, &env);
+        let protecting = score_corner_routines(0.75, 0.75, 0.55, 0.50, false, true, &env);
+        assert!(protecting.short > neutral.short);
+        assert!(protecting.penalty_spot < neutral.penalty_spot);
+    }
+
+    #[test]
+    fn long_throw_needs_the_third_the_arm_and_a_target() {
+        // Off the attacking third — never long, whoever is throwing.
+        assert_eq!(
+            pick_throw_routine(20.0, false, 0.80, true),
+            ThrowRoutine::ShortRecycle
+        );
+        // A specialist with a real target in there throws it.
+        assert_eq!(
+            pick_throw_routine(18.0, true, 0.70, false),
+            ThrowRoutine::LongBox
+        );
+        // Same arm, nobody worth aiming at — recycle.
+        assert_eq!(
+            pick_throw_routine(18.0, true, 0.20, false),
+            ThrowRoutine::ShortRecycle
+        );
+        // Ordinary thrower, good target — recycle.
+        assert_eq!(
+            pick_throw_routine(8.0, true, 0.70, false),
+            ThrowRoutine::ShortRecycle
+        );
+    }
+
+    /// The point of removing the bar: the SAME arm answers differently
+    /// depending on what is in the box. A cliff on the raw attribute
+    /// cannot.
+    #[test]
+    fn the_same_arm_reads_the_target() {
+        // 14.5/20 is inside the band, so the target decides it.
+        assert_eq!(
+            pick_throw_routine(14.5, true, 0.75, false),
+            ThrowRoutine::LongBox,
+            "elite target"
+        );
+        assert_eq!(
+            pick_throw_routine(14.5, true, 0.50, false),
+            ThrowRoutine::ShortRecycle,
+            "ordinary target"
+        );
+        // 14.0 is just under the bar.
+        assert_eq!(
+            pick_throw_routine(14.0, true, 0.75, false),
+            ThrowRoutine::ShortRecycle
+        );
+    }
+
+    /// Monotone in the attribute: more arm is never fewer long throws.
+    /// (A cliff satisfies this too — it is the floor, not the point.)
+    #[test]
+    fn long_throw_appetite_is_monotone_in_the_attribute() {
+        let mut seen_long = false;
+        for lt in 1..=40 {
+            let long =
+                pick_throw_routine(lt as f32 * 0.5, true, 0.70, false) == ThrowRoutine::LongBox;
+            if seen_long {
+                assert!(
+                    long,
+                    "answer flipped back at long_throws {}",
+                    lt as f32 * 0.5
+                );
+            }
+            seen_long |= long;
+        }
+        assert!(seen_long, "no arm in the range ever throws one");
+    }
+
+    /// Chasing a game late is a REASON to throw one, not a substitute
+    /// for being able to.
+    #[test]
+    fn chasing_late_lowers_the_bar_without_inventing_an_arm() {
+        assert_eq!(
+            pick_throw_routine(14.0, true, 0.60, false),
+            ThrowRoutine::ShortRecycle
+        );
+        assert_eq!(
+            pick_throw_routine(14.0, true, 0.60, true),
+            ThrowRoutine::LongBox
+        );
+        // A man who cannot throw it that far still cannot when chasing.
+        assert_eq!(
+            pick_throw_routine(3.0, true, 0.60, true),
+            ThrowRoutine::ShortRecycle
+        );
+    }
+
+    #[test]
+    fn corner_repeat_blocked_after_two_failures() {
+        let mut hist = SetPieceHistory::default();
+        // Two NearPost corners with low xG.
+        hist.record_corner(true, CornerRoutine::NearPost, 0.04);
+        hist.record_corner(true, CornerRoutine::NearPost, 0.05);
+        assert!(hist.should_block_corner_repeat(true, CornerRoutine::NearPost));
+        assert!(!hist.should_block_corner_repeat(true, CornerRoutine::PenaltySpot));
+    }
+
+    #[test]
+    fn corner_repeat_allowed_after_success() {
+        let mut hist = SetPieceHistory::default();
+        // Successful first corner — repeat allowed.
+        hist.record_corner(false, CornerRoutine::PenaltySpot, 0.18);
+        hist.record_corner(false, CornerRoutine::PenaltySpot, 0.06);
+        assert!(!hist.should_block_corner_repeat(false, CornerRoutine::PenaltySpot));
+    }
+
+    #[test]
+    fn corner_repeat_history_per_team() {
+        let mut hist = SetPieceHistory::default();
+        hist.record_corner(true, CornerRoutine::Short, 0.02);
+        hist.record_corner(true, CornerRoutine::Short, 0.02);
+        // Home is blocked, away is unaffected.
+        assert!(hist.should_block_corner_repeat(true, CornerRoutine::Short));
+        assert!(!hist.should_block_corner_repeat(false, CornerRoutine::Short));
+    }
+
+    fn spread_scores() -> CornerScores {
+        CornerScores {
+            near_post: 0.20,
+            penalty_spot: 0.50,
+            far_post: 0.18,
+            short: 0.10,
+            edge_cutback: 0.05,
+        }
+    }
+
+    #[test]
+    fn pick_corner_routine_never_returns_a_blocked_routine() {
+        let mut hist = SetPieceHistory::default();
+        hist.record_corner(true, CornerRoutine::PenaltySpot, 0.03);
+        hist.record_corner(true, CornerRoutine::PenaltySpot, 0.04);
+        let scores = spread_scores();
+        // Whatever the draw, the routine that just failed twice running
+        // is out of the hat — including at the roll that would otherwise
+        // land squarely inside its (largest) bucket.
+        for i in 0..200 {
+            let roll = i as f32 / 200.0;
+            assert_ne!(
+                pick_corner_routine(&scores, &hist, true, roll),
+                CornerRoutine::PenaltySpot,
+                "roll={roll}"
+            );
+        }
+        // …and the away side is unaffected by the home side's history.
+        assert!((0..200).any(
+            |i| pick_corner_routine(&scores, &hist, false, i as f32 / 200.0)
+                == CornerRoutine::PenaltySpot
+        ));
+    }
+
+    /// The point of the change: every routine with weight must be
+    /// REACHABLE. Under the old argmax the two smallest buckets could
+    /// not be selected in any state of the world.
+    #[test]
+    fn every_scored_routine_is_reachable() {
+        let hist = SetPieceHistory::default();
+        let scores = spread_scores();
+        let mut seen = HashSet::new();
+        for i in 0..1000 {
+            seen.insert(pick_corner_routine(&scores, &hist, true, i as f32 / 1000.0));
+        }
+        assert_eq!(seen.len(), 5, "unreachable routines: {seen:?}");
+    }
+
+    /// …and reachable in proportion to its score, so the skill and
+    /// context bumps in `score_corner_routines` move share rather than
+    /// being rounded away.
+    #[test]
+    fn routine_share_tracks_its_score() {
+        let hist = SetPieceHistory::default();
+        let scores = spread_scores();
+        let total = 0.20 + 0.50 + 0.18 + 0.10 + 0.05;
+        let n = 10_000;
+        let spot = (0..n)
+            .filter(|i| {
+                pick_corner_routine(&scores, &hist, true, *i as f32 / n as f32)
+                    == CornerRoutine::PenaltySpot
+            })
+            .count() as f32
+            / n as f32;
+        assert!(
+            (spot - 0.50 / total).abs() < 0.01,
+            "spot share {spot} vs expected {}",
+            0.50 / total
+        );
+    }
+}

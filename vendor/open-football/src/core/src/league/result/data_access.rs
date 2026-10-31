@@ -1,0 +1,797 @@
+//! Data-access abstraction for `LeagueResult::process` and its
+//! per-match-event fan-out.
+//!
+//! Two callers need to drive the same per-match stat / history / morale
+//! pipeline:
+//!
+//! * **Domestic league matches** (`LeagueResult::process_local`). Each
+//!   country processes its own matches inside `Country::simulate` —
+//!   parallel across countries via `countries.par_iter_mut()` — so the
+//!   caller only has `&mut Country` and a deferred-ops queue. All
+//!   ID-based lookups (team_id, player_id, …) resolve to entities in
+//!   this country.
+//! * **Continental cup matches** (`LeagueResult::process_cup_match`).
+//!   Champions League and friends pit teams from different countries,
+//!   so the caller still has `&mut SimulatorData` and lookups can hit
+//!   any country.
+//!
+//! Rather than maintain two divergent copies of the 1.7k-line
+//! `process_match_events`, we generic-ize it over a `LeagueProcessAccess`
+//! trait. Both `SimulatorData` and a new `CountryProcessCtx<'a>`
+//! implement the trait, so the same function body services both
+//! callers — `SimulatorData` keeps the global index-backed accessors,
+//! and `CountryProcessCtx` scans within its single country (cheap at
+//! the country sizes we have) and routes the rare cross-country writes
+//! into a `DeferredGlobalOps` queue that the simulator drains serially
+//! after the parallel pass.
+
+use crate::Staff;
+use crate::club::board::manager::ManagerMarketTick;
+use crate::country::result::transfers::GlobalFreeAgentSummary;
+use crate::league::League;
+use crate::league::LeagueCollection;
+use crate::shared::indexes::SimulatorDataIndexes;
+use crate::transfers::MarketMap;
+use crate::transfers::TransferListing;
+use crate::transfers::market::knowledge::PlacementReachIndex;
+use crate::transfers::pipeline::PlayerSummary;
+use crate::transfers::pipeline::approach::ApproachPass;
+use crate::world::CountryInfo;
+use crate::world::SimulatorData;
+use crate::{Club, Country, Player, Team};
+use chrono::NaiveDateTime;
+use rustc_hash::FxHashMap;
+use std::collections::HashMap;
+
+/// Read/mutate surface needed by `process_match_results` and friends.
+///
+/// The method set matches the `SimulatorData` accessors the existing
+/// code already calls. `CountryProcessCtx` implements the same surface
+/// but scoped to a single country, with cross-country sites pushed
+/// onto a deferred-ops queue.
+///
+/// Beyond the bare accessors there are a few "global ops" — write
+/// paths into truly process-wide state (free-agent staff pool, manager
+/// appointment market). For `SimulatorData` these execute inline;
+/// `CountryProcessCtx` captures them in `DeferredGlobalOps` for the
+/// serial drain.
+pub trait LeagueProcessAccess {
+    fn date(&self) -> NaiveDateTime;
+    fn indexes(&self) -> Option<&SimulatorDataIndexes>;
+    fn country_info(&self) -> &HashMap<u32, CountryInfo>;
+    fn country(&self, id: u32) -> Option<&Country>;
+    fn country_mut(&mut self, id: u32) -> Option<&mut Country>;
+    fn country_by_club(&self, club_id: u32) -> Option<&Country>;
+    fn league(&self, id: u32) -> Option<&League>;
+    fn league_mut(&mut self, id: u32) -> Option<&mut League>;
+    fn club(&self, id: u32) -> Option<&Club>;
+    fn club_mut(&mut self, id: u32) -> Option<&mut Club>;
+    fn team(&self, id: u32) -> Option<&Team>;
+    fn team_mut(&mut self, id: u32) -> Option<&mut Team>;
+    fn player(&self, id: u32) -> Option<&Player>;
+    fn player_mut(&mut self, id: u32) -> Option<&mut Player>;
+
+    /// Admit a freshly sacked staff member to the global free-agent
+    /// pool. SimulatorData applies inline; CountryProcessCtx defers.
+    fn admit_free_agent_staff(&mut self, staff: Staff);
+    /// Queue a permanent manager appointment for a club. The actual
+    /// `manager_market::execute_appointment` reads cross-club state
+    /// and the global free-agent pool, so the parallel path can only
+    /// record the intent; SimulatorData runs it inline.
+    fn queue_manager_appointment(&mut self, club_id: u32);
+    /// Pick a random player from the data view's scope. SimulatorData
+    /// picks from every team in the world; CountryProcessCtx picks
+    /// from the current country only; ClubProcessCtx from the club —
+    /// the "random teammate" semantics narrow with the view without
+    /// losing footballing sense.
+    fn random_player_mut(&mut self) -> Option<&mut Player>;
+
+    /// Sponsorship market strength of the country that owns `club_id`.
+    /// Falls back to `1.0` when the club can't be resolved — same as
+    /// the legacy inline `country_by_club(..)` read it replaces.
+    fn sponsorship_market_strength_for(&self, club_id: u32) -> f32;
+
+    /// Route a transfer-market listing to the country that owns
+    /// `selling_club_id`. SimulatorData and CountryProcessCtx apply
+    /// inline (dedup lives in `TransferMarket::add_listing`);
+    /// ClubProcessCtx stages it for the serial post-pass.
+    fn push_transfer_market_listing(&mut self, selling_club_id: u32, listing: TransferListing);
+
+    /// Drop every club's interest rows (shortlists, scouting, loan-out
+    /// lists) for `player_id` inside country `country_id`. Inline for
+    /// the country-wide views; staged for ClubProcessCtx.
+    fn clear_player_interest_in_country(&mut self, country_id: u32, player_id: u32);
+
+    /// Contract interaction whose deciding club (`contract_club_id`,
+    /// e.g. a loanee's parent) sits outside this view's write scope.
+    /// Returns `true` when the interaction was queued for a serial
+    /// replay with full country access — the caller must stop.
+    /// Country-wide views return `false` and handle it inline.
+    fn try_defer_contract_interaction(
+        &mut self,
+        contract_club_id: u32,
+        interaction: DeferredContractInteraction,
+    ) -> bool;
+}
+
+/// A contract interaction (renewal / extension request) staged by the
+/// parallel per-club pass because the deciding club is not the one the
+/// worker owns — a loaned player's parent club. Replayed serially with
+/// a `CountryProcessCtx` after the parallel loop joins, reproducing
+/// exactly what the serial loop used to do inline.
+#[derive(Debug, Clone, Copy)]
+pub struct DeferredContractInteraction {
+    pub player_id: u32,
+    /// The club whose `ClubResult` produced the interaction (the
+    /// employing club the player currently plays for).
+    pub employing_club_id: u32,
+    pub no_contract: bool,
+    pub want_improve_contract: bool,
+    pub want_extend_contract: bool,
+}
+
+impl LeagueProcessAccess for SimulatorData {
+    fn date(&self) -> NaiveDateTime {
+        self.date
+    }
+    fn indexes(&self) -> Option<&SimulatorDataIndexes> {
+        self.indexes.as_ref()
+    }
+    fn country_info(&self) -> &HashMap<u32, CountryInfo> {
+        &self.country_info
+    }
+    fn country(&self, id: u32) -> Option<&Country> {
+        SimulatorData::country(self, id)
+    }
+    fn country_mut(&mut self, id: u32) -> Option<&mut Country> {
+        SimulatorData::country_mut(self, id)
+    }
+    fn country_by_club(&self, club_id: u32) -> Option<&Country> {
+        SimulatorData::country_by_club(self, club_id)
+    }
+    fn league(&self, id: u32) -> Option<&League> {
+        SimulatorData::league(self, id)
+    }
+    fn league_mut(&mut self, id: u32) -> Option<&mut League> {
+        SimulatorData::league_mut(self, id)
+    }
+    fn club(&self, id: u32) -> Option<&Club> {
+        SimulatorData::club(self, id)
+    }
+    fn club_mut(&mut self, id: u32) -> Option<&mut Club> {
+        SimulatorData::club_mut(self, id)
+    }
+    fn team(&self, id: u32) -> Option<&Team> {
+        SimulatorData::team(self, id)
+    }
+    fn team_mut(&mut self, id: u32) -> Option<&mut Team> {
+        SimulatorData::team_mut(self, id)
+    }
+    fn player(&self, id: u32) -> Option<&Player> {
+        SimulatorData::player(self, id)
+    }
+    fn player_mut(&mut self, id: u32) -> Option<&mut Player> {
+        SimulatorData::player_mut(self, id)
+    }
+    fn admit_free_agent_staff(&mut self, staff: Staff) {
+        crate::club::staff::StaffPool::admit(&mut self.free_agent_staff, staff, self.date.date());
+    }
+    fn queue_manager_appointment(&mut self, club_id: u32) {
+        ManagerMarketTick::execute_appointment(self, club_id, self.date.date());
+    }
+    fn random_player_mut(&mut self) -> Option<&mut Player> {
+        let player_count: usize = self
+            .continents
+            .iter()
+            .flat_map(|c| &c.countries)
+            .flat_map(|c| &c.clubs)
+            .flat_map(|c| &c.teams.teams)
+            .map(|t| t.players.players.len())
+            .sum();
+        if player_count == 0 {
+            return None;
+        }
+        let target = (rand::random::<f32>() * player_count as f32) as usize;
+        let mut current = 0;
+        for continent in &mut self.continents {
+            for country in &mut continent.countries {
+                for club in &mut country.clubs {
+                    for team in &mut club.teams.teams {
+                        for player in &mut team.players.players {
+                            if current == target {
+                                return Some(player);
+                            }
+                            current += 1;
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+    fn sponsorship_market_strength_for(&self, club_id: u32) -> f32 {
+        self.country_by_club(club_id)
+            .map(|c| c.economic_factors.sponsorship_market_strength)
+            .unwrap_or(1.0)
+    }
+    fn push_transfer_market_listing(&mut self, selling_club_id: u32, listing: TransferListing) {
+        let country_id = self.country_by_club(selling_club_id).map(|c| c.id);
+        if let Some(country_id) = country_id
+            && let Some(country) = SimulatorData::country_mut(self, country_id)
+        {
+            country.transfer_market.add_listing(listing);
+        }
+    }
+    fn clear_player_interest_in_country(&mut self, country_id: u32, player_id: u32) {
+        if let Some(country) = SimulatorData::country_mut(self, country_id) {
+            ApproachPass::clear_player_interest(country, player_id);
+        }
+    }
+    fn try_defer_contract_interaction(
+        &mut self,
+        _contract_club_id: u32,
+        _interaction: DeferredContractInteraction,
+    ) -> bool {
+        false
+    }
+}
+
+/// Per-country positional index for O(1) accessor lookups during the
+/// result-processing fan-out. Maps `player_id`/`team_id`/`club_id` to
+/// the `(club_idx, team_idx, player_idx)` triple inside `Country::clubs`
+/// so `LeagueProcessAccess::player(id)` etc. don't linear-scan
+/// thousands of players per call.
+///
+/// Built once before `LeagueResult::process_local` / `ClubResult::process`
+/// and dropped before any path that mutates rosters (transfer market,
+/// retirements). The accessors validate the slot's `player.id` after
+/// indexing so a stale entry still returns `None` rather than the wrong
+/// player — keeps the index advisory.
+pub struct CountryLookupIndex {
+    pub players: FxHashMap<u32, (u16, u8, u16)>,
+    pub teams: FxHashMap<u32, (u16, u8)>,
+    pub clubs: FxHashMap<u32, u16>,
+}
+
+impl CountryLookupIndex {
+    pub fn build(country: &Country) -> Self {
+        let player_cap: usize = country
+            .clubs
+            .iter()
+            .flat_map(|c| &c.teams.teams)
+            .map(|t| t.players.players.len())
+            .sum();
+        let team_cap: usize = country.clubs.iter().map(|c| c.teams.teams.len()).sum();
+        let mut players = FxHashMap::with_capacity_and_hasher(player_cap, Default::default());
+        let mut teams = FxHashMap::with_capacity_and_hasher(team_cap, Default::default());
+        let mut clubs =
+            FxHashMap::with_capacity_and_hasher(country.clubs.len(), Default::default());
+        for (ci, club) in country.clubs.iter().enumerate() {
+            let ci16 = ci.min(u16::MAX as usize) as u16;
+            clubs.insert(club.id, ci16);
+            for (ti, team) in club.teams.teams.iter().enumerate() {
+                let ti8 = ti.min(u8::MAX as usize) as u8;
+                teams.insert(team.id, (ci16, ti8));
+                for (pi, player) in team.players.players.iter().enumerate() {
+                    let pi16 = pi.min(u16::MAX as usize) as u16;
+                    players.insert(player.id, (ci16, ti8, pi16));
+                }
+            }
+        }
+        CountryLookupIndex {
+            players,
+            teams,
+            clubs,
+        }
+    }
+}
+
+/// Country-local data-access wrapper for the parallel Phase-A pass.
+///
+/// Owns `&mut Country` (the one country whose results are being
+/// processed) plus read-only references to global tables the engine
+/// needs (`country_info`, `indexes`). Any mutation that would have
+/// touched another country (foreign-loan parent club, etc.) gets
+/// captured in `deferred` and applied serially after the parallel pass
+/// joins — see `DeferredGlobalOps`.
+pub struct CountryProcessCtx<'a> {
+    pub country: &'a mut Country,
+    pub date: NaiveDateTime,
+    pub country_info_ref: &'a HashMap<u32, CountryInfo>,
+    pub indexes_ref: Option<&'a SimulatorDataIndexes>,
+    pub deferred: &'a mut DeferredGlobalOps,
+    /// O(1) lookup index for this country's players/teams/clubs.
+    /// `None` falls back to linear scans via `Country::player(id)` etc.
+    pub lookup: Option<&'a CountryLookupIndex>,
+}
+
+impl<'a> LeagueProcessAccess for CountryProcessCtx<'a> {
+    fn date(&self) -> NaiveDateTime {
+        self.date
+    }
+    fn indexes(&self) -> Option<&SimulatorDataIndexes> {
+        self.indexes_ref
+    }
+    fn country_info(&self) -> &HashMap<u32, CountryInfo> {
+        self.country_info_ref
+    }
+    fn country(&self, id: u32) -> Option<&Country> {
+        if id == self.country.id {
+            Some(self.country)
+        } else {
+            // No read access to other countries in this ctx. Callers
+            // that hit this path (rare — only the world-pool sponsor
+            // reputation lookup) lose precision; everything else stays
+            // correct because `id` is overwhelmingly self.
+            None
+        }
+    }
+    fn country_mut(&mut self, id: u32) -> Option<&mut Country> {
+        if id == self.country.id {
+            Some(self.country)
+        } else {
+            None
+        }
+    }
+    fn country_by_club(&self, club_id: u32) -> Option<&Country> {
+        if self.country.owns_club(club_id) {
+            Some(self.country)
+        } else {
+            // No read access to OTHER countries in this ctx. Callers
+            // here are doing "is this club's country different from
+            // ours" checks (foreign-loan scouting memory in
+            // `match_events.rs`). Answering `None` for foreign clubs
+            // means those callers treat the player as if no foreign
+            // loan applied — a small loss in scouting-memory fidelity
+            // for cross-country loaned players. Acceptable for the
+            // first-pass parallelisation.
+            None
+        }
+    }
+    fn league(&self, id: u32) -> Option<&League> {
+        self.country.league(id)
+    }
+    fn league_mut(&mut self, id: u32) -> Option<&mut League> {
+        self.country.league_mut(id)
+    }
+    fn club(&self, id: u32) -> Option<&Club> {
+        if let Some(idx) = self.lookup {
+            if let Some(&ci) = idx.clubs.get(&id) {
+                return self.country.clubs.get(ci as usize).filter(|c| c.id == id);
+            }
+            return None;
+        }
+        self.country.club(id)
+    }
+    fn club_mut(&mut self, id: u32) -> Option<&mut Club> {
+        if let Some(idx) = self.lookup {
+            if let Some(&ci) = idx.clubs.get(&id) {
+                return self
+                    .country
+                    .clubs
+                    .get_mut(ci as usize)
+                    .filter(|c| c.id == id);
+            }
+            return None;
+        }
+        self.country.club_mut(id)
+    }
+    fn team(&self, id: u32) -> Option<&Team> {
+        if let Some(idx) = self.lookup {
+            if let Some(&(ci, ti)) = idx.teams.get(&id) {
+                return self
+                    .country
+                    .clubs
+                    .get(ci as usize)
+                    .and_then(|c| c.teams.teams.get(ti as usize))
+                    .filter(|t| t.id == id);
+            }
+            return None;
+        }
+        self.country.team(id)
+    }
+    fn team_mut(&mut self, id: u32) -> Option<&mut Team> {
+        if let Some(idx) = self.lookup {
+            if let Some(&(ci, ti)) = idx.teams.get(&id) {
+                return self
+                    .country
+                    .clubs
+                    .get_mut(ci as usize)
+                    .and_then(|c| c.teams.teams.get_mut(ti as usize))
+                    .filter(|t| t.id == id);
+            }
+            return None;
+        }
+        self.country.team_mut(id)
+    }
+    fn player(&self, id: u32) -> Option<&Player> {
+        if let Some(idx) = self.lookup {
+            if let Some(&(ci, ti, pi)) = idx.players.get(&id) {
+                return self
+                    .country
+                    .clubs
+                    .get(ci as usize)
+                    .and_then(|c| c.teams.teams.get(ti as usize))
+                    .and_then(|t| t.players.players.get(pi as usize))
+                    .filter(|p| p.id == id);
+            }
+            return None;
+        }
+        self.country.player(id)
+    }
+    fn player_mut(&mut self, id: u32) -> Option<&mut Player> {
+        if let Some(idx) = self.lookup {
+            if let Some(&(ci, ti, pi)) = idx.players.get(&id) {
+                return self
+                    .country
+                    .clubs
+                    .get_mut(ci as usize)
+                    .and_then(|c| c.teams.teams.get_mut(ti as usize))
+                    .and_then(|t| t.players.players.get_mut(pi as usize))
+                    .filter(|p| p.id == id);
+            }
+            return None;
+        }
+        self.country.player_mut(id)
+    }
+    fn admit_free_agent_staff(&mut self, staff: Staff) {
+        self.deferred.free_agent_staff.push(staff);
+    }
+    fn queue_manager_appointment(&mut self, club_id: u32) {
+        self.deferred.pending_appointments.push(club_id);
+    }
+    fn random_player_mut(&mut self) -> Option<&mut Player> {
+        // Country-local fallback: pick from this country's roster.
+        let player_count: usize = self
+            .country
+            .clubs
+            .iter()
+            .flat_map(|c| &c.teams.teams)
+            .map(|t| t.players.players.len())
+            .sum();
+        if player_count == 0 {
+            return None;
+        }
+        let target = (rand::random::<f32>() * player_count as f32) as usize;
+        let mut current = 0;
+        for club in &mut self.country.clubs {
+            for team in &mut club.teams.teams {
+                for player in &mut team.players.players {
+                    if current == target {
+                        return Some(player);
+                    }
+                    current += 1;
+                }
+            }
+        }
+        None
+    }
+    fn sponsorship_market_strength_for(&self, club_id: u32) -> f32 {
+        if self.country.owns_club(club_id) {
+            self.country.economic_factors.sponsorship_market_strength
+        } else {
+            1.0
+        }
+    }
+    fn push_transfer_market_listing(&mut self, selling_club_id: u32, listing: TransferListing) {
+        if self.country.owns_club(selling_club_id) {
+            self.country.transfer_market.add_listing(listing);
+        }
+    }
+    fn clear_player_interest_in_country(&mut self, country_id: u32, player_id: u32) {
+        if country_id == self.country.id {
+            ApproachPass::clear_player_interest(self.country, player_id);
+        }
+    }
+    fn try_defer_contract_interaction(
+        &mut self,
+        _contract_club_id: u32,
+        _interaction: DeferredContractInteraction,
+    ) -> bool {
+        false
+    }
+}
+
+/// Cross-club mutations staged by the parallel per-club Phase-1c pass.
+/// Each worker owns exactly one `&mut Club`; anything that would touch
+/// the country (transfer-market listings, country-wide interest
+/// clears) or another club (a loanee's parent-club contract call) is
+/// recorded here and applied serially — in club order — after the
+/// parallel loop joins.
+#[derive(Default)]
+pub struct StagedClubOps {
+    /// Listings bound for `Country::transfer_market.add_listing`
+    /// (idempotent — the market dedups on player+club).
+    pub market_listings: Vec<TransferListing>,
+    /// Player ids whose interest rows must be dropped country-wide
+    /// (contract terminations).
+    pub interest_clears: Vec<u32>,
+    /// Loan-parent contract interactions replayed with a
+    /// `CountryProcessCtx` after the loop.
+    pub contract_interactions: Vec<DeferredContractInteraction>,
+}
+
+impl StagedClubOps {
+    pub fn is_empty(&self) -> bool {
+        self.market_listings.is_empty()
+            && self.interest_clears.is_empty()
+            && self.contract_interactions.is_empty()
+    }
+}
+
+/// Club-scoped data-access view for the parallel Phase-1c pass.
+///
+/// Serves reads and writes for exactly one club (verified through the
+/// shared [`CountryLookupIndex`]); read-only country-level context
+/// (leagues, cup, economic factors) rides along as shared references,
+/// which is safe because nothing in the 1c fan-out mutates them.
+/// Everything that must escape the club — free-agent staff, manager
+/// appointments, market listings, interest clears, loan-parent
+/// contract calls — goes through `deferred` / `staged` and is drained
+/// serially after the loop.
+///
+/// Audit contract: the `ClubResult::process` subtree only calls
+/// `country()`/`country_mut()`/`country_by_club()` through the
+/// dedicated trait methods above (sponsorship strength, market
+/// listing, interest clear); the raw accessors therefore answer
+/// `None` here on purpose.
+pub struct ClubProcessCtx<'a> {
+    pub club: &'a mut Club,
+    /// This club's index in `Country::clubs` — pairs the shared
+    /// lookup's `(club_idx, team_idx, player_idx)` triples with the
+    /// one club this worker owns.
+    pub club_idx: u16,
+    pub country_id: u32,
+    pub date: NaiveDateTime,
+    pub country_info_ref: &'a HashMap<u32, CountryInfo>,
+    pub indexes_ref: Option<&'a SimulatorDataIndexes>,
+    pub leagues_ref: &'a LeagueCollection,
+    /// The domestic cup's underlying league, for id-based lookups —
+    /// mirrors `Country::league`.
+    pub cup_league_ref: Option<&'a League>,
+    pub sponsorship_market_strength: f32,
+    pub lookup: &'a CountryLookupIndex,
+    pub deferred: &'a mut DeferredGlobalOps,
+    pub staged: &'a mut StagedClubOps,
+}
+
+impl<'a> LeagueProcessAccess for ClubProcessCtx<'a> {
+    fn date(&self) -> NaiveDateTime {
+        self.date
+    }
+    fn indexes(&self) -> Option<&SimulatorDataIndexes> {
+        self.indexes_ref
+    }
+    fn country_info(&self) -> &HashMap<u32, CountryInfo> {
+        self.country_info_ref
+    }
+    fn country(&self, _id: u32) -> Option<&Country> {
+        None
+    }
+    fn country_mut(&mut self, _id: u32) -> Option<&mut Country> {
+        None
+    }
+    fn country_by_club(&self, _club_id: u32) -> Option<&Country> {
+        None
+    }
+    fn league(&self, id: u32) -> Option<&League> {
+        self.leagues_ref
+            .leagues
+            .iter()
+            .find(|l| l.id == id)
+            .or_else(|| self.cup_league_ref.filter(|l| l.id == id))
+    }
+    fn league_mut(&mut self, _id: u32) -> Option<&mut League> {
+        // No 1c sub-processor mutates a league (audited); the club
+        // view deliberately has no mutable league access.
+        None
+    }
+    fn club(&self, id: u32) -> Option<&Club> {
+        if id == self.club.id {
+            Some(self.club)
+        } else {
+            None
+        }
+    }
+    fn club_mut(&mut self, id: u32) -> Option<&mut Club> {
+        if id == self.club.id {
+            Some(self.club)
+        } else {
+            None
+        }
+    }
+    fn team(&self, id: u32) -> Option<&Team> {
+        if let Some(&(ci, ti)) = self.lookup.teams.get(&id) {
+            if ci == self.club_idx {
+                return self
+                    .club
+                    .teams
+                    .teams
+                    .get(ti as usize)
+                    .filter(|t| t.id == id);
+            }
+            return None;
+        }
+        self.club.teams.teams.iter().find(|t| t.id == id)
+    }
+    fn team_mut(&mut self, id: u32) -> Option<&mut Team> {
+        if let Some(&(ci, ti)) = self.lookup.teams.get(&id) {
+            if ci == self.club_idx {
+                return self
+                    .club
+                    .teams
+                    .teams
+                    .get_mut(ti as usize)
+                    .filter(|t| t.id == id);
+            }
+            return None;
+        }
+        self.club.teams.teams.iter_mut().find(|t| t.id == id)
+    }
+    fn player(&self, id: u32) -> Option<&Player> {
+        if let Some(&(ci, ti, pi)) = self.lookup.players.get(&id) {
+            if ci == self.club_idx {
+                return self
+                    .club
+                    .teams
+                    .teams
+                    .get(ti as usize)
+                    .and_then(|t| t.players.players.get(pi as usize))
+                    .filter(|p| p.id == id);
+            }
+            return None;
+        }
+        self.club
+            .teams
+            .teams
+            .iter()
+            .find_map(|t| t.players.players.iter().find(|p| p.id == id))
+    }
+    fn player_mut(&mut self, id: u32) -> Option<&mut Player> {
+        if let Some(&(ci, ti, pi)) = self.lookup.players.get(&id) {
+            if ci == self.club_idx {
+                return self
+                    .club
+                    .teams
+                    .teams
+                    .get_mut(ti as usize)
+                    .and_then(|t| t.players.players.get_mut(pi as usize))
+                    .filter(|p| p.id == id);
+            }
+            return None;
+        }
+        self.club
+            .teams
+            .teams
+            .iter_mut()
+            .find_map(|t| t.players.players.iter_mut().find(|p| p.id == id))
+    }
+    fn admit_free_agent_staff(&mut self, staff: Staff) {
+        self.deferred.free_agent_staff.push(staff);
+    }
+    fn queue_manager_appointment(&mut self, club_id: u32) {
+        self.deferred.pending_appointments.push(club_id);
+    }
+    fn random_player_mut(&mut self) -> Option<&mut Player> {
+        // Club-local pick: a staff member's spontaneous interaction
+        // lands on one of THEIR OWN players — narrower than the old
+        // country-wide pick and the more football-real reading of
+        // "random teammate".
+        let player_count: usize = self
+            .club
+            .teams
+            .teams
+            .iter()
+            .map(|t| t.players.players.len())
+            .sum();
+        if player_count == 0 {
+            return None;
+        }
+        let target = (rand::random::<f32>() * player_count as f32) as usize;
+        let mut current = 0;
+        for team in &mut self.club.teams.teams {
+            for player in &mut team.players.players {
+                if current == target {
+                    return Some(player);
+                }
+                current += 1;
+            }
+        }
+        None
+    }
+    fn sponsorship_market_strength_for(&self, _club_id: u32) -> f32 {
+        self.sponsorship_market_strength
+    }
+    fn push_transfer_market_listing(&mut self, _selling_club_id: u32, listing: TransferListing) {
+        self.staged.market_listings.push(listing);
+    }
+    fn clear_player_interest_in_country(&mut self, country_id: u32, player_id: u32) {
+        debug_assert_eq!(country_id, self.country_id);
+        self.staged.interest_clears.push(player_id);
+    }
+    fn try_defer_contract_interaction(
+        &mut self,
+        contract_club_id: u32,
+        interaction: DeferredContractInteraction,
+    ) -> bool {
+        if contract_club_id == self.club.id {
+            return false;
+        }
+        self.staged.contract_interactions.push(interaction);
+        true
+    }
+}
+
+/// Read-only world state needed by `process_local`. Built once in
+/// Phase A's prelude (single-threaded) and handed to every worker by
+/// shared reference — the fields are immutable for the duration of
+/// the parallel pass, so multiple workers reading them concurrently
+/// is safe.
+#[derive(Clone, Copy)]
+pub struct WorldSnapshot<'a> {
+    pub date: NaiveDateTime,
+    pub country_info: &'a HashMap<u32, CountryInfo>,
+    pub indexes: Option<&'a SimulatorDataIndexes>,
+    /// World-wide foreign-player pool — every country's transferable
+    /// players, walked once before the parallel pass. Each country's
+    /// `simulate_transfer_market_local` filters out own-country entries.
+    pub world_pool: &'a [PlayerSummary],
+    /// Snapshot of the global "Move on Free" pool. Read-only during
+    /// Phase A; `apply_deferred_transfer_ops` mutates `data.free_agents`
+    /// in Phase C.
+    pub global_free_agents: &'a [GlobalFreeAgentSummary],
+    /// The world's transfer geography — every country's corridor card and
+    /// the facts behind the derived fallback. Read constantly by the
+    /// per-country market pass and never written, so it rides the same
+    /// shared-borrow channel as the player pool.
+    pub market_map: &'a MarketMap,
+    /// The LENDING side of that geography: every club's placement map,
+    /// staged for the same reason the player pool is — a borrowing
+    /// country's borrow cannot reach the club that owns the player.
+    pub placement_reach: &'a PlacementReachIndex,
+}
+
+/// Cross-country / global mutations that the parallel Phase-A pass
+/// can't apply in place because they reach outside the worker's owned
+/// `&mut Country`. The simulator drains this serially after Phase A
+/// joins.
+///
+/// Fields are public so the serial drain in `simulator::phase::periodic` can
+/// fold them straight into `data`. Each variant is a precise record
+/// of the original mutation — no need for a `Box<dyn FnOnce>` since
+/// the inputs are small and Copy/Clone.
+#[derive(Default)]
+pub struct DeferredGlobalOps {
+    /// Sacked staff that should be admitted to `data.free_agent_staff`
+    /// after the parallel pass. Produced by board sacking logic.
+    pub free_agent_staff: Vec<Staff>,
+    /// Club ids that need `manager_market::execute_appointment` to
+    /// finalise a permanent hire from the global free-agent staff
+    /// pool. Produced when the board's search window has elapsed.
+    pub pending_appointments: Vec<u32>,
+    /// Academy prospects who aged out at the U18 graduation tick.
+    /// `contract = None`, `Frt` status already stamped — Phase C
+    /// extends them onto `data.free_agents` so they remain
+    /// discoverable through the senior market.
+    pub free_agent_players: Vec<Player>,
+}
+
+impl DeferredGlobalOps {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.free_agent_staff.is_empty()
+            && self.pending_appointments.is_empty()
+            && self.free_agent_players.is_empty()
+    }
+    /// Fold a per-worker queue into this one. The parallel Phase-1c
+    /// pass collects one `DeferredGlobalOps` per club and merges them
+    /// in club order, so the drained sequence matches what the old
+    /// serial loop produced.
+    pub fn merge(&mut self, other: DeferredGlobalOps) {
+        self.free_agent_staff.extend(other.free_agent_staff);
+        self.pending_appointments.extend(other.pending_appointments);
+        self.free_agent_players.extend(other.free_agent_players);
+    }
+}

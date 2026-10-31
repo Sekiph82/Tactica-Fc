@@ -1,0 +1,9 @@
+[package]
+name = "tactica-open-football-stage"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+wasm-bindgen-cli-support = "=0.2.129"

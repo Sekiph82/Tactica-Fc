@@ -1,0 +1,1145 @@
+use crate::HappinessEventType;
+use crate::club::news::TeamNewsroom;
+use crate::club::player::player::ManagerPromiseKind;
+use crate::club::staff::coach::PlannedRole;
+use crate::club::staff::coach::standing::StandingEvidence;
+use crate::club::team::behaviour::TeamBehaviour;
+use crate::club::team::{
+    Achievement, CaptaincyAssigner, ChemistryContextBuilder, CompetitionType, MatchOutcome,
+    MatchResultInfo, MentorshipProcessor, PlayingStandard, PreventiveRestPass, SquadLadder,
+    SquadSocialViewBuilder,
+    SquadStandingViewBuilder, SquadStatusUpdater, TeamBuilder, TeamCoachingScores,
+    TeamFixtureWindow, TeamLeagueHistory, TeamSocialDebug, TeamSocialSnapshot, TeamType,
+};
+use crate::context::GlobalContext;
+use crate::shared::CurrencyValue;
+use crate::{
+    MatchHistory, MatchTacticType, Player, PlayerCollection, StaffCollection, Tactics,
+    TacticsSelector, TeamInfo, TeamReputation, TeamResult, TeamTraining, TrainingSchedule,
+    TransferItem, Transfers,
+};
+use chrono::NaiveDate;
+use std::borrow::Cow;
+
+#[derive(Debug, Clone)]
+pub struct Team {
+    pub id: u32,
+    pub league_id: Option<u32>,
+    pub club_id: u32,
+    pub name: String,
+    pub slug: String,
+
+    pub team_type: TeamType,
+    pub tactics: Option<Tactics>,
+
+    pub players: PlayerCollection,
+    pub staffs: StaffCollection,
+
+    pub behaviour: TeamBehaviour,
+
+    pub reputation: TeamReputation,
+    pub training_schedule: TrainingSchedule,
+    pub transfer_list: Transfers,
+    pub match_history: MatchHistory,
+
+    /// Cached upcoming-fixture window written by the league/country
+    /// pipeline before `simulate` runs. Lets training read real
+    /// calendar distance to the next match instead of guessing a
+    /// Saturday fixture week. Refreshed once per simulation tick.
+    pub fixture_window: TeamFixtureWindow,
+
+    /// Appointed captain — wears the armband. Selected monthly by
+    /// `CaptaincyAssigner`'s realistic model (core leadership, club
+    /// authority, reliability and seniority/fit, under hysteresis) and
+    /// written only through `set_official_captain`. Distinct from the
+    /// emergent "influence leader" used elsewhere.
+    pub captain_id: Option<u32>,
+    /// Stand-in captain when the captain is unavailable (injured / benched).
+    pub vice_captain_id: Option<u32>,
+
+    /// Team-wide social snapshot (avg_pair_harmony, leadership_quality,
+    /// manager_trust_avg, …, team_chemistry). Refreshed during the
+    /// weekly tick; defaults to neutral (50 across the board) until the
+    /// first refresh runs. Downstream consumers (training, match-rating,
+    /// board mood) read [`Team::team_chemistry`] instead of averaging
+    /// per-player chemistry numbers.
+    pub social_snapshot: TeamSocialSnapshot,
+
+    /// The local paper that covers THIS side. Holds the last handful of
+    /// printed editions; filled once a week by the world newsroom pass.
+    /// Only sides competing under their own brand
+    /// ([`TeamType::is_own_team`]) ever go to print — a Reserve or U18
+    /// squad keeps an empty newsroom and is read about in the first
+    /// team's paper.
+    pub newsroom: TeamNewsroom,
+
+    /// Reputation (0..10000) of the league THIS team competes in, stamped
+    /// each tick by the country pipeline for teams present in a league
+    /// table (same refresh pattern as [`Team::fixture_window`]). Stays 0
+    /// for league-less squads (U18/U19, some reserves); consumers derive
+    /// a fallback from the club's main league.
+    pub league_reputation: u16,
+
+    /// Which division this side played in, season by season. Written by
+    /// the season-end snapshot; read by anything that needs the division
+    /// for a PAST season rather than the current one. See
+    /// [`TeamLeagueHistory`].
+    pub league_history: TeamLeagueHistory,
+
+    /// The division this side was in before promotion / relegation moved
+    /// it, held until the season-end snapshot consumes it.
+    ///
+    /// The two run on different ticks and in this order: the swap fires on
+    /// the 1st of the month after the last league finishes, the snapshot
+    /// on the season-start regen weeks later. By snapshot time
+    /// `league_id` is already NEXT season's division, so a snapshot that
+    /// read it would file the whole just-played campaign under the
+    /// division the club is moving into. This is the hand-off between the
+    /// two — set by [`Team::move_to_league`], cleared by the snapshot.
+    pub previous_league_id: Option<u32>,
+
+    /// The standard of football this side plays at, on the scale a match
+    /// reads at kickoff. Refreshed by the weekly pass. See
+    /// [`PlayingStandard`].
+    pub playing_standard: f32,
+}
+
+impl Team {
+    pub fn builder() -> TeamBuilder {
+        TeamBuilder::new()
+    }
+
+    /// Move this side into another division, remembering the one it is
+    /// leaving so the season-end snapshot can still file the campaign it
+    /// just played under the division it played it in. The FIRST move of
+    /// an off-season wins — a club promoted and then re-drawn into a
+    /// different group must not lose the division it actually competed in.
+    ///
+    /// Every promotion / relegation path goes through here; assigning
+    /// `league_id` directly loses the hand-off and re-labels history.
+    pub fn move_to_league(&mut self, league_id: u32) {
+        if self.league_id == Some(league_id) {
+            return;
+        }
+        if self.previous_league_id.is_none() {
+            self.previous_league_id = self.league_id;
+        }
+        self.league_id = Some(league_id);
+    }
+
+    /// The division this side played in during `season_start_year` — the
+    /// recorded one when the record reaches back that far, else the
+    /// current `league_id`, which is both the right answer for the
+    /// in-progress campaign and the best available one for a season older
+    /// than the record.
+    pub fn league_for_season(&self, season_start_year: u16) -> Option<u32> {
+        self.league_history
+            .league_for_season(season_start_year)
+            .or(self.league_id)
+    }
+
+    /// Lightweight `TeamInfo` for stats-history rows where the caller
+    /// has no league-lookup access. Storage backfills the league fields
+    /// from the player's own prior entry at the same team
+    /// (`resolve_league_for`), which preserves the division the spell was
+    /// opened in; the web layer resolves anything still missing through
+    /// [`Team::league_for_season`].
+    pub fn history_info(&self) -> TeamInfo {
+        TeamInfo {
+            name: self.name.clone(),
+            slug: self.slug.clone(),
+            reputation: self.reputation.world,
+            league_name: String::new(),
+            league_slug: String::new(),
+        }
+    }
+
+    pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> TeamResult {
+        if ctx.simulation.is_month_beginning() {
+            self.run_monthly_pass(ctx.simulation.date.date());
+        }
+
+        if ctx.simulation.is_week_beginning() {
+            self.run_weekly_pass(ctx.simulation.date.date());
+        }
+
+        // Pick (or keep) the team tactic before simulating players so the
+        // player context carries the right formation for role-fit checks.
+        if self.tactics.is_none() {
+            self.tactics = Some(TacticsSelector::select(self, self.staffs.head_coach()));
+        };
+
+        let effective_league_rep = self.effective_league_reputation(&ctx);
+        let mut player_ctx = ctx.with_team_reputation(self.id, self.reputation.overall_score());
+        if let Some(team_ctx) = player_ctx.team.as_mut() {
+            team_ctx.team_type = Some(self.team_type);
+            team_ctx.league_reputation = Some(effective_league_rep);
+            team_ctx.coaching = Some(TeamCoachingScores::from_staffs(&self.staffs));
+            if let Some(tac) = self.tactics.as_ref() {
+                team_ctx.formation = Some(*tac.positions());
+            }
+        }
+
+        TeamResult::new(
+            self.id,
+            self.players.simulate(player_ctx.with_player(None)),
+            self.staffs.simulate(ctx.with_staff(None)),
+            self.behaviour.simulate(
+                &mut self.players,
+                &mut self.staffs,
+                ctx.with_team_behaviour(
+                    self.id,
+                    self.team_type,
+                    self.captain_id,
+                    self.vice_captain_id,
+                ),
+            ),
+            TeamTraining::train(self, ctx.simulation.date, ctx.club_facilities_training()),
+        )
+    }
+
+    /// League reputation of the competition this team actually plays in.
+    /// Stamped teams return their real league's value; league-less squads
+    /// (U18/U19, unregistered reserves) approximate their competition at
+    /// half the senior league's strength — youth football tracks the
+    /// club's footballing environment, it is not the top flight and not
+    /// a vacuum either.
+    fn effective_league_reputation(&self, ctx: &GlobalContext<'_>) -> u16 {
+        if self.league_reputation > 0 {
+            return self.league_reputation;
+        }
+        let main_rep = ctx.club.as_ref().map(|c| c.league_reputation).unwrap_or(0);
+        if self.team_type == TeamType::Main {
+            main_rep
+        } else {
+            main_rep / 2
+        }
+    }
+
+    /// Where every member stands in his position group, and where a
+    /// newcomer would — the ranking squad status and every signing share.
+    pub fn squad_ladder(&self) -> SquadLadder {
+        SquadLadder::of(self)
+    }
+
+    /// Monthly tick — squad statuses and captaincy reappointment. Runs
+    /// on the 1st of each month so the armband never drifts off a
+    /// retiring veteran or onto a newcomer who hasn't earned it yet.
+    fn run_monthly_pass(&mut self, date: NaiveDate) {
+        SquadStatusUpdater::apply(self, date);
+        CaptaincyAssigner::assign(self, date);
+        self.revise_coach_squad_plan(date);
+    }
+
+    /// The manager's side of a promise he made and the verifier has now
+    /// judged.
+    ///
+    /// The player's side is complete — his morale moved, his trust in the
+    /// man's word moved, an episode was filed against the coach who gave
+    /// it. The coach's side was missing entirely, so a manager could put a
+    /// man down as a starter, never pick him, and carry no sense at all of
+    /// owing him anything.
+    ///
+    /// A broken promise does not cost the player his standing: he did
+    /// nothing wrong. It puts a debt on the coach, and a coach with
+    /// man-management pays it — which is what the second chance in the
+    /// selection read is for.
+    fn settle_promises_with_the_coach(&mut self) {
+        let coach_id = self.staffs.head_coach().id;
+        if coach_id == 0 {
+            return;
+        }
+        let settled: Vec<(u32, bool)> = self
+            .players
+            .players
+            .iter()
+            .filter(|player| {
+                player
+                    .promises
+                    .iter()
+                    .any(|promise| promise.made_by_staff_id == Some(coach_id))
+                    || player
+                        .interactions
+                        .entries
+                        .iter()
+                        .any(|entry| entry.staff_id == coach_id && entry.promise_created)
+            })
+            .flat_map(|player| {
+                player
+                    .happiness
+                    .recent_events
+                    .iter()
+                    .filter(|event| event.days_ago <= Self::PROMISE_SETTLED_WITHIN_DAYS)
+                    .filter_map(move |event| match event.event_type {
+                        HappinessEventType::PromiseKept => Some((player.id, true)),
+                        HappinessEventType::PromiseBroken => Some((player.id, false)),
+                        _ => None,
+                    })
+            })
+            .collect();
+        if settled.is_empty() {
+            return;
+        }
+        let Some(coach) = self.staffs.head_coach_mut() else {
+            return;
+        };
+        for (player_id, kept) in settled {
+            let Some(standing) = coach.coach_memory.standing_of_mut(player_id) else {
+                continue;
+            };
+            if kept {
+                StandingEvidence::promise_kept(standing);
+            } else {
+                StandingEvidence::promise_broken(standing);
+            }
+        }
+    }
+
+    /// How fresh a settled promise has to be for the weekly pass to be the
+    /// one that tells the manager about it. A week, because that is how
+    /// often this runs.
+    const PROMISE_SETTLED_WITHIN_DAYS: u16 = 7;
+
+    /// Refresh the head coach's standing plan for this squad, and tell
+    /// anyone whose role changed.
+    ///
+    /// The plan lives on the coach because it is his opinion — so a
+    /// squad with no manager in the seat simply has no plan, and every
+    /// consumer falls back to its previous behaviour.
+    fn revise_coach_squad_plan(&mut self, date: NaiveDate) {
+        // The goalkeeping department's order, read before the coach's plan
+        // is taken so the two borrows of the staff list don't overlap. Only
+        // the squad that holds the plan sees it; a keeper elsewhere in the
+        // club is planned for by his own side's depth chart as before.
+        let keepers = self.staffs.keeper_plan().cloned();
+        let Some(coach) = self.staffs.head_coach_mut() else {
+            return;
+        };
+        if !coach.squad_plan.due_for_revision(date)
+            && self
+                .players
+                .iter()
+                .all(|p| coach.squad_plan.entry(p.id).is_some())
+        {
+            return;
+        }
+        let mut plan = std::mem::take(&mut coach.squad_plan);
+        let memory = std::mem::take(&mut coach.coach_memory);
+        let changes =
+            plan.revise_with_standing(&self.players, keepers.as_ref(), Some(&memory), date);
+        if let Some(coach) = self.staffs.head_coach_mut() {
+            coach.squad_plan = plan;
+            coach.coach_memory = memory;
+        }
+
+        // Being told where you stand is the point of the plan. A move onto
+        // an exit path is delivered as news — a player learns he is not in
+        // the manager's plans, which is exactly the conversation the sim
+        // never used to have.
+        //
+        // And a role that commits the coach to real football is a promise
+        // rather than a note: `promises_minutes` said which roles those
+        // were and nothing ever read it, so a manager could put a man down
+        // as a starter, never pick him, and owe him nothing. Only a coach
+        // who actually talks to his players makes it — a role held in
+        // silence is not an assurance anybody was given.
+        let coach_id = self.staffs.head_coach().id;
+        let tells_them = self
+            .staffs
+            .head_coach()
+            .staff_attributes
+            .mental
+            .man_management
+            >= Self::PROMISES_MINUTES_MAN_MANAGEMENT;
+
+        for (player_id, role) in changes {
+            let Some(player) = self.players.players.iter_mut().find(|p| p.id == player_id) else {
+                continue;
+            };
+            if role.is_exit_path() {
+                player.on_told_where_he_stands(date, role);
+                continue;
+            }
+            if !role.promises_minutes() || !tells_them || coach_id == 0 {
+                continue;
+            }
+            let (kind, target) = Self::minutes_promised_by(role);
+            player.record_promise_full(
+                kind,
+                date,
+                Self::PROMISE_HORIZON_DAYS,
+                Some(coach_id),
+                Some(target),
+                false,
+            );
+        }
+    }
+
+    /// Man-management at which a coach tells a player where he stands
+    /// rather than letting the team sheet say it for him. Below it the
+    /// plan is still real and the player simply never hears about it —
+    /// which is the silence that costs those managers their dressing rooms.
+    const PROMISES_MINUTES_MAN_MANAGEMENT: u8 = 12;
+
+    /// How long a plan role stands as an assurance before the verifier
+    /// asks whether it was honoured. One transfer window.
+    const PROMISE_HORIZON_DAYS: i64 = 90;
+
+    /// What each role actually commits him to.
+    ///
+    /// A starter is promised a share of the starts; everybody else on a
+    /// minutes-promising role is promised appearances, because that is
+    /// what the role means and what the player would hold him to.
+    fn minutes_promised_by(role: PlannedRole) -> (ManagerPromiseKind, u16) {
+        match role {
+            PlannedRole::Cornerstone => (ManagerPromiseKind::StartingRole, 75),
+            PlannedRole::Starter => (ManagerPromiseKind::StartingRole, 60),
+            PlannedRole::Rotation => (ManagerPromiseKind::PlayingTime, 8),
+            PlannedRole::CupKeeper => (ManagerPromiseKind::PlayingTime, 4),
+            PlannedRole::SuccessionHeir => (ManagerPromiseKind::PlayingTime, 6),
+            _ => (ManagerPromiseKind::LoanDevelopment, 6),
+        }
+    }
+
+    /// Weekly tick — mentorship, social decay, chemistry refresh,
+    /// preventive rest, and the squad social-view snapshot. Runs before
+    /// any per-player development so today's mentoring drift is already
+    /// visible when weekly skill growth is computed.
+    fn run_weekly_pass(&mut self, week_date: NaiveDate) {
+        self.settle_promises_with_the_coach();
+
+        let hoy_wwy = self.staffs.best_youth_development_wwy(10);
+        let _pairings = MentorshipProcessor::process(&mut self.players.players, week_date, hoy_wwy);
+
+        // Without this, every relationship and rapport entry that ever
+        // fired stays at its peak forever — squads wouldn't naturally
+        // drift toward neutral when contact fades. Relations decay toward
+        // neutral if interaction was light; rapport drifts to 0 after 21+
+        // days of no training contact. Runs before any new weekly
+        // relationship event so today's events overwrite the decayed
+        // baseline.
+        for player in self.players.players.iter_mut() {
+            player.relations.process_weekly_update(week_date);
+            player.rapport.decay(week_date);
+        }
+
+        let chem_ctx = ChemistryContextBuilder::build(self, week_date);
+        for player in self.players.players.iter_mut() {
+            player
+                .relations
+                .recalculate_chemistry_with_context(&chem_ctx);
+        }
+
+        let best_sports_sci = self.staffs.best_sports_science();
+        PreventiveRestPass::apply(&mut self.players.players, best_sports_sci, week_date);
+
+        SquadSocialViewBuilder::refresh(&mut self.players.players);
+
+        // Where each man stands in this dressing room — who picks the
+        // side, who is in front of him, what the coaching here can still
+        // teach him. Runs beside the social view because it answers the
+        // same class of question: things about a player that only the
+        // squad around him knows.
+        SquadStandingViewBuilder::refresh(
+            &mut self.players.players,
+            &self.staffs,
+            self.captain_id,
+            self.vice_captain_id,
+            self.team_type,
+            week_date,
+        );
+
+        // Team-level social weather. Runs after the per-player chemistry
+        // recalc so today's per-relation drift is already visible in
+        // `avg_pair_harmony`. The snapshot reads the manager bond for
+        // every non-loanee, so it must run after relations / rapport
+        // decay (above) too — otherwise it would see stale data.
+        self.social_snapshot = TeamSocialSnapshot::build(self, week_date);
+        self.refresh_playing_standard();
+    }
+
+    pub fn refresh_playing_standard(&mut self) {
+        self.playing_standard = PlayingStandard::of(&self.players.players);
+    }
+
+    /// Headline team chemistry on a 0..100 scale. Refreshed weekly by
+    /// [`Team::run_weekly_pass`]; downstream consumers (training tick,
+    /// match-rating, board mood) read this number instead of averaging
+    /// per-player chemistry to avoid each player's local noise.
+    pub fn team_chemistry(&self) -> f32 {
+        self.social_snapshot.team_chemistry
+    }
+
+    /// Debug / LLM-facing read of the team's social weather. Bundles
+    /// the headline snapshot, captain mediation score, top-3
+    /// conflict-risk players (with bond breakdown), and top-3
+    /// isolated players. Pure read — safe to call from any UI / debug
+    /// / narrator path. See [`TeamSocialDebug`].
+    pub fn social_debug(&self, today: NaiveDate) -> TeamSocialDebug {
+        TeamSocialDebug::build(self, today)
+    }
+
+    pub fn players(&self) -> Vec<&Player> {
+        self.players.players()
+    }
+
+    /// Reappoint the captain & vice-captain. See [`CaptaincyAssigner`]
+    /// for ranking logic and event-emission guards. Kept as a thin
+    /// passthrough so existing call sites (and tests) read naturally.
+    pub fn assign_captaincy(&mut self, date: NaiveDate) {
+        CaptaincyAssigner::assign(self, date);
+    }
+
+    pub fn add_player_to_transfer_list(&mut self, player_id: u32, value: CurrencyValue) {
+        self.transfer_list.add(TransferItem {
+            player_id,
+            amount: value,
+        })
+    }
+
+    /// Annual player wage bill at this team. Staff are billed separately by
+    /// `Club::process_monthly_finances` via `StaffCollection::get_annual_salary`
+    /// — including them here would double-count.
+    ///
+    /// Loan accounting:
+    ///   - Loaned-IN players (contract_loan.is_some()): the borrower's
+    ///     payroll line is the loan contract salary, not the parent
+    ///     contract. The parent's residual share is accepted as zero on
+    ///     the parent side — when a player is loaned out they leave the
+    ///     parent's roster, so the parent's wage bill drops by their full
+    ///     contract for the duration of the loan.
+    ///   - Other players: parent contract salary as installed.
+    pub fn get_annual_salary(&self) -> u32 {
+        self.players
+            .players
+            .iter()
+            .filter_map(|p| {
+                if let Some(loan) = p.contract_loan.as_ref() {
+                    Some(loan.salary)
+                } else {
+                    p.contract.as_ref().map(|c| c.salary)
+                }
+            })
+            .sum()
+    }
+
+    pub fn tactics(&self) -> Cow<'_, Tactics> {
+        if let Some(tactics) = &self.tactics {
+            Cow::Borrowed(tactics)
+        } else {
+            Cow::Owned(Tactics::new(MatchTacticType::T442))
+        }
+    }
+
+    /// React to a completed competitive match: feed the result into the
+    /// reputation drift model. Caller supplies the opponent's overall
+    /// reputation and the team's current league standing so we don't
+    /// thread a Country reference in here.
+    pub fn on_match_completed(
+        &mut self,
+        outcome: MatchOutcome,
+        opponent_reputation: u16,
+        competition: CompetitionType,
+        league_position: u8,
+        total_teams: u8,
+        date: NaiveDate,
+    ) {
+        let info = MatchResultInfo {
+            outcome,
+            opponent_reputation,
+            competition_type: competition,
+        };
+        self.reputation
+            .process_weekly_update(&[info], league_position, total_teams, date);
+    }
+
+    /// Monthly decay pass — reputation softly drifts down without fresh
+    /// achievements. Called on the 1st of each month.
+    pub fn on_month_tick(&mut self) {
+        self.reputation.apply_monthly_decay();
+    }
+
+    /// Record a season-end trophy/promotion/qualification event, feeding
+    /// the reputation model so title wins stick to the club for years.
+    pub fn on_season_trophy(&mut self, achievement: Achievement) {
+        self.reputation.process_achievement(achievement);
+    }
+}
+
+#[cfg(test)]
+mod payroll_tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills, PlayerSquadStatus,
+    };
+    use chrono::NaiveTime;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn make_player(id: u32, salary: u32) -> Player {
+        let mut p = PlayerBuilder::new()
+            .id(id)
+            .full_name(FullName::new("Test".into(), format!("Wager{}", id)))
+            .birth_date(d(1995, 1, 1))
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::MidfielderCenter,
+                    level: 20,
+                }],
+            })
+            .player_attributes(PlayerAttributes::default())
+            .build()
+            .unwrap();
+        p.contract = Some(PlayerClubContract::new(salary, d(2030, 6, 30)));
+        p
+    }
+
+    fn build_team_with(players: Vec<Player>) -> Team {
+        TeamBuilder::new()
+            .id(1)
+            .league_id(Some(1))
+            .club_id(1)
+            .name("Test FC".into())
+            .slug("test-fc".into())
+            .team_type(TeamType::Main)
+            .players(PlayerCollection::new(players))
+            .staffs(StaffCollection::new(Vec::new()))
+            .reputation(TeamReputation::new(100, 100, 200))
+            .training_schedule(TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            ))
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn get_annual_salary_does_not_include_staff() {
+        // Two players, no staff: total = sum of player salaries.
+        let team = build_team_with(vec![make_player(1, 100_000), make_player(2, 80_000)]);
+        assert_eq!(team.get_annual_salary(), 180_000);
+    }
+
+    #[test]
+    fn get_annual_salary_uses_loan_contract_for_loaned_in_player() {
+        // Loaned-in player: borrower's payroll is the loan contract,
+        // not the parent contract. Without this fix the borrower would
+        // be billed the full parent salary every month.
+        let mut p = make_player(7, 500_000);
+        let mut loan = PlayerClubContract::new_loan(120_000, d(2027, 6, 30), 1, 1, 2);
+        loan.salary = 120_000;
+        p.contract_loan = Some(loan);
+        let team = build_team_with(vec![p]);
+        assert_eq!(team.get_annual_salary(), 120_000);
+    }
+
+    #[test]
+    fn wage_structure_uses_loan_salary_for_loanees_not_parent() {
+        // Borrower has one permanent player (100k) and one loaned-in
+        // player whose parent contract is 1M but loan contract is just
+        // 100k. Top-earner must NOT be 1M — that would let the renewal
+        // AI argue "we already pay 1M" against permanent squad members.
+        use crate::club::team::squad::WageStructureSnapshot;
+
+        let mut perm = make_player(1, 100_000);
+        if let Some(c) = perm.contract.as_mut() {
+            c.squad_status = PlayerSquadStatus::KeyPlayer;
+        }
+
+        let mut loanee = make_player(2, 1_000_000);
+        let mut loan = PlayerClubContract::new_loan(100_000, d(2027, 6, 30), 99, 1, 1);
+        loan.salary = 100_000;
+        loanee.contract_loan = Some(loan);
+        if let Some(c) = loanee.contract.as_mut() {
+            c.squad_status = PlayerSquadStatus::FirstTeamRegular;
+        }
+
+        let team = build_team_with(vec![perm, loanee]);
+        let snap = WageStructureSnapshot::from_team(&team);
+        assert_eq!(snap.top_earner, 100_000);
+        assert_eq!(snap.current_bill, 200_000);
+    }
+}
+
+#[cfg(test)]
+mod captaincy_tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::team::{LeadershipCandidate, MatchdayLeadership};
+    use crate::shared::fullname::FullName;
+    use crate::{
+        HappinessEventType, PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills,
+    };
+    use chrono::NaiveTime;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn build_leader(id: u32, leadership: f32, reputation: i16) -> Player {
+        let mut skills = PlayerSkills::default();
+        skills.mental.leadership = leadership;
+        let attrs = PlayerAttributes {
+            current_reputation: reputation,
+            ..Default::default()
+        };
+        let mut contract = PlayerClubContract::new(20_000, d(2035, 6, 30));
+        contract.started = Some(d(2020, 7, 1));
+        let mut p = PlayerBuilder::new()
+            .id(id)
+            .full_name(FullName::new("Test".into(), format!("Leader{}", id)))
+            .birth_date(d(1996, 1, 1)) // age ~30 by 2026 — peak captaincy band
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(skills)
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::MidfielderCenter,
+                    level: 20,
+                }],
+            })
+            .player_attributes(attrs)
+            .build()
+            .unwrap();
+        p.contract = Some(contract);
+        p
+    }
+
+    fn build_team_with(players: Vec<Player>) -> Team {
+        TeamBuilder::new()
+            .id(1)
+            .league_id(Some(1))
+            .club_id(1)
+            .name("Test FC".into())
+            .slug("test-fc".into())
+            .team_type(TeamType::Main)
+            .players(PlayerCollection::new(players))
+            .staffs(StaffCollection::new(Vec::new()))
+            .reputation(TeamReputation::new(100, 100, 200))
+            .training_schedule(TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            ))
+            .build()
+            .unwrap()
+    }
+
+    fn captaincy_event_count(p: &Player, kind: &HappinessEventType) -> usize {
+        p.happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == *kind)
+            .count()
+    }
+
+    #[test]
+    fn bootstrap_assignment_creates_award_event() {
+        // A fresh team starts with no captain; the first monthly appointment
+        // is narrated like any other, so the new captain gets a visible,
+        // positive award on his events page (no silent bootstrap).
+        let p1 = build_leader(1, 18.0, 5_000);
+        let p2 = build_leader(2, 14.0, 3_000);
+        let mut team = build_team_with(vec![p1, p2]);
+
+        assert_eq!(team.captain_id, None);
+        team.assign_captaincy(d(2026, 7, 1));
+
+        let captain = team.captain_id.expect("a captain should be appointed");
+        let cap = team
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == captain)
+            .unwrap();
+        assert_eq!(
+            captaincy_event_count(cap, &HappinessEventType::CaptaincyAwarded),
+            1
+        );
+        let award = cap
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::CaptaincyAwarded)
+            .unwrap();
+        assert!(
+            award.magnitude > 0.0,
+            "appointment must be a positive event"
+        );
+        // Nobody is stripped on a first appointment.
+        for player in team.players.players.iter() {
+            assert_eq!(
+                captaincy_event_count(player, &HappinessEventType::CaptaincyRemoved),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn captain_replacement_creates_removed_and_awarded_events() {
+        let p1 = build_leader(1, 14.0, 3_000);
+        let p2 = build_leader(2, 10.0, 2_000);
+        let mut team = build_team_with(vec![p1, p2]);
+
+        team.assign_captaincy(d(2026, 7, 1));
+        let original_captain = team.captain_id.unwrap();
+
+        for p in team.players.players.iter_mut() {
+            if p.id != original_captain {
+                p.skills.mental.leadership = 20.0;
+                p.player_attributes.current_reputation = 9_000;
+            } else {
+                p.skills.mental.leadership = 9.0;
+            }
+        }
+        team.assign_captaincy(d(2026, 8, 1));
+
+        let new_captain = team.captain_id.unwrap();
+        assert_ne!(new_captain, original_captain);
+
+        let outgoing = team
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == original_captain)
+            .unwrap();
+        let incoming = team
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == new_captain)
+            .unwrap();
+        assert_eq!(
+            captaincy_event_count(outgoing, &HappinessEventType::CaptaincyRemoved),
+            1
+        );
+        assert_eq!(
+            captaincy_event_count(incoming, &HappinessEventType::CaptaincyAwarded),
+            1
+        );
+    }
+
+    #[test]
+    fn departed_captain_does_not_get_removed_event() {
+        let p1 = build_leader(1, 14.0, 3_000);
+        let p2 = build_leader(2, 12.0, 2_500);
+        let mut team = build_team_with(vec![p1, p2]);
+
+        team.assign_captaincy(d(2026, 7, 1));
+        let original_captain = team.captain_id.unwrap();
+
+        // Captain "leaves" the squad — remove them from the player list
+        // but leave `team.captain_id` stale, simulating the small window
+        // between transfer execution and the next monthly recalc.
+        team.players.players.retain(|p| p.id != original_captain);
+
+        team.assign_captaincy(d(2026, 8, 1));
+
+        for player in team.players.players.iter() {
+            assert_eq!(
+                captaincy_event_count(player, &HappinessEventType::CaptaincyRemoved),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn captaincy_cooldown_blocks_oscillation() {
+        let p1 = build_leader(1, 14.0, 3_000);
+        let p2 = build_leader(2, 10.0, 2_000);
+        let mut team = build_team_with(vec![p1, p2]);
+
+        team.assign_captaincy(d(2026, 7, 1)); // first appointment (awards p1)
+        let first_captain = team.captain_id.unwrap();
+
+        for p in team.players.players.iter_mut() {
+            if p.id == first_captain {
+                p.skills.mental.leadership = 9.0;
+            } else {
+                p.skills.mental.leadership = 20.0;
+                p.player_attributes.current_reputation = 9_000;
+            }
+        }
+        team.assign_captaincy(d(2026, 8, 1));
+
+        for p in team.players.players.iter_mut() {
+            if p.id == first_captain {
+                p.skills.mental.leadership = 20.0;
+                p.player_attributes.current_reputation = 9_000;
+            } else {
+                p.skills.mental.leadership = 9.0;
+            }
+        }
+        team.assign_captaincy(d(2026, 9, 1));
+
+        for player in team.players.players.iter() {
+            let awarded = captaincy_event_count(player, &HappinessEventType::CaptaincyAwarded);
+            assert!(
+                awarded <= 1,
+                "expected ≤1 award, got {} for player {}",
+                awarded,
+                player.id
+            );
+        }
+    }
+
+    #[test]
+    fn high_reputation_removed_captain_takes_bigger_hit() {
+        // Removal-magnitude check, NOT a selection check — under hysteresis
+        // the model can legitimately retain an incumbent, so we force the
+        // handover through the official chokepoint and read the displaced
+        // captain's `CaptaincyRemoved` magnitude. A high-reputation captain
+        // should feel a more negative sting than an anonymous one.
+        fn removal_magnitude(rep: i16) -> f32 {
+            let mut old_captain = build_leader(1, 16.0, rep);
+            old_captain.attributes.controversy = 10.0;
+            old_captain.attributes.temperament = 10.0;
+            old_captain.attributes.professionalism = 10.0;
+            let successor = build_leader(2, 14.0, 1_000);
+            let mut team = build_team_with(vec![old_captain, successor]);
+
+            // Appoint the old captain, then force the handover to the
+            // successor — both writes go through the single chokepoint.
+            CaptaincyAssigner::set_official_captain(&mut team, Some(1), Some(2), d(2026, 7, 1));
+            CaptaincyAssigner::set_official_captain(&mut team, Some(2), Some(1), d(2026, 7, 1));
+
+            team.players
+                .players
+                .iter()
+                .find(|p| p.id == 1)
+                .unwrap()
+                .happiness
+                .recent_events
+                .iter()
+                .find(|e| e.event_type == HappinessEventType::CaptaincyRemoved)
+                .unwrap()
+                .magnitude
+        }
+        let star = removal_magnitude(9_000);
+        let anon = removal_magnitude(500);
+        assert!(
+            star < anon,
+            "high-reputation removal magnitude {} must be more negative than low-reputation {}",
+            star,
+            anon
+        );
+    }
+
+    #[test]
+    fn first_active_captain_appointment_creates_event() {
+        // No eligible leader at first (everyone below the leadership floor),
+        // so the team runs with no captain and no event. When a player later
+        // grows into leadership, his appointment fires a `CaptaincyAwarded`.
+        let p1 = build_leader(1, 5.0, 4_000); // below MIN_LEADERSHIP_FOR_CAPTAINCY
+        let p2 = build_leader(2, 6.0, 2_000);
+        let mut team = build_team_with(vec![p1, p2]);
+
+        team.assign_captaincy(d(2026, 7, 1));
+        assert_eq!(team.captain_id, None, "no eligible leader yet");
+        for player in team.players.players.iter() {
+            assert_eq!(
+                captaincy_event_count(player, &HappinessEventType::CaptaincyAwarded),
+                0
+            );
+        }
+
+        // p1 grows into a leader and is appointed during active play.
+        team.players
+            .players
+            .iter_mut()
+            .find(|p| p.id == 1)
+            .unwrap()
+            .skills
+            .mental
+            .leadership = 16.0;
+        team.assign_captaincy(d(2026, 8, 1));
+
+        assert_eq!(team.captain_id, Some(1));
+        let appointee = team.players.players.iter().find(|p| p.id == 1).unwrap();
+        assert_eq!(
+            captaincy_event_count(appointee, &HappinessEventType::CaptaincyAwarded),
+            1
+        );
+        for player in team.players.players.iter() {
+            assert_eq!(
+                captaincy_event_count(player, &HappinessEventType::CaptaincyRemoved),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn unchanged_captain_does_not_duplicate_event() {
+        // The first appointment fires one award; subsequent monthly reviews
+        // that keep the same captain must NOT add further awards.
+        let p1 = build_leader(1, 16.0, 4_000);
+        let p2 = build_leader(2, 11.0, 2_000);
+        let mut team = build_team_with(vec![p1, p2]);
+
+        team.assign_captaincy(d(2026, 7, 1)); // first appointment → 1 award
+        let captain = team.captain_id.unwrap();
+        team.assign_captaincy(d(2026, 8, 1));
+        team.assign_captaincy(d(2026, 9, 1));
+
+        assert_eq!(team.captain_id, Some(captain));
+        let cap = team
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == captain)
+            .unwrap();
+        assert_eq!(
+            captaincy_event_count(cap, &HappinessEventType::CaptaincyAwarded),
+            1,
+            "kept captain keeps the single original award, no duplicates"
+        );
+        for player in team.players.players.iter() {
+            assert_eq!(
+                captaincy_event_count(player, &HappinessEventType::CaptaincyRemoved),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn captain_removed_without_replacement_creates_removed_event() {
+        // The only qualifying leader's leadership later drops below the
+        // captaincy threshold while he stays in the squad, so the review
+        // finds no eligible captain. He must be stripped even though no
+        // replacement exists.
+        let p1 = build_leader(1, 14.0, 3_000);
+        let mut team = build_team_with(vec![p1]);
+
+        team.assign_captaincy(d(2026, 7, 1)); // first appointment (awards p1)
+        assert_eq!(team.captain_id, Some(1));
+
+        // Drop below MIN_LEADERSHIP_FOR_CAPTAINCY (8.0) while staying in squad.
+        team.players.players[0].skills.mental.leadership = 5.0;
+
+        team.assign_captaincy(d(2026, 8, 1));
+
+        assert_eq!(team.captain_id, None, "no eligible captain remains");
+        let stripped = team.players.players.iter().find(|p| p.id == 1).unwrap();
+        assert_eq!(
+            captaincy_event_count(stripped, &HappinessEventType::CaptaincyRemoved),
+            1
+        );
+        // He still carries the award from his original appointment.
+        assert_eq!(
+            captaincy_event_count(stripped, &HappinessEventType::CaptaincyAwarded),
+            1
+        );
+    }
+
+    #[test]
+    fn set_official_captain_emits_on_change_only() {
+        // Direct exercise of the chokepoint. Installing a captain on a team
+        // with none fires a single award; a redundant write with the same
+        // captain emits nothing; a genuine change strips the old and awards
+        // the new.
+        let p1 = build_leader(1, 14.0, 3_000);
+        let p2 = build_leader(2, 14.0, 3_000);
+        let mut team = build_team_with(vec![p1, p2]);
+
+        // None -> A: award A only.
+        CaptaincyAssigner::set_official_captain(&mut team, Some(1), Some(2), d(2026, 7, 1));
+        assert_eq!(team.captain_id, Some(1));
+        {
+            let a = team.players.players.iter().find(|p| p.id == 1).unwrap();
+            assert_eq!(
+                captaincy_event_count(a, &HappinessEventType::CaptaincyAwarded),
+                1
+            );
+            assert_eq!(
+                captaincy_event_count(a, &HappinessEventType::CaptaincyRemoved),
+                0
+            );
+        }
+
+        // A -> A (redundant): no new events.
+        CaptaincyAssigner::set_official_captain(&mut team, Some(1), Some(2), d(2026, 7, 1));
+        {
+            let a = team.players.players.iter().find(|p| p.id == 1).unwrap();
+            assert_eq!(
+                captaincy_event_count(a, &HappinessEventType::CaptaincyAwarded),
+                1,
+                "redundant write must not re-award"
+            );
+        }
+
+        // A -> B: strip A, award B.
+        CaptaincyAssigner::set_official_captain(&mut team, Some(2), Some(1), d(2026, 7, 1));
+        assert_eq!(team.captain_id, Some(2));
+        let a = team.players.players.iter().find(|p| p.id == 1).unwrap();
+        let b = team.players.players.iter().find(|p| p.id == 2).unwrap();
+        assert_eq!(
+            captaincy_event_count(a, &HappinessEventType::CaptaincyRemoved),
+            1
+        );
+        assert_eq!(
+            captaincy_event_count(b, &HappinessEventType::CaptaincyAwarded),
+            1
+        );
+    }
+
+    #[test]
+    fn matchday_captain_does_not_change_official_captaincy() {
+        // The official captain is rotated out for a match; the matchday
+        // armband resolver picks a stand-in from the XI. This must NOT
+        // touch the official captaincy state or emit any captaincy events.
+        let p1 = build_leader(1, 18.0, 5_000); // official captain
+        let p2 = build_leader(2, 14.0, 3_000);
+        let p3 = build_leader(3, 12.0, 2_000);
+        let mut team = build_team_with(vec![p1, p2, p3]);
+
+        team.assign_captaincy(d(2026, 7, 1));
+        let official = team.captain_id.unwrap();
+        assert_eq!(official, 1);
+
+        // Snapshot official-captaincy event totals before matchday resolution
+        // (the bootstrap appointment already awarded the official captain).
+        let count_all = |team: &Team, kind: &HappinessEventType| -> usize {
+            team.players
+                .players
+                .iter()
+                .map(|p| captaincy_event_count(p, kind))
+                .sum()
+        };
+        let awards_before = count_all(&team, &HappinessEventType::CaptaincyAwarded);
+        let removed_before = count_all(&team, &HappinessEventType::CaptaincyRemoved);
+
+        // On-field pool EXCLUDING the official captain (he was benched).
+        let resolve_date = d(2026, 7, 1);
+        let xi: Vec<LeadershipCandidate> = team
+            .players
+            .players
+            .iter()
+            .filter(|p| p.id != official)
+            .map(|p| LeadershipCandidate::from_player_at(p, resolve_date))
+            .collect();
+        let armband = MatchdayLeadership::resolve(team.captain_id, team.vice_captain_id, &xi);
+
+        // A stand-in wears the armband...
+        assert!(armband.captain_id.is_some());
+        assert_ne!(armband.captain_id, Some(official));
+        // ...but the official captaincy is untouched and no NEW events fired.
+        assert_eq!(team.captain_id, Some(official));
+        assert_eq!(
+            count_all(&team, &HappinessEventType::CaptaincyAwarded),
+            awards_before,
+            "matchday resolution must not add official captaincy awards"
+        );
+        assert_eq!(
+            count_all(&team, &HappinessEventType::CaptaincyRemoved),
+            removed_before
+        );
+    }
+}

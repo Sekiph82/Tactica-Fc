@@ -1,0 +1,748 @@
+use crate::r#match::engine::player::injury::InjuryGrade;
+use serde::{Deserialize, Serialize};
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::fmt::Result;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InjurySeverity {
+    Minor,
+    Moderate,
+    Severe,
+    Critical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BodyPart {
+    Hamstring = 1,
+    Knee = 2,
+    Ankle = 3,
+    Calf = 4,
+    Groin = 5,
+    Shoulder = 6,
+    Foot = 7,
+    Back = 8,
+    Hip = 9,
+    Head = 10,
+    Quad = 11,
+    Shin = 12,
+}
+
+impl BodyPart {
+    pub fn to_u8(self) -> u8 {
+        self as u8
+    }
+
+    pub fn from_u8(val: u8) -> Option<BodyPart> {
+        match val {
+            1 => Some(BodyPart::Hamstring),
+            2 => Some(BodyPart::Knee),
+            3 => Some(BodyPart::Ankle),
+            4 => Some(BodyPart::Calf),
+            5 => Some(BodyPart::Groin),
+            6 => Some(BodyPart::Shoulder),
+            7 => Some(BodyPart::Foot),
+            8 => Some(BodyPart::Back),
+            9 => Some(BodyPart::Hip),
+            10 => Some(BodyPart::Head),
+            11 => Some(BodyPart::Quad),
+            12 => Some(BodyPart::Shin),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InjuryType {
+    // Minor (3-10 days)
+    Bruise,
+    MinorKnock,
+    Cramp,
+    DeadLeg,
+    MinorConcussion,
+    // Moderate (14-42 days)
+    HamstringStrain,
+    CalfStrain,
+    AnkleSprain,
+    GroinStrain,
+    HipFlexorStrain,
+    QuadStrain,
+    BackSpasm,
+    // Severe (60-180 days)
+    TornMeniscus,
+    ShoulderDislocation,
+    StressFracture,
+    MCLSprain,
+    LateralLigament,
+    HerniatedDisc,
+    // Critical (180-300 days)
+    ACLTear,
+    BrokenLeg,
+    AchillesRupture,
+    PCLTear,
+}
+
+/// Continuous shift applied to the severity roll, centered on a median
+/// professional (age 26, NF 12, proneness 10, normally-tired legs) so
+/// the base band percentages hold for the typical case. Adolescents
+/// shift toward knocks and strains — structural ruptures (ACL,
+/// Achilles) are predominantly adult injuries; veterans shift toward
+/// them. Every term is a clamped linear curve; the shift moves the
+/// band boundaries directly (+0.01 shift ≈ +1pp critical share).
+pub struct InjurySeverityShift;
+
+impl InjurySeverityShift {
+    fn age_term(age: u8) -> f32 {
+        ((age as f32 - 26.0) * 0.007).clamp(-0.055, 0.065)
+    }
+
+    fn natural_fitness_term(natural_fitness: f32) -> f32 {
+        ((12.0 - natural_fitness) * 0.004).clamp(-0.032, 0.04)
+    }
+
+    /// Reads the condition at the moment the injury fires — for match
+    /// injuries that is the *post-match drained* value, so the neutral
+    /// point sits at 50%: a normal full-shift finish adds nothing,
+    /// only genuinely gassed legs push severity up.
+    fn condition_term(condition_pct: u32) -> f32 {
+        (50.0 - condition_pct as f32).max(0.0) * 0.0012
+    }
+
+    fn proneness_term(injury_proneness: u8) -> f32 {
+        ((injury_proneness as f32 - 10.0) * 0.004).clamp(-0.032, 0.04)
+    }
+
+    pub fn for_match(
+        minutes: f32,
+        age: u8,
+        condition_pct: u32,
+        natural_fitness: f32,
+        injury_proneness: u8,
+    ) -> f32 {
+        (Self::age_term(age)
+            + Self::natural_fitness_term(natural_fitness)
+            + Self::condition_term(condition_pct)
+            + Self::proneness_term(injury_proneness)
+            + (minutes / 90.0 - 0.5).max(0.0) * 0.02)
+            .clamp(-0.12, 0.12)
+    }
+
+    pub fn for_training(
+        age: u8,
+        condition_pct: u32,
+        natural_fitness: f32,
+        injury_proneness: u8,
+    ) -> f32 {
+        (Self::age_term(age)
+            + Self::natural_fitness_term(natural_fitness)
+            + Self::condition_term(condition_pct)
+            + Self::proneness_term(injury_proneness))
+        .clamp(-0.12, 0.12)
+    }
+
+    pub fn for_spontaneous(age: u8, injury_proneness: u8) -> f32 {
+        (Self::age_term(age) + Self::proneness_term(injury_proneness)).clamp(-0.12, 0.12)
+    }
+}
+
+/// Healing-speed multiplier applied to the rolled injury duration and
+/// the post-injury recovery phase. Young tissue heals faster: ~0.78×
+/// at 16, reaching 1.0 by 26; veterans heal slower, up to 1.2× by 40.
+/// Continuous and clamped — the same injury type keeps the same range,
+/// only the calendar cost scales with age.
+pub struct InjuryRecoverySpeed;
+
+impl InjuryRecoverySpeed {
+    pub fn duration_multiplier(age: u8) -> f32 {
+        let age = age as f32;
+        if age <= 26.0 {
+            (1.0 - (26.0 - age) * 0.022).max(0.75)
+        } else if age >= 30.0 {
+            (1.0 + (age - 30.0) * 0.02).min(1.2)
+        } else {
+            1.0
+        }
+    }
+
+    /// Apply the age curve to a rolled day count. Never returns 0 —
+    /// even the mildest knock costs a day.
+    pub fn scale_days(days: u16, age: u8) -> u16 {
+        ((days as f32 * Self::duration_multiplier(age)).round() as u16).max(1)
+    }
+}
+
+impl InjuryType {
+    /// Returns (min_days, max_days) for this injury type
+    pub fn duration_range(&self) -> (u16, u16) {
+        match self {
+            // Minor: 2-7 days
+            InjuryType::Bruise => (2, 5),
+            InjuryType::MinorKnock => (2, 6),
+            InjuryType::Cramp => (2, 4),
+            InjuryType::DeadLeg => (3, 7),
+            InjuryType::MinorConcussion => (3, 7),
+            // Moderate: 7-21 days
+            InjuryType::HamstringStrain => (7, 18),
+            InjuryType::CalfStrain => (7, 14),
+            InjuryType::AnkleSprain => (7, 21),
+            InjuryType::GroinStrain => (7, 18),
+            InjuryType::HipFlexorStrain => (7, 14),
+            InjuryType::QuadStrain => (7, 18),
+            InjuryType::BackSpasm => (7, 14),
+            // Severe: 30-75 days
+            InjuryType::TornMeniscus => (30, 60),
+            InjuryType::ShoulderDislocation => (30, 45),
+            InjuryType::StressFracture => (30, 75),
+            InjuryType::MCLSprain => (30, 60),
+            InjuryType::LateralLigament => (30, 75),
+            InjuryType::HerniatedDisc => (45, 75),
+            // Critical: 90-150 days
+            InjuryType::ACLTear => (90, 150),
+            InjuryType::BrokenLeg => (90, 135),
+            InjuryType::AchillesRupture => (90, 150),
+            InjuryType::PCLTear => (100, 150),
+        }
+    }
+
+    pub fn severity(&self) -> InjurySeverity {
+        match self {
+            InjuryType::Bruise
+            | InjuryType::MinorKnock
+            | InjuryType::Cramp
+            | InjuryType::DeadLeg
+            | InjuryType::MinorConcussion => InjurySeverity::Minor,
+
+            InjuryType::HamstringStrain
+            | InjuryType::CalfStrain
+            | InjuryType::AnkleSprain
+            | InjuryType::GroinStrain
+            | InjuryType::HipFlexorStrain
+            | InjuryType::QuadStrain
+            | InjuryType::BackSpasm => InjurySeverity::Moderate,
+
+            InjuryType::TornMeniscus
+            | InjuryType::ShoulderDislocation
+            | InjuryType::StressFracture
+            | InjuryType::MCLSprain
+            | InjuryType::LateralLigament
+            | InjuryType::HerniatedDisc => InjurySeverity::Severe,
+
+            InjuryType::ACLTear
+            | InjuryType::BrokenLeg
+            | InjuryType::AchillesRupture
+            | InjuryType::PCLTear => InjurySeverity::Critical,
+        }
+    }
+
+    pub fn body_part(&self) -> BodyPart {
+        match self {
+            InjuryType::Bruise => BodyPart::Shin,
+            InjuryType::MinorKnock => BodyPart::Knee,
+            InjuryType::Cramp => BodyPart::Calf,
+            InjuryType::DeadLeg => BodyPart::Quad,
+            InjuryType::MinorConcussion => BodyPart::Head,
+            InjuryType::HamstringStrain => BodyPart::Hamstring,
+            InjuryType::CalfStrain => BodyPart::Calf,
+            InjuryType::AnkleSprain => BodyPart::Ankle,
+            InjuryType::GroinStrain => BodyPart::Groin,
+            InjuryType::HipFlexorStrain => BodyPart::Hip,
+            InjuryType::QuadStrain => BodyPart::Quad,
+            InjuryType::BackSpasm => BodyPart::Back,
+            InjuryType::TornMeniscus => BodyPart::Knee,
+            InjuryType::ShoulderDislocation => BodyPart::Shoulder,
+            InjuryType::StressFracture => BodyPart::Foot,
+            InjuryType::MCLSprain => BodyPart::Knee,
+            InjuryType::LateralLigament => BodyPart::Ankle,
+            InjuryType::HerniatedDisc => BodyPart::Back,
+            InjuryType::ACLTear => BodyPart::Knee,
+            InjuryType::BrokenLeg => BodyPart::Shin,
+            InjuryType::AchillesRupture => BodyPart::Ankle,
+            InjuryType::PCLTear => BodyPart::Knee,
+        }
+    }
+
+    /// Recovery days after injury heals (low match fitness phase)
+    pub fn recovery_days(&self) -> u16 {
+        let (min, max) = match self.severity() {
+            InjurySeverity::Minor => (2, 4),
+            InjurySeverity::Moderate => (5, 10),
+            InjurySeverity::Severe => (10, 18),
+            InjurySeverity::Critical => (14, 21),
+        };
+        let range = max - min + 1;
+        min + (rand::random::<u16>() % range)
+    }
+
+    /// Generate a random duration within this injury's range
+    pub fn random_duration(&self) -> u16 {
+        let (min, max) = self.duration_range();
+        let range = max - min + 1;
+        min + (rand::random::<u16>() % range)
+    }
+
+    /// Pick a random match injury — weighted toward contact/muscle injuries
+    pub fn random_match_injury(
+        minutes_played: f32,
+        age: u8,
+        condition_pct: u32,
+        natural_fitness: f32,
+        injury_proneness: u8,
+    ) -> InjuryType {
+        Self::match_injury_from_roll(
+            rand::random::<f32>(),
+            minutes_played,
+            age,
+            condition_pct,
+            natural_fitness,
+            injury_proneness,
+        )
+    }
+
+    /// The injury a player carries out of a match in which the engine saw
+    /// him hurt: a hurt is a minor injury, a serious one is drawn from the
+    /// moderate band upward on the same curve as any other match injury,
+    /// and a knock he got up from is nothing at all.
+    pub fn from_match_severity(
+        severity: InjuryGrade,
+        minutes_played: f32,
+        age: u8,
+        condition_pct: u32,
+        natural_fitness: f32,
+        injury_proneness: u8,
+    ) -> Option<InjuryType> {
+        let roll: f32 = rand::random::<f32>();
+        let band = match severity {
+            InjuryGrade::Knock => return None,
+            InjuryGrade::Hurt => roll * Self::MINOR_BAND,
+            InjuryGrade::Serious => Self::MINOR_BAND + roll * (1.0 - Self::MINOR_BAND),
+        };
+        let injury = Self::match_injury_from_roll(
+            band,
+            minutes_played,
+            age,
+            condition_pct,
+            natural_fitness,
+            injury_proneness,
+        );
+        // The shift moves the bands, and a serious injury is never a
+        // bruise however young and fresh the man.
+        Some(if severity == InjuryGrade::Serious && injury.severity() == InjurySeverity::Minor {
+            InjuryType::HamstringStrain
+        } else {
+            injury
+        })
+    }
+
+    /// Upper bound of the minor band on the match-injury roll.
+    const MINOR_BAND: f32 = 0.45;
+
+    fn match_injury_from_roll(
+        roll: f32,
+        minutes_played: f32,
+        age: u8,
+        condition_pct: u32,
+        natural_fitness: f32,
+        injury_proneness: u8,
+    ) -> InjuryType {
+        // Zero-centered continuous shift: veterans / gassed / low-NF /
+        // glass-boned players skew severe, adolescents skew minor.
+        let severity_modifier = InjurySeverityShift::for_match(
+            minutes_played,
+            age,
+            condition_pct,
+            natural_fitness,
+            injury_proneness,
+        );
+
+        let adjusted_roll = roll + severity_modifier;
+
+        if adjusted_roll < Self::MINOR_BAND {
+            // 45% minor
+            match rand::random::<u8>() % 5 {
+                0 => InjuryType::Cramp,
+                1 => InjuryType::MinorKnock,
+                2 => InjuryType::Bruise,
+                3 => InjuryType::DeadLeg,
+                _ => InjuryType::MinorConcussion,
+            }
+        } else if adjusted_roll < 0.85 {
+            // 40% moderate — heavily weighted toward muscle injuries in matches
+            match rand::random::<u8>() % 7 {
+                0 => InjuryType::HamstringStrain,
+                1 => InjuryType::CalfStrain,
+                2 => InjuryType::AnkleSprain,
+                3 => InjuryType::GroinStrain,
+                4 => InjuryType::HipFlexorStrain,
+                5 => InjuryType::QuadStrain,
+                _ => InjuryType::BackSpasm,
+            }
+        } else if adjusted_roll < 0.96 {
+            // 11% severe
+            match rand::random::<u8>() % 6 {
+                0 => InjuryType::TornMeniscus,
+                1 => InjuryType::ShoulderDislocation,
+                2 => InjuryType::StressFracture,
+                3 => InjuryType::MCLSprain,
+                4 => InjuryType::LateralLigament,
+                _ => InjuryType::HerniatedDisc,
+            }
+        } else {
+            // 4% critical
+            match rand::random::<u8>() % 4 {
+                0 => InjuryType::ACLTear,
+                1 => InjuryType::BrokenLeg,
+                2 => InjuryType::AchillesRupture,
+                _ => InjuryType::PCLTear,
+            }
+        }
+    }
+
+    /// Pick a random training injury (weighted towards minor/moderate muscle injuries)
+    pub fn random_training_injury(
+        age: u8,
+        condition_pct: u32,
+        natural_fitness: f32,
+        injury_proneness: u8,
+    ) -> InjuryType {
+        let roll: f32 = rand::random::<f32>();
+
+        let severity_modifier = InjurySeverityShift::for_training(
+            age,
+            condition_pct,
+            natural_fitness,
+            injury_proneness,
+        );
+
+        let adjusted_roll = roll + severity_modifier;
+
+        if adjusted_roll < 0.50 {
+            // 50% minor
+            match rand::random::<u8>() % 5 {
+                0 => InjuryType::Cramp,
+                1 => InjuryType::MinorKnock,
+                2 => InjuryType::Bruise,
+                3 => InjuryType::DeadLeg,
+                _ => InjuryType::MinorConcussion,
+            }
+        } else if adjusted_roll < 0.92 {
+            // 42% moderate (training injuries are typically muscle strains)
+            match rand::random::<u8>() % 7 {
+                0 => InjuryType::HamstringStrain,
+                1 => InjuryType::CalfStrain,
+                2 => InjuryType::GroinStrain,
+                3 => InjuryType::AnkleSprain,
+                4 => InjuryType::HipFlexorStrain,
+                5 => InjuryType::QuadStrain,
+                _ => InjuryType::BackSpasm,
+            }
+        } else if adjusted_roll < 0.98 {
+            // 6% severe
+            match rand::random::<u8>() % 6 {
+                0 => InjuryType::TornMeniscus,
+                1 => InjuryType::ShoulderDislocation,
+                2 => InjuryType::StressFracture,
+                3 => InjuryType::MCLSprain,
+                4 => InjuryType::LateralLigament,
+                _ => InjuryType::HerniatedDisc,
+            }
+        } else {
+            // 2% critical
+            match rand::random::<u8>() % 4 {
+                0 => InjuryType::ACLTear,
+                1 => InjuryType::BrokenLeg,
+                2 => InjuryType::AchillesRupture,
+                _ => InjuryType::PCLTear,
+            }
+        }
+    }
+
+    /// Pick a random daily spontaneous injury
+    pub fn random_spontaneous_injury(age: u8, injury_proneness: u8) -> InjuryType {
+        let roll: f32 = rand::random::<f32>();
+
+        let severity_modifier = InjurySeverityShift::for_spontaneous(age, injury_proneness);
+        let adjusted_roll = roll + severity_modifier;
+
+        if adjusted_roll < 0.65 {
+            match rand::random::<u8>() % 5 {
+                0 => InjuryType::MinorKnock,
+                1 => InjuryType::Cramp,
+                2 => InjuryType::Bruise,
+                3 => InjuryType::DeadLeg,
+                _ => InjuryType::MinorConcussion,
+            }
+        } else if adjusted_roll < 0.90 {
+            match rand::random::<u8>() % 7 {
+                0 => InjuryType::HamstringStrain,
+                1 => InjuryType::CalfStrain,
+                2 => InjuryType::AnkleSprain,
+                3 => InjuryType::GroinStrain,
+                4 => InjuryType::HipFlexorStrain,
+                5 => InjuryType::QuadStrain,
+                _ => InjuryType::BackSpasm,
+            }
+        } else if adjusted_roll < 0.97 {
+            match rand::random::<u8>() % 6 {
+                0 => InjuryType::TornMeniscus,
+                1 => InjuryType::ShoulderDislocation,
+                2 => InjuryType::StressFracture,
+                3 => InjuryType::MCLSprain,
+                4 => InjuryType::LateralLigament,
+                _ => InjuryType::HerniatedDisc,
+            }
+        } else {
+            match rand::random::<u8>() % 4 {
+                0 => InjuryType::ACLTear,
+                1 => InjuryType::BrokenLeg,
+                2 => InjuryType::AchillesRupture,
+                _ => InjuryType::PCLTear,
+            }
+        }
+    }
+}
+
+impl Display for InjuryType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        match self {
+            InjuryType::Bruise => write!(f, "Bruise"),
+            InjuryType::MinorKnock => write!(f, "Minor Knock"),
+            InjuryType::Cramp => write!(f, "Cramp"),
+            InjuryType::DeadLeg => write!(f, "Dead Leg"),
+            InjuryType::MinorConcussion => write!(f, "Minor Concussion"),
+            InjuryType::HamstringStrain => write!(f, "Hamstring Strain"),
+            InjuryType::CalfStrain => write!(f, "Calf Strain"),
+            InjuryType::AnkleSprain => write!(f, "Ankle Sprain"),
+            InjuryType::GroinStrain => write!(f, "Groin Strain"),
+            InjuryType::HipFlexorStrain => write!(f, "Hip Flexor Strain"),
+            InjuryType::QuadStrain => write!(f, "Quad Strain"),
+            InjuryType::BackSpasm => write!(f, "Back Spasm"),
+            InjuryType::TornMeniscus => write!(f, "Torn Meniscus"),
+            InjuryType::ShoulderDislocation => write!(f, "Shoulder Dislocation"),
+            InjuryType::StressFracture => write!(f, "Stress Fracture"),
+            InjuryType::MCLSprain => write!(f, "MCL Sprain"),
+            InjuryType::LateralLigament => write!(f, "Lateral Ligament"),
+            InjuryType::HerniatedDisc => write!(f, "Herniated Disc"),
+            InjuryType::ACLTear => write!(f, "ACL Tear"),
+            InjuryType::BrokenLeg => write!(f, "Broken Leg"),
+            InjuryType::AchillesRupture => write!(f, "Achilles Rupture"),
+            InjuryType::PCLTear => write!(f, "PCL Tear"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_injury_duration_ranges() {
+        assert_eq!(InjuryType::Bruise.duration_range(), (2, 5));
+        assert_eq!(InjuryType::MinorKnock.duration_range(), (2, 6));
+        assert_eq!(InjuryType::Cramp.duration_range(), (2, 4));
+        assert_eq!(InjuryType::DeadLeg.duration_range(), (3, 7));
+        assert_eq!(InjuryType::MinorConcussion.duration_range(), (3, 7));
+        assert_eq!(InjuryType::HamstringStrain.duration_range(), (7, 18));
+        assert_eq!(InjuryType::ACLTear.duration_range(), (90, 150));
+        assert_eq!(InjuryType::BrokenLeg.duration_range(), (90, 135));
+        assert_eq!(InjuryType::AchillesRupture.duration_range(), (90, 150));
+        assert_eq!(InjuryType::PCLTear.duration_range(), (100, 150));
+    }
+
+    #[test]
+    fn test_injury_severity() {
+        assert_eq!(InjuryType::Cramp.severity(), InjurySeverity::Minor);
+        assert_eq!(InjuryType::Bruise.severity(), InjurySeverity::Minor);
+        assert_eq!(InjuryType::DeadLeg.severity(), InjurySeverity::Minor);
+        assert_eq!(
+            InjuryType::MinorConcussion.severity(),
+            InjurySeverity::Minor
+        );
+        assert_eq!(
+            InjuryType::HamstringStrain.severity(),
+            InjurySeverity::Moderate
+        );
+        assert_eq!(InjuryType::CalfStrain.severity(), InjurySeverity::Moderate);
+        assert_eq!(
+            InjuryType::HipFlexorStrain.severity(),
+            InjurySeverity::Moderate
+        );
+        assert_eq!(InjuryType::QuadStrain.severity(), InjurySeverity::Moderate);
+        assert_eq!(InjuryType::BackSpasm.severity(), InjurySeverity::Moderate);
+        assert_eq!(InjuryType::TornMeniscus.severity(), InjurySeverity::Severe);
+        assert_eq!(InjuryType::MCLSprain.severity(), InjurySeverity::Severe);
+        assert_eq!(
+            InjuryType::StressFracture.severity(),
+            InjurySeverity::Severe
+        );
+        assert_eq!(InjuryType::HerniatedDisc.severity(), InjurySeverity::Severe);
+        assert_eq!(InjuryType::ACLTear.severity(), InjurySeverity::Critical);
+        assert_eq!(InjuryType::BrokenLeg.severity(), InjurySeverity::Critical);
+        assert_eq!(
+            InjuryType::AchillesRupture.severity(),
+            InjurySeverity::Critical
+        );
+        assert_eq!(InjuryType::PCLTear.severity(), InjurySeverity::Critical);
+    }
+
+    #[test]
+    fn test_injury_body_parts() {
+        assert_eq!(InjuryType::HamstringStrain.body_part(), BodyPart::Hamstring);
+        assert_eq!(InjuryType::ACLTear.body_part(), BodyPart::Knee);
+        assert_eq!(InjuryType::AnkleSprain.body_part(), BodyPart::Ankle);
+        assert_eq!(InjuryType::CalfStrain.body_part(), BodyPart::Calf);
+        assert_eq!(InjuryType::GroinStrain.body_part(), BodyPart::Groin);
+        assert_eq!(InjuryType::BackSpasm.body_part(), BodyPart::Back);
+        assert_eq!(InjuryType::MinorConcussion.body_part(), BodyPart::Head);
+    }
+
+    #[test]
+    fn test_random_duration_in_range() {
+        for _ in 0..100 {
+            let duration = InjuryType::Bruise.random_duration();
+            assert!((2..=5).contains(&duration));
+        }
+        for _ in 0..100 {
+            let duration = InjuryType::ACLTear.random_duration();
+            assert!((90..=150).contains(&duration));
+        }
+    }
+
+    #[test]
+    fn test_recovery_days_in_range() {
+        for _ in 0..100 {
+            let days = InjuryType::Cramp.recovery_days();
+            assert!(
+                (2..=4).contains(&days),
+                "Minor recovery {} not in 2-4",
+                days
+            );
+        }
+        for _ in 0..100 {
+            let days = InjuryType::HamstringStrain.recovery_days();
+            assert!(
+                (5..=10).contains(&days),
+                "Moderate recovery {} not in 5-10",
+                days
+            );
+        }
+        for _ in 0..100 {
+            let days = InjuryType::ACLTear.recovery_days();
+            assert!(
+                (14..=21).contains(&days),
+                "Critical recovery {} not in 14-21",
+                days
+            );
+        }
+    }
+
+    #[test]
+    fn test_body_part_encoding() {
+        for val in 1..=12u8 {
+            let bp = BodyPart::from_u8(val).unwrap();
+            assert_eq!(bp.to_u8(), val);
+        }
+        assert!(BodyPart::from_u8(0).is_none());
+        assert!(BodyPart::from_u8(13).is_none());
+    }
+
+    #[test]
+    fn test_match_injury_produces_valid_type() {
+        for _ in 0..100 {
+            let injury = InjuryType::random_match_injury(90.0, 25, 80, 12.0, 10);
+            let (min, max) = injury.duration_range();
+            assert!(min >= 2);
+            assert!(max <= 150);
+        }
+    }
+
+    #[test]
+    fn severity_shift_favors_youth_over_veterans() {
+        // A 16yo low-NF starter must shift toward knocks/strains
+        // (negative), a 33yo on drained legs toward structural damage
+        // (positive) — the shift is zero-centered on a median pro.
+        let youth = InjurySeverityShift::for_match(90.0, 16, 60, 7.0, 11);
+        let veteran = InjurySeverityShift::for_match(90.0, 33, 42, 10.0, 12);
+        let median = InjurySeverityShift::for_match(90.0, 26, 55, 12.0, 10);
+        assert!(youth < 0.0, "youth shift {youth} should be negative");
+        assert!(veteran > 0.03, "veteran shift {veteran} should be positive");
+        assert!(
+            median.abs() < 0.02,
+            "median-pro shift {median} should be near zero"
+        );
+    }
+
+    #[test]
+    fn young_starters_rarely_roll_critical_match_injuries() {
+        // Before the recentering a 16yo starter's post-match roll landed
+        // ~15% critical (90-150 day) injuries; the zero-centered shift
+        // keeps it below the 4% base band. Generous bound for RNG.
+        const N: usize = 20_000;
+        let mut critical = 0;
+        for _ in 0..N {
+            let injury = InjuryType::random_match_injury(90.0, 16, 55, 7.0, 11);
+            if injury.severity() == InjurySeverity::Critical {
+                critical += 1;
+            }
+        }
+        let rate = critical as f32 / N as f32;
+        assert!(
+            rate < 0.045,
+            "16yo critical injury share {rate} — youth severity shift not biting"
+        );
+    }
+
+    #[test]
+    fn veteran_critical_rate_exceeds_youth_critical_rate() {
+        const N: usize = 20_000;
+        let count_critical = |age: u8, condition: u32, nf: f32| -> usize {
+            (0..N)
+                .filter(|_| {
+                    InjuryType::random_match_injury(90.0, age, condition, nf, 11).severity()
+                        == InjurySeverity::Critical
+                })
+                .count()
+        };
+        let youth = count_critical(17, 55, 8.0);
+        let veteran = count_critical(33, 45, 10.0);
+        assert!(
+            veteran > youth * 2,
+            "veteran criticals ({veteran}) should far exceed youth ({youth})"
+        );
+    }
+
+    #[test]
+    fn spontaneous_injury_signature_accepts_age() {
+        for _ in 0..100 {
+            let injury = InjuryType::random_spontaneous_injury(16, 10);
+            let (min, _) = injury.duration_range();
+            assert!(min >= 2);
+        }
+    }
+
+    #[test]
+    fn recovery_speed_curve_is_monotonic_and_clamped() {
+        assert!((InjuryRecoverySpeed::duration_multiplier(16) - 0.78).abs() < 1e-6);
+        assert!((InjuryRecoverySpeed::duration_multiplier(26) - 1.0).abs() < 1e-6);
+        assert!((InjuryRecoverySpeed::duration_multiplier(28) - 1.0).abs() < 1e-6);
+        assert!((InjuryRecoverySpeed::duration_multiplier(36) - 1.12).abs() < 1e-6);
+        assert!((InjuryRecoverySpeed::duration_multiplier(45) - 1.2).abs() < 1e-6);
+        let mut prev = 0.0_f32;
+        for age in 10..=45u8 {
+            let m = InjuryRecoverySpeed::duration_multiplier(age);
+            assert!(m >= prev, "healing multiplier must not decrease with age");
+            assert!((0.75..=1.2).contains(&m));
+            prev = m;
+        }
+    }
+
+    #[test]
+    fn test_injury_recovery_countdown() {
+        let injury = InjuryType::MinorKnock;
+        let mut days = injury.random_duration();
+        assert!((2..=6).contains(&days));
+
+        while days > 0 {
+            days -= 1;
+        }
+        assert_eq!(days, 0);
+    }
+}

@@ -1,0 +1,3059 @@
+//! How much of a ground there is, and who is sitting in it.
+//!
+//! Two questions that look unrelated and are the same one. A stadium is built
+//! for the people who come to it: the number of steps of concrete round a
+//! pitch and the number of coats on them are both read off the fixture, and a
+//! scene that took one from the match and the other from a constant would put
+//! a full house in a village ground or five empty rows round a cup final.
+//!
+//! So [`Stature`] answers both, off the venue the page hands over, and
+//! [`Crowd`] builds the figures. [`Terrace`] is the flight of steps the two
+//! share: [`pitch`](crate::scene::pitch) pours its concrete off exactly the
+//! description the crowd is seated on, so a spectator cannot end up standing
+//! in mid-air or buried in the row in front of him.
+//!
+//! There is a third question of the same shape, and it is answered here for
+//! the same reason: **how well the grass is looked after**. A club that can
+//! fill twenty thousand seats employs groundstaff, and one whose whole crowd
+//! stands on five steps of concrete does not — so a ground built off the
+//! fixture and a pitch painted off a constant would put a cup-final surface
+//! inside a village terrace. [`Stature::keeping`] is that number;
+//! [`Upkeep`](crate::scene::pitch::Upkeep) is what the pitch does with it.
+
+use crate::app::bill::{Held, MemoryBill};
+use crate::app::config::VenueInfo;
+use crate::app::quality::{Footprint, Tier};
+use crate::art::textures::{CrowdPalette, Textures};
+use bevy::asset::RenderAssetUsages;
+use bevy::mesh::Indices;
+use bevy::prelude::*;
+use bevy::render::render_resource::PrimitiveTopology;
+
+/// What kind of ground this is, as one number: 0 at a village pitch or a
+/// training ground, 1 at a great stadium.
+///
+/// A curve rather than a set of tiers. Grounds do not come in three sizes, and
+/// a step function here would show up directly as the same three stadiums over
+/// and over — which is the one thing a procedural ground cannot afford, since
+/// it is the same shape in every match a player ever watches.
+#[derive(Clone, Copy)]
+pub struct Stature {
+    /// How much stand there is, 0..1.
+    standing: f32,
+    /// How much of it has somebody in it, 0..1.
+    occupancy: f32,
+    /// How big a following the visitors brought, 0..1. Read off their standing
+    /// rather than their gate, because what crosses the wire about the away
+    /// side is a reputation — and it is the right measure anyway: what fills
+    /// an away end is how many people follow that club, not how many its own
+    /// ground holds.
+    following: f32,
+    /// How well the grass inside all that concrete is looked after, 0..1. See
+    /// [`Self::keeping`], and [`Upkeep`](crate::scene::pitch::Upkeep), which
+    /// is what turns it into a pitch.
+    keeping: f32,
+}
+
+impl Stature {
+    /// The fewest steps this scene ever builds.
+    ///
+    /// Five, and it is a real terrace rather than a token one: five steps at
+    /// [`Terrace`]'s riser is a bank about three metres high, which is what a
+    /// non-league ground or a club's training pitch actually has round it.
+    pub const FEWEST_ROWS: usize = 5;
+
+    /// The gates the curve runs between. At or below the first a ground is as
+    /// small as this scene builds; at or above the second it is as big.
+    ///
+    /// **A gate and not a capacity**, which is the whole of what decides how
+    /// much stadium gets built. The database records what a club actually
+    /// draws; its capacity is that figure grossed up through
+    /// [`Self::TYPICAL_GATE`] where there is one and GUESSED from reputation
+    /// where there is not — so reading capacity would build half the world's
+    /// grounds off an estimate when the real number was sitting right there.
+    /// A ground is built for the people who come to it, and this is them.
+    ///
+    /// **Both ends are set off the real distribution, not picked.** Measured
+    /// across the 1,335 clubs in `database.db` that carry a gate:
+    ///
+    /// | p10 | p25 | p50 | p75 | p90 | p97 | max |
+    /// |---|---|---|---|---|---|---|
+    /// | 500 | 1,500 | 4,000 | 14,000 | 25,700 | 42,600 | 81,400 |
+    ///
+    /// The top of the curve was 50,000 to begin with, which is the 98th
+    /// percentile: only Madrid, United, Bayern and a dozen others ever reached
+    /// a full-height stand, so effectively every real fixture was played in a
+    /// half-built ground. Lokomotiv Moscow — a 13,133 gate, seventh-tenth of
+    /// the world's clubs, a Moscow derby — came out at thirteen rows of
+    /// twenty-one. At 28,000 the top decile of grounds is a great one, which
+    /// is roughly what the top decile of grounds is, and Lokomotiv gets
+    /// twenty-four rows of thirty-four.
+    const HUMBLE_GATE: f32 = 1_200.0;
+    const GRAND_GATE: f32 = 28_000.0;
+
+    /// World reputation below which a side plays in front of the smallest bank
+    /// there is, whatever its parent club's ground holds.
+    ///
+    /// Four thousand is the top of `Regional` on the simulator's scale — a
+    /// lower-league or semi-professional club. The gate curve alone does not
+    /// catch them: a club nobody ever counted a crowd for falls back to the
+    /// capacity the simulator ESTIMATED from its reputation, and that estimate
+    /// is generous enough to hand a fourth-tier side a mid-size bowl. So the
+    /// reputation is read as well, and read as a CAP rather than as a second
+    /// curve — a small club's ground is small however the arithmetic
+    /// elsewhere came out.
+    const HUMBLE_REPUTATION: u16 = 4_000;
+
+    /// World reputation at which a club keeps a great pitch whatever its
+    /// ground holds — the floor under [`Self::keeping`].
+    ///
+    /// Eight thousand is the bottom of `Elite` on the simulator's scale, and
+    /// this exists because the gate is the wrong question for grass. **A
+    /// stand is capital and a pitch is a wage**: the seats are what the club
+    /// could once afford to build, the surface is what it can afford to look
+    /// after this week, and the two come apart in both directions. A club
+    /// playing its under-18s at the training ground has no stand at all and
+    /// still has a groundsman; a famous old club in a small ground has a
+    /// better pitch than its terracing suggests.
+    ///
+    /// So it is read as a FLOOR rather than as a second curve — a rich club's
+    /// pitch is never worse than its money, and a poor club with a big ground
+    /// still gets the pitch the ground earns it.
+    const KEPT_REPUTATION: u16 = 8_000;
+
+    /// What a ground is taken to be drawing when nobody ever counted.
+    ///
+    /// The simulator recovers a capacity by grossing a recorded gate up
+    /// through exactly this figure, so it is also the ratio most grounds come
+    /// back at: an ordinary league fixture, comfortably full, with visible
+    /// gaps in it. See `ClubFacilities::TYPICAL_UTILISATION` in the core
+    /// crate, which is the same number seen from the other end.
+    const TYPICAL_GATE: f32 = 0.82;
+
+    /// Nobody empties a ground completely and nobody fills one to the last
+    /// seat, so the crowd is held inside a band whatever the numbers say.
+    const SPARSEST: f32 = 0.30;
+    const FULLEST: f32 = 0.96;
+
+    /// How full a training ground's terrace is on an academy matchday: some
+    /// parents, a couple of scouts and the boys who are not playing.
+    ///
+    /// Deliberately below [`Self::SPARSEST`], which is the floor for a fixture
+    /// somebody bought a ticket to. The gate on record belongs to the PARENT
+    /// club and describes a different ground on a different day — left to
+    /// speak for this one it packs a five-step terrace to the same nine-tenths
+    /// Old Trafford fills to, which is the one thing an under-18s game never
+    /// looks like.
+    const ACADEMY_GATE: f32 = 0.10;
+
+    /// How far a visiting side moves the gate, at most, and the reputation gap
+    /// that gets it there.
+    ///
+    /// Nobody buys a ticket to watch the home team in the abstract. Half of
+    /// what fills a ground is who is coming to it, and the swing is not small:
+    /// a fixture against the club everybody wants to see sells out a stand
+    /// that is a third empty for a midweek game against the bottom side.
+    ///
+    /// Read as a DIFFERENCE rather than off the visitor's standing alone,
+    /// because that is how it works: a mid-table club visiting a village side
+    /// is an occasion, and the same club visiting a great one is a quiet
+    /// afternoon. Four thousand points is the gap that gets the full swing,
+    /// which on the simulator's scale is about two tiers.
+    ///
+    /// **Asymmetric, and by more than double.** Going up and going down are
+    /// not the same thing to a supporter. The people who come to everything
+    /// come to everything, so a poor fixture only loses you the ones who pick
+    /// and choose — a fifth, and a ground that is three-quarters full for the
+    /// bottom club is still three-quarters full. But a tie against the side
+    /// everybody wants to see brings out people who go to nothing else, and at
+    /// a small club that is most of a second crowd: half as many again, which
+    /// is what fills an 8,000 ground that usually draws 5,000.
+    ///
+    /// The upper end needs no ceiling of its own — [`Self::FULLEST`] is the
+    /// ceiling, and it is the right one. A ground cannot hold more than it
+    /// holds, and the swing running into that cap IS the sell-out.
+    const PULL_UP: f32 = 0.45;
+    const PULL_DOWN: f32 = 0.22;
+    const PULL_SPAN: f32 = 4_000.0;
+
+    /// Reads the fixture.
+    ///
+    /// **The two answers come off the same gate but not off the same day**,
+    /// and keeping them apart is the whole of this:
+    ///
+    /// - **The stand is concrete.** It was built for the crowd the club draws
+    ///   season in and season out, and it is still exactly that size on the
+    ///   night nobody turns up. So its height comes off the club's ORDINARY
+    ///   gate and nothing about today can move it.
+    /// - **The crowd is not.** How much of that stand has somebody in it is a
+    ///   fact about this fixture, and the biggest thing in it after the home
+    ///   club itself is who they are playing — see [`Self::PULL`].
+    ///
+    /// Run together, as they were at first, a club would grow and shrink its
+    /// own stadium depending on the opposition.
+    ///
+    /// - **And the grass is neither.** It is not built once and it does not
+    ///   answer to who turned up: it is looked after week by week out of the
+    ///   club's own money, which is why [`Self::keeping`] comes off the stand
+    ///   through a curve of its own and off the club's reputation as a floor.
+    pub fn of(venue: &VenueInfo) -> Self {
+        // Zero is "nobody counted", not "nobody came". A document written
+        // before the venue crossed the wire has to keep building the stadium
+        // the viewer always built, and a club with no gate on record still has
+        // a ground: the capacity the simulator estimated for it is the only
+        // thing left to read, at the utilisation it was estimated through.
+        let capacity = if venue.capacity == 0 {
+            Self::GRAND_GATE / Self::TYPICAL_GATE
+        } else {
+            venue.capacity as f32
+        };
+        let gate = if venue.attendance == 0 {
+            capacity * Self::TYPICAL_GATE
+        } else {
+            venue.attendance as f32
+        };
+
+        // Who turned up for THIS one. The ordinary gate is what the club draws
+        // across a season, so a fixture the whole city wants to see is already
+        // averaged in with the ones nobody does — this puts the swing back.
+        let gap =
+            ((venue.visitor as f32 - venue.reputation as f32) / Self::PULL_SPAN).clamp(-1.0, 1.0);
+        let pull = if gap > 0.0 {
+            Self::PULL_UP
+        } else {
+            Self::PULL_DOWN
+        };
+        let today = gate * (1.0 + pull * gap);
+
+        let humble = venue.youth || venue.reputation < Self::HUMBLE_REPUTATION;
+        let standing = if humble {
+            0.0
+        } else {
+            // A square root rather than a straight line, because a crowd is an
+            // AREA and this drives a HEIGHT. A ground holds its people across
+            // the front of four banks as well as up them, so twice the gate is
+            // nothing like twice the steps — read linearly, a twenty-thousand
+            // crowd came out barely deeper than a village one and every
+            // stadium in the game was the same low bowl.
+            ((gate - Self::HUMBLE_GATE) / (Self::GRAND_GATE - Self::HUMBLE_GATE))
+                .clamp(0.0, 1.0)
+                .sqrt()
+        };
+
+        // What the club can afford to spend on the grass, as against what it
+        // once managed to build round it. See `KEPT_REPUTATION`.
+        let means = ((venue.reputation.saturating_sub(Self::HUMBLE_REPUTATION) as f32)
+            / (Self::KEPT_REPUTATION - Self::HUMBLE_REPUTATION) as f32)
+            .clamp(0.0, 1.0);
+
+        Stature {
+            standing,
+            // The reputations a travelling support runs between: below the
+            // first a club is followed by its own town, above the second by a
+            // country.
+            following: ((venue.visitor as f32 - 3_000.0) / 6_000.0).clamp(0.0, 1.0),
+            occupancy: if venue.youth {
+                Self::ACADEMY_GATE
+            } else {
+                (today / capacity.max(1.0)).clamp(Self::SPARSEST, Self::FULLEST)
+            },
+            // **The shortfall SQUARED, not the height.** A pitch is the
+            // cheapest thing on this list and the first thing anybody sees, so
+            // it is the last thing a club lets go: a ground halfway up the
+            // ladder has half the concrete of a great one and very nearly all
+            // of its grass. Read straight off `standing` — which is a square
+            // root, and so already generous at the bottom — every second club
+            // in the world would play on a park pitch, and the whole ladder
+            // would be spent before it reached the grounds this is for.
+            keeping: (1.0 - (1.0 - standing) * (1.0 - standing)).max(means),
+        }
+    }
+
+    /// **How well the pitch is looked after**, 0 at a park pitch and 1 at a
+    /// great ground.
+    ///
+    /// The same fixture the stands are built off, eased and floored — see the
+    /// two notes in [`Self::of`]. What it does to the grass belongs to the
+    /// pitch and is [`Upkeep`](crate::scene::pitch::Upkeep)'s to say.
+    pub fn keeping(&self) -> f32 {
+        self.keeping
+    }
+
+    /// How many steps a bank that would have `most` of them at a great ground
+    /// gets here.
+    pub fn rows(&self, most: usize) -> usize {
+        let most = most.max(Self::FEWEST_ROWS);
+        let extra = (most - Self::FEWEST_ROWS) as f32 * self.standing;
+        Self::FEWEST_ROWS + extra.round() as usize
+    }
+
+    /// How far a bank runs past the corner of the playing surface, between the
+    /// `least` a small ground wraps and the `most` a great one does.
+    ///
+    /// Height is not the only thing that says how big a ground is. Left at the
+    /// full wrap, a five-step bank reads as a running track: a hundred and
+    /// forty metres of terracing three metres high is not a small stadium, it
+    /// is a large flat one.
+    pub fn overhang(&self, least: f32, most: f32) -> f32 {
+        least + (most - least) * self.standing
+    }
+
+    /// The share of the places with somebody in them.
+    pub fn occupancy(&self) -> f32 {
+        self.occupancy
+    }
+
+    /// **What share of a bank turns up in the club's colours.**
+    ///
+    /// Two things decide it, and they are the two the eye actually reads.
+    ///
+    /// **Which bank it is.** An end behind a goal is where the support stands
+    /// and it is mostly shirts; a touchline is the main stand and it is mostly
+    /// coats, with the colours scattered thinly through it. The gap between
+    /// the pair is not decoration — it is the only thing that makes an end
+    /// read as an end from across the ground.
+    ///
+    /// **How big the club is.** A great club fills its ends with people who
+    /// own the shirt and wear it in November; at a village ground half the
+    /// crowd is somebody's father in the coat he came in. So both bands run
+    /// with [`Self::standing`] — and the SIDES run too, which is the quieter
+    /// half of the same fact: a big club's main stand still carries a good
+    /// scattering of colour where a small club's carries almost none.
+    ///
+    /// The end never reaches a full house of colour and should not. A quarter
+    /// of any real kop is in a coat, and an end painted at nine tenths comes
+    /// out as a printed sheet rather than as people.
+    /// An away end runs off the VISITORS' standing rather than the home
+    /// club's, because it is their support filling it: a great club travels in
+    /// numbers to a small ground, and a small one sends two coaches to a great
+    /// one.
+    pub fn allegiance(&self, stand: Stand) -> f32 {
+        let (least, most, size) = match stand {
+            Stand::HomeEnd => (0.40, 0.76, self.standing),
+            Stand::AwayEnd => (0.40, 0.76, self.following),
+            Stand::Side => (0.05, 0.17, self.standing),
+        };
+        least + (most - least) * size
+    }
+
+    /// What is left of an end out in its corners, where the massing has
+    /// finished giving way — the floor under [`Self::behind_goal`], and the
+    /// number [`Gathering`] reads it back through to ask how far out of the
+    /// kop a place is.
+    pub const FLANK: f32 = 0.25;
+
+    /// **How much of an end's support is gathered at a given point across it**,
+    /// `0` at the middle of the bank and `1` at either corner.
+    ///
+    /// Support massed behind the goal is the single most recognisable thing
+    /// about a football ground, and an end painted at one strength all the way
+    /// across does not have it: an end bank here is a hundred metres wide
+    /// against a pitch of sixty-eight, so a third of it is not behind the goal
+    /// at all — it is the corners, which run past the flags and into the
+    /// touchline stands. Spread evenly, the colour bled round the whole bowl
+    /// and there was no kop anywhere in it.
+    ///
+    /// So it is full across the middle — roughly the width of the six-yard box
+    /// out to the posts, which is where the people who sing actually stand —
+    /// and falls away through the corners to about a quarter, which is the
+    /// level of a main stand. The two meet as a smoothstep because the real
+    /// thing has no edge to it: a kop does not stop, it thins.
+    pub fn behind_goal(across: f32) -> f32 {
+        /// Where the massed support gives way, and where it has finished
+        /// giving way, as a share of the half-width of the bank.
+        const CORE: f32 = 0.34;
+        const CORNER: f32 = 0.86;
+
+        let out = ((across.abs() - CORE) / (CORNER - CORE)).clamp(0.0, 1.0);
+        1.0 - (1.0 - Self::FLANK) * (out * out * (3.0 - 2.0 * out))
+    }
+
+    /// **What share of a bank is on its feet** rather than in its seat.
+    ///
+    /// The same two facts as [`Self::allegiance`], because it is the same
+    /// fact: an end behind a goal is where the support stands, and it stands —
+    /// at a big club half of it is up for the whole ninety minutes — while a
+    /// touchline is season tickets and directors and stays seated but for the
+    /// goals. So the band runs with the bank, and with the size of the club
+    /// inside it.
+    ///
+    /// It matters far more than it sounds. A stand of identical seated figures
+    /// is a stand of identical seated figures however well each one is
+    /// modelled; a man on his feet is a metre taller than his neighbour, and a
+    /// scattering of them is the only thing that fills the daylight between
+    /// one row and the next — which is what made the old bank read as confetti
+    /// on a wall. It costs nothing at all: standing is a different set of ring
+    /// heights, not another vertex.
+    pub fn on_their_feet(&self, stand: Stand) -> f32 {
+        let (least, most) = match stand {
+            Stand::HomeEnd | Stand::AwayEnd => (0.26, 0.58),
+            Stand::Side => (0.05, 0.15),
+        };
+        least + (most - least) * self.standing
+    }
+
+    /// **How far up a bank the tier break is**, as a share of its rows.
+    ///
+    /// Deliberately not the crest: the camera looks UP at these from below
+    /// their top, so a line drawn along the crest is never in shot and a third
+    /// of the way up is. [`Pitch`](crate::scene::pitch::Pitch) paints the lit
+    /// walkway on it and [`Gathering`] sells the blocks either side of it as
+    /// separate tiers, which is the same fact twice: it is the gangway that
+    /// divides the stand.
+    pub const TIER: f32 = 0.35;
+
+    /// Whether a bank of `rows` is deep enough for the lit walkway that splits
+    /// the tiers to mean anything.
+    ///
+    /// On a five-step terrace it would land on the second step, which is not a
+    /// tier break — it is a stripe painted across a low wall, and it reads as
+    /// one. A small ground has no two tiers to split.
+    pub fn tiered(rows: usize) -> bool {
+        rows >= Self::FEWEST_ROWS * 2
+    }
+}
+
+/// Which of the four banks this is, and so who is sitting in it.
+///
+/// A ground is not one crowd. The ends behind the goals are where the support
+/// stands — the ones who come in the shirt, bring the flags and sing — and the
+/// two long sides are the main stand and the one opposite it, which is season
+/// tickets, families and directors, in whatever coat they own. Painting all
+/// four the same way is what made every bank a wall of club colour, and a
+/// stadium where the ends are indistinguishable from the sides has no ends.
+/// …and the two ends are not the same as each other either. **One of them
+/// holds the people who travelled.**
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Stand {
+    /// Along a touchline. Mostly neutral: coats, not colours.
+    Side,
+    /// Behind one goal: the home support.
+    HomeEnd,
+    /// Behind the other: the visitors'.
+    AwayEnd,
+}
+
+/// A flight of terracing, in the bank's own space — rows receding along `+Z`
+/// and climbing in `+Y` from the front one.
+///
+/// Built by [`pitch`](crate::scene::pitch), which pours the concrete off it,
+/// and handed straight to [`Crowd::fill`], which seats people on the same
+/// steps. One description and two readers: the arithmetic that puts a step's
+/// surface at a given height is written once, so a spectator cannot float
+/// above his row or sink into it.
+pub struct Terrace {
+    /// Length across the front.
+    pub length: f32,
+    pub rows: usize,
+    /// Height gained and depth given up per step.
+    pub riser: f32,
+    pub tread: f32,
+    /// Centre spot to the front edge of the first step.
+    pub from: f32,
+    /// How thick a step's slab is, as a multiple of the riser. Over one, so
+    /// each step overlaps the one below and the flight is solid rather than a
+    /// stack of floating shelves.
+    pub slab: f32,
+}
+
+impl Terrace {
+    /// The walking surface of a step: `x` is where its front edge falls and
+    /// `y` how high it stands.
+    pub fn step(&self, row: usize) -> Vec2 {
+        Vec2::new(
+            self.from + self.tread * row as f32,
+            self.riser * (row as f32 + 0.5 + self.slab * 0.5),
+        )
+    }
+
+    /// Where the slab of a step is centred — half a tread behind its front
+    /// edge, half a slab below its surface.
+    pub fn slab_centre(&self, row: usize) -> Vec3 {
+        let step = self.step(row);
+        Vec3::new(
+            0.0,
+            step.y - self.riser * self.slab * 0.5,
+            step.x + self.tread * 0.5,
+        )
+    }
+
+    /// The crest: the surface of the back step, which is how tall the bank is.
+    pub fn crest(&self) -> f32 {
+        self.step(self.rows.saturating_sub(1)).y
+    }
+}
+
+/// The people in the stands.
+///
+/// **One mesh per bank, and that is the whole design.** A bank at a great
+/// ground carries some three thousand of these; an entity each would be three
+/// thousand walks, extracts and submits every frame for scenery that never
+/// moves — against a frame that is spent per ENTITY and not per pixel (see
+/// [`crate::app::perf`], where the same scene costs the same 3.9 ms at 720p
+/// and at 4K). They are accumulated into the buffers below instead and spawned
+/// as a single child of the bank, which also means they are hidden with it: a
+/// lens that walks into a stand steps through the crowd in it rather than past
+/// it.
+///
+/// **Stationary, but not identical.** Nothing here moves — a bank is one mesh
+/// and it is baked once — so everything that tells one spectator from another
+/// has to be baked in with him: his [`Posture`], the few degrees he is turned
+/// off square, how big he is, what he came in, and which of two dozen heads is
+/// on his shoulders. That is where the variety lives and it is free, because a
+/// different pose is the same rings at different heights.
+///
+/// **Each of them is a modelled person.** A torso turned from hips to collar
+/// with the shoulders sloping away, a rounded head with his own face wrapped
+/// right round it, two arms, and a pair of legs for the ones on their feet.
+/// They were a box with a smaller box on top, which is what a crowd looks like
+/// from a hundred metres and nothing like what one looks like from three — and
+/// the free camera goes to three.
+/// **How much crowd a device is asked to hold.**
+///
+/// The stands are by a long way the largest mesh in the scene: twenty thousand
+/// people at a hundred and thirty vertices each, some **hundred and twenty-five
+/// megabytes of static geometry** once the indices are counted (the figure is
+/// `the_whole_crowd_fits_in_its_budget`'s, and it is the ceiling rather than
+/// the common case). On a computer that is a bargain — it is four draw calls,
+/// and the frame is spent per entity — and the note on
+/// [`Crowd::SPACING`] records it being measured and found free.
+///
+/// On a phone it is not a frame cost at all, it is a **memory** cost, and
+/// memory is what WebKit kills a tab for. Reported 2026-09-01: the replay
+/// would not open on an iPhone or an iPad, where it previously did — and the
+/// crowd figure had lately gone from fifty-six vertices a man to a hundred and
+/// thirty, which doubled this on its own.
+///
+/// So a handheld builds the same ground with a thinner crowd in it. Both
+/// levers are here because neither is enough alone: the figure is already
+/// frugal at 8/8/4, so cutting it is worth about a third, and the rest has to
+/// come from seating fewer people.
+///
+/// ⚠ **The stand itself is untouched.** Rows, overhang and occupancy all still
+/// come off the fixture — see
+/// [`Stature`] and [`stadium_answers_to_the_fixture`]. A ground that got
+/// visibly smaller on a phone would be a different ground, and the venue is a
+/// fact about the match rather than about the device looking at it.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Throng {
+    body_sides: usize,
+    skull_sides: usize,
+    limb_sides: usize,
+    /// Sample the torso and skull profiles more sparsely on small devices.
+    ring_step: usize,
+    /// Metres between one seat and the next.
+    spacing: f32,
+}
+
+impl Throng {
+    /// What a computer builds: every figure this crate has ever drawn, at the
+    /// spacing the stands were laid out for.
+    pub const FULL: Throng = Throng {
+        body_sides: Crowd::BODY_SIDES,
+        skull_sides: Crowd::SKULL_SIDES,
+        limb_sides: Crowd::LIMB_SIDES,
+        ring_step: 1,
+        spacing: Crowd::SPACING,
+    };
+
+    /// …and what a phone builds.
+    ///
+    /// Keep the same seats, poses and face textures, but use three profile
+    /// rings for torsos and heads. The endpoints and widest ring stay, while
+    /// intermediate curves are omitted to reduce construction and upload peaks.
+    pub const HANDHELD: Throng = Throng {
+        body_sides: 5,
+        skull_sides: 5,
+        limb_sides: 3,
+        ring_step: 2,
+        spacing: Crowd::HANDHELD_SPACING,
+    };
+
+    /// …and what a computer on the post-processed tier builds: the phone's
+    /// figure at the computer's spacing, so the same people sit in the same
+    /// seats in the same clothes, cut as coarsely as its squad is.
+    pub const SPARE: Throng = Throng {
+        spacing: Crowd::SPACING,
+        ..Self::HANDHELD
+    };
+
+    /// Handhelds omit spectator meshes to leave room for browser and upload
+    /// memory during startup. The stadium itself is still built. A computer
+    /// builds the figure its rendering tier draws its squad at — see
+    /// [`Grain::of`](crate::players::body::Grain::of). Explicit
+    /// `?crowd=handheld|full|off` overrides remain available for diagnostics.
+    pub fn of(footprint: Footprint, tier: Tier, asked: Option<&str>) -> Option<Throng> {
+        match asked {
+            Some("off") => None,
+            Some("full") => Some(Self::FULL),
+            Some("handheld") => Some(Self::HANDHELD),
+            _ => match (footprint, tier) {
+                (Footprint::Handheld, _) => None,
+                (Footprint::Roomy, Tier::Multisampled) => Some(Self::FULL),
+                (Footprint::Roomy, Tier::PostProcessed) => Some(Self::SPARE),
+            },
+        }
+    }
+}
+
+pub struct Crowd;
+
+impl Crowd {
+    /// Metres between one spectator and the next along a row.
+    ///
+    /// A shade over a real seat, which is about half a metre. A figure is
+    /// 0.44 m across the shoulders and rather more than that across the
+    /// elbows, so two thirds of every row is people and the last third is the
+    /// gap between them — and what closes THAT is the row behind, whose
+    /// figures carry their own stagger and sit a riser higher. Which is how a
+    /// real crowd reads from the halfway line: not as a row of people but as a
+    /// speckled mass with its gaps filled in from behind.
+    ///
+    /// It was 0.80 to begin with, on the reasoning that half a metre of detail
+    /// is invisible at a hundred and twenty. It is not: at that spacing the
+    /// gap between two spectators is wider than a spectator, so the seats
+    /// showed THROUGH the crowd and the bank read as a teal wall with figures
+    /// scattered on it rather than as a stand with people in it. The thing the
+    /// eye reads at distance is what fraction of the bank is crowd, and this
+    /// is what sets it.
+    ///
+    /// Then 0.62 to 0.70, which is a seventh fewer people in every ground —
+    /// and a fuller-looking one, which is the point. A spectator used to be a
+    /// rectangle 0.42 m wide and that was the whole of him; he has arms now,
+    /// and a tenth of any bank is standing up and a head taller than the
+    /// seats. The bank closes on less.
+    const SPACING: f32 = 0.70;
+
+    /// Half the widest a figure ever gets, in metres: a man on his feet with
+    /// his arms up, measured to the outside of a sleeve.
+    ///
+    /// What it is for is the ENDS of a bank. These are placed by their
+    /// middles, so the run they are laid across has to be short of the
+    /// concrete by this much either side or the man on the end has half of
+    /// himself off the edge of it — which at a corner is a spectator standing
+    /// in mid-air.
+    const REACH: f32 = 0.50;
+
+    /// How much of his own slot a spectator may wander across, either way.
+    /// Enough to break the columns; not enough for two neighbours to meet.
+    const STAGGER: f32 = 0.18;
+
+    /// How far off square a figure may be turned, either way, in radians.
+    ///
+    /// Eight degrees, and it is worth more than it sounds. A bank is a grid
+    /// and everything in it faces the same way; part of what says these are
+    /// people rather than a printed pattern is that no two of them are quite
+    /// parallel. Free, too — a turn is a different quaternion, not another
+    /// vertex.
+    const SQUARE: f32 = 0.14;
+
+    /// Where in his step a seated man is, front to back. Toward the back,
+    /// where the seat is — his legs take the rest of the tread. A man on his
+    /// feet stands further forward, in front of his own seat.
+    const SEATED_AT: f32 = 0.62;
+    const AFOOT_AT: f32 = 0.46;
+
+    /// One spectator, in metres: shoulders across, chest deep, and hips to the
+    /// top of the shoulder.
+    ///
+    /// Off a real adult rather than picked to look right — hip to the top of
+    /// the shoulder is about 0.56 m and shoulders are about 0.44 m apart, so a
+    /// spectator is a little TALLER than he is wide. Built the other way round
+    /// (0.54 by 0.46) they came out square, and a bank of squares reads as a
+    /// stack of boxes rather than as people.
+    const SHOULDERS: f32 = 0.44;
+    const CHEST: f32 = 0.30;
+    const TORSO: f32 = 0.56;
+
+    /// …and the head above that, at its widest: across, up from the base of
+    /// the neck, and front to back.
+    ///
+    /// Narrower than it is tall, and a good deal narrower than the shoulders
+    /// under it. A head is roughly two fifths of the width across a man's
+    /// shoulders; a cube the height of a head is nearer three fifths, and at
+    /// this size that one ratio is the whole difference between a crowd and a
+    /// tray of skittles.
+    const HEAD: Vec3 = Vec3::new(0.198, 0.320, 0.212);
+
+    /// How high his hips are above the step: sitting on it, and standing on
+    /// it. The first is a hip joint over a seat, the second is what makes a
+    /// man 1.70 m tall from the concrete to the top of his head.
+    ///
+    /// It is also what a lean turns about — see [`Seat`]. A figure leaned at
+    /// the FEET tips the whole of himself forward, and the front of a hip ring
+    /// then swings down through the step he is sitting on, which is what
+    /// `every_spectator_is_sitting_on_a_step` catches.
+    const SEAT: f32 = 0.10;
+    const HIP: f32 = 0.86;
+
+    /// How thick an arm is through the sleeve, and a leg through the trouser.
+    const ARM: f32 = 0.052;
+    const LEG: f32 = 0.088;
+
+    /// **The rings a torso is turned on**: how far up it each sits and how far
+    /// it reaches across and back — the first as a fraction of
+    /// [`Self::TORSO`], the other two of half [`Self::SHOULDERS`] and half
+    /// [`Self::CHEST`].
+    ///
+    /// The whole of what makes a coat a body rather than a filing cabinet is
+    /// in the last two rings. A torso used to be one box, and a box has the
+    /// same rectangular outline from every angle: two hard corners where the
+    /// shoulders should slope away, and a head sitting on the flat top of it
+    /// like a bucket on a crate. What the eye reads at every distance is the
+    /// SILHOUETTE, and only geometry moves a silhouette.
+    ///
+    /// ⚠ **The trunk is 0.36 m across and not 0.44.** The wider figure is what
+    /// a man measures at the shoulders, and the last four centimetres either
+    /// side of him are his ARMS hanging on it — build the trunk to the full
+    /// width and there is nowhere for them to be: they come out inside their
+    /// own body, and the whole crowd is a slab with a hand painted on each
+    /// side of it and a small head on top.
+    const BODY: [(f32, f32, f32); 5] = [
+        (0.00, 0.82, 1.00),
+        (0.55, 0.78, 1.04),
+        (0.86, 0.82, 0.94),
+        (0.97, 0.52, 0.68),
+        (1.04, 0.28, 0.39),
+    ];
+    /// How many points there are round one of them. Eight, so a ring reaches
+    /// the width it is given — a hexagon has no point at a quarter turn and
+    /// comes out an eighth narrow — and so a shoulder is round rather than cut
+    /// off at a corner.
+    const BODY_SIDES: usize = 8;
+
+    /// **The rings a head is turned on**, and where each reads its band of the
+    /// drawn tile: how far up the head it sits, how far it reaches across and
+    /// back, and how far DOWN his tile it is painted. The first three are
+    /// fractions of [`Self::HEAD`]; the fourth is the tile's own coordinate.
+    ///
+    /// A real skull seen front-on — the neck, then the jaw, **widest at the
+    /// cheekbones**, the forehead standing almost as proud, and the crown
+    /// taken well in. A head was one box, and no amount of drawing on the
+    /// front of a box would have helped: what says "square" at ten pixels is
+    /// the four hard corners of the outline, not the picture inside them.
+    ///
+    /// **The fourth number is not the first.** It is what the tile is spent
+    /// on, and it is deliberately not proportional to height: the neck is
+    /// three tenths of the lathe and gets two of the sheet, while the face —
+    /// jaw to forehead, half the lathe — takes half of it. Tied to height, a
+    /// third of every head's tile would go on a colour that could have been
+    /// one texel. See
+    /// [`CrowdPalette::head_uv`](crate::art::textures::CrowdPalette::head_uv),
+    /// which does the same thing the other way round.
+    /// The widest ring is where a man's EYES are, which is both true of a
+    /// skull and the thing that ties the two halves of this table together:
+    /// the tile column puts the eye line at 0.43, so the ring that carries it
+    /// has to be the one at the cheekbones.
+    const SKULL: [(f32, f32, f32, f32); 5] = [
+        (0.00, 0.54, 0.56, 1.00),
+        (0.30, 0.78, 0.86, 0.79),
+        (0.55, 1.00, 1.00, 0.43),
+        (0.76, 0.95, 0.98, 0.24),
+        (0.93, 0.62, 0.68, 0.05),
+    ];
+    /// Points round a head. More than a body gets, because a head is the one
+    /// thing in this scene a lens is ever walked up to: at eight the outline
+    /// has six corners in it and reads as an oval at every size, and at four —
+    /// which is what it was — it is a barrel however carefully the profile is
+    /// drawn.
+    const SKULL_SIDES: usize = 8;
+    /// …and how many an arm or a leg gets. Four: a sleeve is a centimetre of
+    /// screen at the distance any of this is seen from, and what it has to do
+    /// there is BE there.
+    const LIMB_SIDES: usize = 4;
+
+    /// How far apart a handheld seats them — see [`Throng::HANDHELD`].
+    ///
+    /// A metre, against [`Self::SPACING`]'s seventy centimetres, which is a
+    /// third fewer people in every bank. It is the only honest way to make
+    /// this mesh smaller by a large factor: the figure is already frugal, and
+    /// a crowd is a number of PEOPLE times what one costs.
+    const HANDHELD_SPACING: f32 = 1.00;
+
+    /// How much taller or shorter than that anybody gets. People are not one
+    /// size, and a bank of identical figures reads as a printed pattern rather
+    /// than as a crowd — the same reason the seats behind them are jittered.
+    const SPREAD: f32 = 0.12;
+
+    /// **How unevenly the DAYLIGHT in a bank is spread**, as the swing either
+    /// side of the gaps [`Gathering`] leaves in this part of it.
+    ///
+    /// Nobody arrives at a ground and is dealt a seat at random, which is what
+    /// an independent draw per place amounts to and what this used to be: an
+    /// even salt-and-pepper of people and gaps at exactly the same density
+    /// everywhere, which is the one pattern a real crowd never makes. People
+    /// come in twos and fours and sit together; a block sells out while the
+    /// one beside it does not; a corner nobody wants stays empty all season.
+    ///
+    /// The two are a pair and not a duplicate. [`Gathering`] says which PARTS
+    /// of a stand the gate fills, and this says that nobody fills them tidily;
+    /// left to itself the first would hand every block its exact share and
+    /// read as a gradient painted on a wall.
+    ///
+    /// ⚠ **It moves the gaps, not the people**, which is why it is applied to
+    /// what is left empty rather than to the density. A block that is sold out
+    /// has nothing to clump: swung the other way about, the one part of the
+    /// ground that is never anything but rammed — the column behind the goal —
+    /// came out with holes punched through it by noise, and no amount of
+    /// massing upstream could fill them back in.
+    ///
+    /// That is also why it can be worth more than one. The old swing was
+    /// capped there because half again above a four-fifths density is a
+    /// density of six fifths, and everything past the clamp was thrown away;
+    /// against the daylight there is no such ceiling, and a corner where the
+    /// people are in knots with real gaps between them is what a poorly
+    /// attended stand actually looks like.
+    const CLUMPING: f32 = 1.6;
+
+    /// The two scales it varies over, in slots across and rows up: whole
+    /// blocks of a stand, and knots of people inside them.
+    ///
+    /// Two octaves rather than one because they are two different things. One
+    /// alone gives either a stand with a few large soft patches and no groups
+    /// in it, or groups with no sense that one part of the ground is busier
+    /// than another. The coarse one carries about two thirds.
+    const CLUMP_BLOCK: (f32, f32) = (22.0, 9.0);
+    const CLUMP_GROUP: (f32, f32) = (6.0, 3.0);
+
+    /// Salt for the second and third draws off a slot.
+    ///
+    /// A man's coat, his complexion and his trousers come from DIFFERENT
+    /// hashes rather than from three slices of one. Cut from overlapping bits
+    /// they correlate, and a stand where everybody in a red coat has the same
+    /// face is a stand nobody believes — the same trap `Complexion::face`
+    /// documents on the pitch.
+    const COMPLEXION: u32 = 0x5BF0_3635;
+    const TROUSERS: u32 = 0x2E9A_C41D;
+
+    /// Everybody in one bank, as a single mesh. `None` when there is nobody
+    /// there — which a bank with no steps and a crowd of nought both are.
+    ///
+    /// `seed` is what makes the four banks of a ground differ. Without one
+    /// every bank draws the same figures in the same places, and the two ends
+    /// are visibly the same photograph.
+    pub fn fill(
+        terrace: &Terrace,
+        stature: Stature,
+        stand: Stand,
+        palette: &CrowdPalette,
+        seed: u32,
+        throng: Throng,
+    ) -> Option<Mesh> {
+        // The run the seats are laid across, which is the bank less the widest
+        // spectator it could seat: these are placed by their middles, so a run
+        // of the full length puts the two on the ends half a shoulder off the
+        // end of the concrete.
+        let run = (terrace.length - Self::REACH * 2.0 * (1.0 + Self::SPREAD)).max(0.0);
+        let slots = (run / throng.spacing).floor() as usize;
+        if slots == 0 || terrace.rows == 0 {
+            return None;
+        }
+        // Spread over the true run rather than left at `SPACING`, so a bank
+        // ends with a seat at each end instead of with a gap of whatever the
+        // division left over.
+        let spacing = run / slots as f32;
+        // Which parts of this bank the gate fills, which is not all of it
+        // evenly: an occupancy is an average over the concrete rather than a
+        // description of any one step of it.
+        let gathering = Gathering::over(stand, stature.occupancy(), seed, terrace.rows, slots);
+        let allegiance = stature.allegiance(stand);
+        let afoot = stature.on_their_feet(stand);
+        // Whose colours this bank wears at all. An end belongs to one support
+        // or the other; a touchline is the home club's, thinly.
+        let wearing = match stand {
+            Stand::AwayEnd => CrowdPalette::visitors as fn(&CrowdPalette, u32) -> Vec2,
+            _ => CrowdPalette::colours as fn(&CrowdPalette, u32) -> Vec2,
+        };
+
+        // **A census before a stitch.** The buffers below come to tens of
+        // megabytes on a full bank and a `Vec` that outgrows its reservation
+        // doubles, so the reservation is counted off the same hashes the
+        // placement uses rather than estimated from the occupancy — see
+        // [`Figures::exactly`], and [`Figures::leg_vertices`] for the fifty
+        // megabytes of permanent heap the old estimate was buying.
+        //
+        // It costs a second pass over rows x slots doing nothing but hashes:
+        // some five thousand of them on the largest bank in the game, against
+        // the ten thousand figures the pass below then turns.
+        let (mut seated, mut standing) = (0usize, 0usize);
+        for row in 0..terrace.rows {
+            for slot in 0..slots {
+                if Self::taken(seed, &gathering, row, slot).is_none() {
+                    continue;
+                }
+                seated += 1;
+                let head = Self::hash(seed ^ Self::COMPLEXION, row as u32, slot as u32);
+                if Posture::of(Self::unit(head >> 16), afoot).afoot() {
+                    standing += 1;
+                }
+            }
+        }
+        let mut figures = Figures::exactly(seated, standing, throng);
+
+        for row in 0..terrace.rows {
+            let step = terrace.step(row);
+            for slot in 0..slots {
+                // Whether anybody is here at all, against the density of THIS
+                // corner of the bank rather than the ground's average — see
+                // [`Gathering`] and [`Self::CLUMPING`].
+                let Some(roll) = Self::taken(seed, &gathering, row, slot) else {
+                    continue;
+                };
+
+                let stagger = (Self::unit(roll >> 8) - 0.5) * 2.0 * Self::STAGGER * spacing;
+                let x = run * -0.5 + spacing * (slot as f32 + 0.5) + stagger;
+                let size = 1.0 + (Self::unit(roll >> 16) - 0.5) * 2.0 * Self::SPREAD;
+                let head = Self::hash(seed ^ Self::COMPLEXION, row as u32, slot as u32);
+                let dress = Self::hash(seed ^ Self::TROUSERS, row as u32, slot as u32);
+
+                // What he is doing with himself, which is what decides where
+                // every ring of him goes.
+                let posture = Posture::of(Self::unit(head >> 16), afoot);
+                let hips = posture.hips();
+                let seat = Seat {
+                    pivot: Vec3::new(
+                        x,
+                        step.y + hips * size,
+                        step.x + terrace.tread * posture.stands_at(),
+                    ),
+                    hips,
+                    size,
+                    turn: Quat::from_rotation_y(
+                        (Self::unit(head >> 24) - 0.5) * 2.0 * Self::SQUARE,
+                    ) * Quat::from_rotation_x(-posture.lean()),
+                };
+
+                // What he came in. Whether he is wearing anybody's colours at
+                // all is a draw off the SALTED hash, because it has to be
+                // independent of the tile he then picks — cut from
+                // neighbouring bits of one draw, everybody in colours would
+                // end up in the same shade of it.
+                //
+                // …and how likely that is depends on WHERE he is sitting. An
+                // end's support is massed behind the goal and thins through
+                // the corners; a touchline carries its scattering evenly.
+                let dressed = match stand {
+                    Stand::Side => allegiance,
+                    _ => allegiance * Stature::behind_goal(x / (run * 0.5)),
+                };
+                let clothing = if Self::unit(head >> 8) < dressed {
+                    wearing(palette, roll >> 24)
+                } else {
+                    palette.coat(roll >> 24)
+                };
+                let skin = palette.head(head);
+
+                // The body, from the hem of his coat to his collar.
+                let body: [Ring; Self::BODY.len()] = std::array::from_fn(|course| {
+                    let (up, wide, deep) = Self::BODY[course];
+                    // The bottom ring is the hem, and where it hangs depends
+                    // on whether he is sitting on it — see [`Posture::hem`].
+                    let up = if course == 0 { up - posture.hem() } else { up };
+                    seat.upright(
+                        hips + Self::TORSO * up,
+                        Self::SHOULDERS * 0.5 * wide,
+                        Self::CHEST * 0.5 * deep,
+                    )
+                });
+                figures.tube(&body, throng.body_sides, throng.ring_step, false, |_, _| {
+                    clothing
+                });
+
+                // The head on top of it, turned on [`Self::SKULL`] and skinned
+                // with his own tile the whole way round — hair at the back, an
+                // ear either side, his face at the front. The `turn` of each
+                // point is what the tile is laid on, so the drawing follows
+                // the geometry as the head narrows under it.
+                let neck = hips + Self::TORSO * 0.99;
+                let skull = Self::SKULL.map(|(up, wide, deep, _)| {
+                    seat.upright(
+                        neck + Self::HEAD.y * up,
+                        Self::HEAD.x * 0.5 * wide,
+                        Self::HEAD.z * 0.5 * deep,
+                    )
+                });
+                figures.tube(
+                    &skull,
+                    throng.skull_sides,
+                    throng.ring_step,
+                    true,
+                    |turn, course| palette.head_uv(head, turn, Self::SKULL[course].3),
+                );
+                figures.cap(skull[Self::SKULL.len() - 1], throng.skull_sides, |turn| {
+                    palette.head_uv(head, turn, 0.0)
+                });
+
+                // Two arms, which are most of what says "person" at the
+                // distance a lens actually gets to. Mirrored rather than given
+                // their own table: nobody has one arm longer than the other,
+                // and a second set of joints is a second set of numbers
+                // waiting to drift.
+                let joints = posture.arm(hips);
+                for hand in [-1.0f32, 1.0] {
+                    let [top, elbow, wrist] =
+                        joints.map(|joint| Vec3::new(joint.x * hand, joint.y, joint.z));
+                    let limb = [
+                        // Thickest at the top, where it is a shoulder and has to
+                        // MERGE with the one it hangs off: an even tube pinned
+                        // to the side of a coat is a scarecrow.
+                        seat.limb(top, elbow - top, Self::ARM * 1.34),
+                        seat.limb(elbow, wrist - top, Self::ARM),
+                        seat.limb(wrist, wrist - elbow, Self::ARM * 0.78),
+                    ];
+                    figures.tube(&limb, throng.limb_sides, 1, false, |_, _| clothing);
+                    // The back of his hand, which is the one end of an arm
+                    // that is out in the open air.
+                    figures.cap(limb[2], throng.limb_sides, |_| skin);
+                }
+
+                // …and two legs, but only for the men on their feet. A seated
+                // pair of knees is inside the tread of his own step with the
+                // nose of the step in front drawn across it, and any lens high
+                // enough to see over that nose is looking down at the top of
+                // his head. On a man standing up they are half of him.
+                if let Some(joints) = posture.leg() {
+                    let trousers = palette.coat(dress);
+                    for foot in [-1.0f32, 1.0] {
+                        let [top, knee, ankle] =
+                            joints.map(|joint| Vec3::new(joint.x * foot, joint.y, joint.z));
+                        let limb = [
+                            seat.limb(top, knee - top, Self::LEG),
+                            seat.limb(knee, ankle - top, Self::LEG * 0.86),
+                            seat.limb(ankle, ankle - knee, Self::LEG * 0.74),
+                        ];
+                        figures.tube(&limb, throng.limb_sides, 1, false, |_, _| trousers);
+                    }
+                }
+            }
+        }
+
+        figures.into_mesh()
+    }
+
+    /// **Whether anybody is in this place at all**, and the draw that decides
+    /// everything else about him if he is.
+    ///
+    /// One method rather than six lines written out twice, because it is asked
+    /// twice: once by the census that sizes the buffers and once by the pass
+    /// that fills them, and the two have to agree exactly or the reservation
+    /// is wrong in the direction that costs a doubling. Tested against the
+    /// density of THIS corner of the bank rather than the ground's average —
+    /// which is two separate facts about the place, in this order:
+    ///
+    /// - **which part of the bank it is in**, because the gaps in a crowd are
+    ///   not spread over the stand evenly — see [`Gathering`];
+    /// - **and where inside that they actually fall**, because they do not
+    ///   land tidily either — see [`Self::CLUMPING`].
+    fn taken(seed: u32, gathering: &Gathering, row: usize, slot: usize) -> Option<u32> {
+        let roll = Self::hash(seed, row as u32, slot as u32);
+        let here = 1.0
+            - (1.0 - gathering.at(row, slot))
+                * (1.0 - Self::CLUMPING * 0.5 + Self::CLUMPING * Self::clumping(seed, row, slot));
+        (Self::unit(roll) < here.clamp(0.0, 1.0)).then_some(roll)
+    }
+
+    /// **How busy this corner of the bank is**, 0..1, varying smoothly across
+    /// it — the field that turns an even sprinkle of people into groups with
+    /// gaps between them.
+    ///
+    /// Value noise: a lattice of hashed corners, read with a smoothstep
+    /// between them, at the two scales [`Self::CLUMP_BLOCK`] and
+    /// [`Self::CLUMP_GROUP`]. Smooth is the whole requirement — a spectator
+    /// has to be MORE likely to be there when his neighbours are, and any
+    /// field with that property will do. It is deterministic off the same
+    /// `seed` as everything else, so a reloaded page seats the same people in
+    /// the same places.
+    fn clumping(seed: u32, row: usize, slot: usize) -> f32 {
+        let octave = |cell: (f32, f32), salt: u32| {
+            let (across, up) = (slot as f32 / cell.0, row as f32 / cell.1);
+            let (left, under) = (across.floor(), up.floor());
+            let corner = |along: u32, above: u32| {
+                Self::unit(Self::hash(
+                    seed ^ salt,
+                    under as u32 + above,
+                    left as u32 + along,
+                ))
+            };
+            let (fx, fy) = (Self::ease(across - left), Self::ease(up - under));
+            let low = corner(0, 0) + (corner(1, 0) - corner(0, 0)) * fx;
+            let high = corner(0, 1) + (corner(1, 1) - corner(0, 1)) * fx;
+            low + (high - low) * fy
+        };
+        octave(Self::CLUMP_BLOCK, 0x1B87_3593) * 0.65
+            + octave(Self::CLUMP_GROUP, 0x6F1B_2D0C) * 0.35
+    }
+
+    /// Smoothstep. Straight interpolation between lattice corners leaves a
+    /// crease along every cell edge, which on a stand shows up as a grid.
+    fn ease(step: f32) -> f32 {
+        step * step * (3.0 - 2.0 * step)
+    }
+
+    /// A mix, not a random number: the same bank has to come back the same way
+    /// on every load, or a reloaded page reseats the entire ground.
+    fn hash(seed: u32, row: u32, slot: u32) -> u32 {
+        let mut hash = seed
+            .wrapping_mul(0x9E37_79B9)
+            .wrapping_add(row.wrapping_mul(0x85EB_CA6B))
+            .wrapping_add(slot.wrapping_mul(0xC2B2_AE35));
+        hash ^= hash >> 15;
+        hash = hash.wrapping_mul(0x2545_F491);
+        hash ^ (hash >> 13)
+    }
+
+    /// The low byte of a hash as 0..1.
+    fn unit(hash: u32) -> f32 {
+        (hash & 0xFF) as f32 / 255.0
+    }
+}
+
+/// **Which parts of a bank fill up, and which are what is left over.**
+///
+/// [`Stature::occupancy`] says what share of a ground has somebody in it and
+/// nothing at all about WHERE — and spread evenly the gaps fall in the one
+/// place a real crowd never leaves them, which is the middle of an end at the
+/// same density as the corner nobody wanted. A ground four fifths full is not
+/// four fifths full everywhere. It is rammed in the column square behind the
+/// goal, front step to back, and half empty in the front corners, and that
+/// difference is most of what says from a hundred metres which end of the
+/// ground you are looking at.
+///
+/// **A ground sells its best places first, and the gate says how far down the
+/// list it gets.** That is the whole model, and it is one mechanism rather
+/// than a rule per kind of fixture: the places are ordered by what they are
+/// worth to sit in, the good ones fill to the brim, and the shortfall — all of
+/// it — lands on the worst. So a sell-out is full in the corners too; an
+/// ordinary Saturday has a solid kop and a thin front corner; and an under-18s
+/// game at the training ground puts its forty people behind the goal and
+/// leaves the rest of the concrete bare, all off the same two numbers.
+///
+/// **And it is not a smooth thing.** A stand is lettered into blocks with a
+/// gangway between them and it sells in blocks, so the parts of it that fill
+/// have edges: a section that went out entire next to one that did not. See
+/// [`Self::selling`], which is the whole of what a touchline has instead of a
+/// kop.
+///
+/// It is fitted rather than assumed — see [`Self::over`] — so a bank still
+/// seats the gate it was handed however steeply the people in it are banked up
+/// behind the goal. Scaling the occupancy by a fixed shape cannot do that: a
+/// bank at four fifths has no room to be half as full again anywhere, so the
+/// massing would be lost to the clamp and the crowd would come out smaller
+/// than the gate.
+struct Gathering {
+    /// What a place LOSES out in the corner of the bank, and what it loses
+    /// again for being down on the front step out there.
+    ///
+    /// Both are paid for being out of the goalmouth and neither is paid inside
+    /// it — see [`Self::worth`], which is the whole shape of a kop in one
+    /// line. **Behind a goal the view is made by how far round the goal a
+    /// place is**: the column square behind it looks down the length of the
+    /// pitch and sees all of it whether it is on the front step or at the
+    /// back, and the corner is out past the flag looking at the side of a net
+    /// over the heads in front. Height only starts to matter once you are out
+    /// there, and by the corner flag it matters a great deal. **A touchline
+    /// looks ACROSS the pitch instead**: every place in it sees the whole of
+    /// it at any height, and all that is left to thin is the ends of the stand
+    /// running out past the corners.
+    corner: f32,
+    stooping: f32,
+    /// What a block of this stand loses by not selling — see
+    /// [`Self::selling`]. It is the difference between an end and a main
+    /// stand: an end IS one block and it goes out in one piece, and a
+    /// touchline is a dozen of them sold separately to a dozen sets of
+    /// people, some of which do not go out at all.
+    unsold: f32,
+    /// Whose blocks these are. A bank has to sell the same ones on every
+    /// load, and a different set from the bank next to it.
+    seed: u32,
+    rows: usize,
+    slots: usize,
+    /// How far down that list of places this gate reaches: everything worth
+    /// more than the reciprocal of it is full.
+    reach: f32,
+}
+
+impl Gathering {
+    /// Halvings of the search that fits [`Self::reach`] to the gate. Twenty
+    /// takes it to a millionth of the span, which is well inside one
+    /// spectator.
+    const STEPS: usize = 20;
+
+    /// How wide one lettered block of a stand is, in places: about seventeen
+    /// metres of seating.
+    ///
+    /// Only the width, because the other bound is not a number — it is the
+    /// gangway, and the bank already knows where that is. A block is closed at
+    /// the back by [`Stature::TIER`], the same line
+    /// [`Pitch`](crate::scene::pitch::Pitch) paints the lit walkway along, so
+    /// the seam in the crowd falls where the stand visibly divides instead of
+    /// halfway up a tier. Left as a row count it also drew a stripe up an
+    /// untiered terrace, which has no gangway to draw one on.
+    const BLOCK: usize = 24;
+
+    /// Salt, so whether a block sold is independent of everything else drawn
+    /// off its seats — the trap `Crowd::COMPLEXION` documents.
+    const SOLD: u32 = 0x3D4B_9E17;
+
+    /// Fits the shape to the bank and to the crowd in it.
+    ///
+    /// A search rather than a division, because the good places run out: past
+    /// a certain gate the middle of the bank is already full and every further
+    /// ticket has to go somewhere worse, which a single scale factor cannot
+    /// say. Bisection on a sum that only rises as `reach` does.
+    ///
+    /// Fitted over the places the bank actually HAS. A five-step terrace and a
+    /// thirty-row bowl are the same curve sampled over different grids, and a
+    /// constant worked out for one of them would quietly resize the other's
+    /// crowd.
+    fn over(stand: Stand, occupancy: f32, seed: u32, rows: usize, slots: usize) -> Self {
+        let (corner, stooping, unsold) = match stand {
+            Stand::HomeEnd | Stand::AwayEnd => (0.50, 0.28, 0.18),
+            Stand::Side => (0.22, 0.00, 0.62),
+        };
+        let mut gathering = Gathering {
+            corner,
+            stooping,
+            unsold,
+            seed,
+            rows,
+            slots,
+            reach: 0.0,
+        };
+
+        // What every place in the bank is worth, held rather than recomputed
+        // inside the search: it is two smoothsteps a place and the search
+        // reads the lot twenty times over.
+        let worth: Vec<f32> = (0..rows)
+            .flat_map(|row| (0..slots).map(move |slot| (row, slot)))
+            .map(|(row, slot)| gathering.worth(row, slot))
+            .collect();
+        let places = worth.len() as f32;
+
+        // Nought seats nobody and the reciprocal of the worst place in the
+        // bank fills it to the last seat, so the gate is between them.
+        let (mut low, mut high) = (0.0, 1.0 / ((1.0 - unsold) * (1.0 - corner - stooping)));
+        for _ in 0..Self::STEPS {
+            let reach = (low + high) * 0.5;
+            let seated: f32 = worth.iter().map(|worth| (worth * reach).min(1.0)).sum();
+            if seated / places < occupancy {
+                low = reach;
+            } else {
+                high = reach;
+            }
+        }
+        gathering.reach = (low + high) * 0.5;
+        gathering
+    }
+
+    /// **How full this part of the bank is**, 0..1 — the local density the
+    /// ground's average is made of.
+    fn at(&self, row: usize, slot: usize) -> f32 {
+        (self.worth(row, slot) * self.reach).min(1.0)
+    }
+
+    /// What a place is worth to sit in: **1 anywhere in the column square
+    /// behind the goal**, front step to back, and down to
+    /// `1 - corner - stooping` out in the front corner.
+    ///
+    /// The column is the shape, and the two losses hang off it rather than
+    /// standing beside it. Written as a height term TIMES an across term — the
+    /// obvious way round — the front rows of the goalmouth thin out with
+    /// everything else, and the one block of a ground that is never anything
+    /// but rammed comes out patchy at the bottom.
+    ///
+    /// How far out of that column a place is comes from
+    /// [`Stature::behind_goal`], read back through its own floor, so the people
+    /// and the colours they wear thin over exactly the same ground — a kop
+    /// painted in club colours with nobody sitting in it is worse than either
+    /// fault on its own.
+    fn worth(&self, row: usize, slot: usize) -> f32 {
+        let across = (slot as f32 + 0.5) / self.slots as f32 * 2.0 - 1.0;
+        let low = 1.0 - (row as f32 + 0.5) / self.rows as f32;
+        let out = (1.0 - Stature::behind_goal(across)) / (1.0 - Stature::FLANK);
+        self.selling(row, slot) * (1.0 - out * (self.corner + self.stooping * low))
+    }
+
+    /// **Whether this block of the stand sold**: 1 for one that went out,
+    /// down to `1 - unsold` for one that did not.
+    ///
+    /// Nobody sells a stand a seat at a time. It is lettered into blocks with
+    /// a gangway between them, and they go out as blocks — to season ticket
+    /// holders, to a members' ballot, to whoever took the allocation — so what
+    /// is left over at kick-off is left over a block at a time. That is the
+    /// whole difference between an end and a main stand, and it is why a
+    /// touchline had no character at all: an end is ONE block and it goes out
+    /// in one piece, and a touchline is a dozen sold to a dozen sets of
+    /// people, two of which did not go.
+    ///
+    /// ⚠ **It is worth, not daylight.** Dropped into the scatter instead —
+    /// which is where it plainly belongs, since it is the thing that makes a
+    /// stand look untidy — the people in a block that did not sell are simply
+    /// deleted and the ground comes out short. Here the fit sees a block
+    /// nobody wanted, and the gate that would have been in it goes to the
+    /// blocks that did sell: the stand is exactly as full as it was and the
+    /// crowd in it has moved.
+    ///
+    /// Squared, so that most blocks go out and a few plainly do not. A draw
+    /// read straight gives every block a different middling fullness, which is
+    /// a gradient again — just a jagged one.
+    fn selling(&self, row: usize, slot: usize) -> f32 {
+        let upper = Stature::tiered(self.rows) && row as f32 >= self.rows as f32 * Stature::TIER;
+        let roll = Crowd::unit(Crowd::hash(
+            self.seed ^ Self::SOLD,
+            u32::from(upper),
+            (slot / Self::BLOCK) as u32,
+        ));
+        1.0 - self.unsold * roll * roll
+    }
+}
+
+/// **What a spectator is doing with himself.**
+///
+/// Nothing in this crowd moves — see the note on [`Crowd`] — so a posture is
+/// the only variety a bank has in its SHAPES, and it is worth more than any of
+/// the modelling it is applied to. A stand where every figure sits identically
+/// reads as a printed pattern however carefully each one is turned, for the
+/// same reason the coats have to run from near-black to pale.
+///
+/// It is also the cheapest thing in the file: all four of these are the same
+/// rings at different heights and angles, so a bank of them costs exactly what
+/// a bank of one of them costs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Posture {
+    /// Back in his seat, hands on his knees.
+    Seated,
+    /// Forward on the edge of it, elbows on his knees and his hands together.
+    /// What most of a stand is doing whenever the ball is near a box.
+    Forward,
+    /// On his feet. Where the support is, that is the whole match.
+    Standing,
+    /// On his feet with both arms up.
+    Cheering,
+}
+
+impl Posture {
+    /// How much of the part of a bank that is on its feet has its arms up as
+    /// well. A ground always has some, and they are the figures that break the
+    /// top line of a crowd — but only some: a whole end at full stretch is a
+    /// cup final, not a Tuesday.
+    const CHEERING: f32 = 0.14;
+    /// …and how much of what is left in its seat is forward on the edge of it.
+    const FORWARD: f32 = 0.34;
+
+    /// Which of them this man is, off one draw and the share of this bank that
+    /// is up.
+    fn of(roll: f32, afoot: f32) -> Self {
+        if roll < afoot {
+            // Re-read off the same draw rather than a second one, which is
+            // what keeps the two shares independent: the cheering fraction is
+            // measured against the standing block it is cut out of.
+            if roll < afoot * Self::CHEERING {
+                Self::Cheering
+            } else {
+                Self::Standing
+            }
+        } else if roll > 1.0 - (1.0 - afoot) * Self::FORWARD {
+            Self::Forward
+        } else {
+            Self::Seated
+        }
+    }
+
+    /// Whether he is on his feet, which is what everything below turns on.
+    fn afoot(self) -> bool {
+        matches!(self, Self::Standing | Self::Cheering)
+    }
+
+    /// How high his hips are above the step he is on, in metres.
+    fn hips(self) -> f32 {
+        if self.afoot() {
+            Crowd::HIP
+        } else {
+            Crowd::SEAT
+        }
+    }
+
+    /// Where in the tread of that step he is, front to back.
+    fn stands_at(self) -> f32 {
+        if self.afoot() {
+            Crowd::AFOOT_AT
+        } else {
+            Crowd::SEATED_AT
+        }
+    }
+
+    /// How far forward he is leaning, in radians, measured at the step. Never
+    /// zero for anybody: a figure standing exactly upright is the one pose no
+    /// human being holds.
+    fn lean(self) -> f32 {
+        match self {
+            Self::Seated => 0.07,
+            Self::Forward => 0.34,
+            Self::Standing => 0.05,
+            Self::Cheering => -0.06,
+        }
+    }
+
+    /// **His shoulder, his elbow and his hand**, in his own space, for the arm
+    /// on one side of him; the other is the mirror of it. `hips` is where his
+    /// hips are, so the same table serves a man sitting down and a man
+    /// standing up.
+    fn arm(self, hips: f32) -> [Vec3; 3] {
+        // Outside the trunk, which is 0.18 m of half-width — see
+        // [`Crowd::BODY`]. An arm whose centre line runs inside its own body
+        // is an arm nobody can see, and what is left of it on screen is the
+        // back of a hand apparently stuck to a man's ribs.
+        let shoulder = Vec3::new(0.148, hips + Crowd::TORSO * 0.86, 0.005);
+        match self {
+            // Hanging down his side, the forearm forward and in onto his knee.
+            Self::Seated => [
+                shoulder,
+                Vec3::new(0.204, hips + Crowd::TORSO * 0.34, -0.045),
+                Vec3::new(0.172, hips + Crowd::TORSO * 0.02, -0.195),
+            ],
+            // Elbows on his knees, hands together in front of him.
+            Self::Forward => [
+                shoulder,
+                Vec3::new(0.212, hips + Crowd::TORSO * 0.20, -0.215),
+                Vec3::new(0.095, hips + Crowd::TORSO * 0.46, -0.320),
+            ],
+            // Straight down, which is what a man watching football does with
+            // his arms when he is not doing anything else with them.
+            Self::Standing => [
+                shoulder,
+                Vec3::new(0.196, hips + Crowd::TORSO * 0.32, -0.020),
+                Vec3::new(0.188, hips - Crowd::TORSO * 0.12, 0.020),
+            ],
+            // Up and out.
+            Self::Cheering => [
+                shoulder,
+                Vec3::new(0.285, hips + Crowd::TORSO * 1.24, -0.055),
+                Vec3::new(0.305, hips + Crowd::TORSO * 1.78, -0.030),
+            ],
+        }
+    }
+
+    /// …and his hip, knee and ankle, where he has legs worth drawing at all.
+    fn leg(self) -> Option<[Vec3; 3]> {
+        self.afoot().then_some([
+            Vec3::new(0.100, Crowd::HIP, 0.0),
+            Vec3::new(0.114, Crowd::HIP * 0.52, -0.025),
+            Vec3::new(0.114, 0.055, 0.020),
+        ])
+    }
+
+    /// **How far below his hips his coat hangs**, as a fraction of
+    /// [`Crowd::TORSO`].
+    ///
+    /// Nothing at all for a man in his seat: he is sitting on the hem of it,
+    /// and a skirt of coat below the hip ring would be a skirt hanging in mid
+    /// air over the step behind him. On his feet it comes a third of the way
+    /// down his thigh, which is where a winter coat ends and — more to the
+    /// point — the difference between a man standing up and a torso on stilts.
+    fn hem(self) -> f32 {
+        if self.afoot() { 0.30 } else { 0.0 }
+    }
+}
+
+/// **Where a spectator is and how he is sitting in it**: the frame every ring
+/// of him is turned in.
+///
+/// A figure is written once, in his own space — `x` across his own shoulders,
+/// `y` up from the step under him, `z` back from the pitch — and this puts it
+/// where it belongs. Which is what lets a lean and a turn cost nothing: they
+/// are one quaternion applied to a table of joints, not a second table.
+///
+/// ⚠ **The turn is about his HIPS, not about his feet.** A person bends at the
+/// waist and a stand full of people bending at the ankles is a stand full of
+/// ironing boards — but the reason it is written down is arithmetic rather
+/// than anatomy: leaned at the feet, the front of a seated man's hip ring
+/// swings down through the step he is sitting on, and a fifth of the crowd
+/// ends up buried in the concrete.
+struct Seat {
+    /// The point he turns about: the middle of his place, at hip height.
+    pivot: Vec3,
+    /// How far that is above the step, in his own units — what a local `y` is
+    /// measured back from.
+    hips: f32,
+    /// How much bigger or smaller than the standard figure he is.
+    size: f32,
+    /// Which way he is facing and how far forward he is leaning, together.
+    turn: Quat,
+}
+
+impl Seat {
+    /// A point of his, in his own space, put where it belongs.
+    fn point(&self, local: Vec3) -> Vec3 {
+        self.pivot + self.turn * ((local - Vec3::Y * self.hips) * self.size)
+    }
+
+    /// A direction of his — scaled with him, because a bigger man's arm is
+    /// both longer and thicker.
+    fn axis(&self, local: Vec3) -> Vec3 {
+        self.turn * (local * self.size)
+    }
+
+    /// **An upright ring**, which is what a torso and a head are turned on:
+    /// `up` above the step, reaching `across` his shoulders and `depth` toward
+    /// the pitch.
+    fn upright(&self, up: f32, across: f32, depth: f32) -> Ring {
+        Ring {
+            centre: self.point(Vec3::Y * up),
+            across: self.axis(Vec3::X * across),
+            depth: self.axis(Vec3::Z * depth),
+        }
+    }
+
+    /// **A ring square to a limb** running in `along`, which is what an arm
+    /// and a leg are turned on. Round rather than elliptical: a sleeve is.
+    ///
+    /// The frame is taken off a world axis the limb is NOT lined up with. A
+    /// fixed one puts a singularity in the middle of an arm that happens to
+    /// hang straight down, which is exactly the arm most of a stand has.
+    fn limb(&self, at: Vec3, along: Vec3, thick: f32) -> Ring {
+        let along = self.axis(along).normalize_or(Vec3::NEG_Y);
+        let seed = if along.y.abs() < 0.86 {
+            Vec3::Y
+        } else {
+            Vec3::Z
+        };
+        let across = along.cross(seed).normalize_or(Vec3::X);
+        Ring {
+            centre: self.point(at),
+            across: across * (thick * self.size),
+            // Crossed back the same way round, so the ring's own outward
+            // direction — which is what closes the end of a limb — runs along
+            // it rather than back up it. See [`Figures::cap`].
+            depth: across.cross(along) * (thick * self.size),
+        }
+    }
+}
+
+/// One course of a lathe: where its centre sits and the two half-axes its
+/// points are laid out on.
+///
+/// Two axes rather than a radius and a normal, because they carry the shape as
+/// well as the place: a torso is wider than it is deep and a head is deeper
+/// than it is wide, and both fall out of the pair without a special case.
+#[derive(Clone, Copy)]
+struct Ring {
+    centre: Vec3,
+    across: Vec3,
+    depth: Vec3,
+}
+
+impl Ring {
+    /// The point `turn` of the way round, `0` at the front — the side looking
+    /// at the football — and `±1` at the back.
+    ///
+    /// The same measure [`CrowdPalette::head_uv`](crate::art::textures::CrowdPalette::head_uv)
+    /// takes, and deliberately so: the geometry and the drawing on it are laid
+    /// out in one coordinate, so a man's nose is on the front of his face
+    /// because it is the same number in both places rather than because two
+    /// tables agree.
+    fn point(&self, turn: f32) -> Vec3 {
+        let (sin, cos) = (std::f32::consts::PI * turn).sin_cos();
+        self.centre - self.across * sin - self.depth * cos
+    }
+}
+
+/// What it takes to put people in a stand: the one material every spectator in
+/// the ground is drawn with, and the palette their colours are picked out of.
+///
+/// One of these for the whole stadium. The material is shared on purpose — it
+/// is the same PBR program the terracing behind it draws through, so the four
+/// banks of people cost the browser no shader it was not already linking (see
+/// [`Textures::crowd`](crate::art::textures::Textures::crowd), which is where
+/// that constraint is argued out).
+pub struct Spectators {
+    material: Handle<StandardMaterial>,
+    palette: CrowdPalette,
+}
+
+/// What the desktop memory harness in [`crate::app::bill`] needs to fill a
+/// bank without spawning one. Nothing in the running viewer reaches past
+/// [`Spectators::seat`].
+#[cfg(test)]
+impl Spectators {
+    pub(crate) fn palette(&self) -> &CrowdPalette {
+        &self.palette
+    }
+}
+
+impl Spectators {
+    /// Paints the palette and registers the material. `home` and `trim` are
+    /// the shirt of the side whose ground it is: its support is what is in
+    /// the stands.
+    pub fn dressed(
+        images: &mut Assets<Image>,
+        materials: &mut Assets<StandardMaterial>,
+        home: (Color, Color),
+        visitor: (Color, Color),
+    ) -> Self {
+        let palette = Textures::crowd(images, home.0, home.1, visitor.0, visitor.1);
+        Spectators {
+            // White, so the swatch arrives as it was written. Rough, because
+            // a crowd is wool and skin — the one thing it must not do is
+            // catch a highlight, which at this size reads as a stand full of
+            // wet plastic.
+            material: materials.add(StandardMaterial {
+                base_color: Color::WHITE,
+                base_color_texture: Some(palette.sheet.clone()),
+                perceptual_roughness: 0.98,
+                ..default()
+            }),
+            palette,
+        }
+    }
+
+    /// One bank's worth of people, ready to be spawned as a child of it.
+    /// `None` when there is nobody to seat.
+    pub fn seat(
+        &self,
+        meshes: &mut Assets<Mesh>,
+        terrace: &Terrace,
+        stature: Stature,
+        stand: Stand,
+        seed: u32,
+        throng: Throng,
+    ) -> Option<(Mesh3d, MeshMaterial3d<StandardMaterial>)> {
+        let crowd = Crowd::fill(terrace, stature, stand, &self.palette, seed, throng)?;
+        // Said here because here is the last place anybody can say it: the
+        // mesh is `RENDER_WORLD`-only and its vertex data is gone from the
+        // main world the moment it has been extracted. The crowd is the
+        // largest thing in this scene by a long way, and a bill that could not
+        // name it would not be a bill.
+        MemoryBill::mesh(Held::Crowd, &crowd);
+        Some((
+            Mesh3d(meshes.add(crowd)),
+            MeshMaterial3d(self.material.clone()),
+        ))
+    }
+}
+
+/// The buffers a bank's spectators are accumulated into.
+///
+/// Flat vectors rather than a merge of ten thousand primitives: a merge
+/// allocates a mesh, its attribute vectors and its index vector per PART, and
+/// there are nine parts to a spectator. Same shape as `LineMesh` in
+/// [`pitch`](crate::scene::pitch), and for the same reason.
+///
+/// **Normals are accumulated, not written.** Every part of a figure is a
+/// lathe, and a lathe's vertices are shared between the courses that meet at
+/// them: each triangle adds its own normal to its three corners and
+/// [`Self::into_mesh`] normalises the lot at the end, which is both the
+/// cheapest way to store the thing — one vertex per point instead of one per
+/// corner of every quad — and the only way to get a SMOOTH shoulder out of it.
+/// Written per face, as the boxes used to be, a turned torso is a stack of
+/// flat panels catching the light one at a time, which is a lantern rather
+/// than a coat.
+struct Figures {
+    positions: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
+    uvs: Vec<[f32; 2]>,
+    indices: Vec<u32>,
+    /// What the reservation was, so [`Self::into_mesh`] can check that the
+    /// bank came to exactly it. See [`Self::exactly`] — a reservation that is
+    /// out by a percent is not a percent wrong, it is a doubling.
+    reserved: (usize, usize),
+}
+
+impl Figures {
+    /// Vertices to a SEATED spectator: his torso's rings, his head's — a point
+    /// wider, because its `u` runs the whole way round and the two ends of it
+    /// are the same place with different tile coordinates — the crown that
+    /// closes it, and two arms with the back of a hand on the end of each.
+    fn vertices(throng: Throng) -> usize {
+        Crowd::BODY.len().div_ceil(throng.ring_step) * throng.body_sides
+            + Crowd::SKULL.len().div_ceil(throng.ring_step) * (throng.skull_sides + 1)
+            + (throng.skull_sides + 1)
+            + 2 * (3 * throng.limb_sides + throng.limb_sides + 1)
+    }
+
+    /// …and the triangles over them: two to every quad up a tube, plus the fan
+    /// that closes a head and a hand. Counted rather than guessed at four to a
+    /// vertex, which is a shade under and so bought a re-allocation of a
+    /// forty-megabyte buffer per bank.
+    fn indices(throng: Throng) -> usize {
+        3 * (2 * (Crowd::BODY.len().div_ceil(throng.ring_step) - 1) * throng.body_sides
+            + 2 * (Crowd::SKULL.len().div_ceil(throng.ring_step) - 1) * throng.skull_sides
+            + throng.skull_sides
+            + 2 * (2 * 2 * throng.limb_sides + throng.limb_sides))
+    }
+
+    /// **And the pair of legs a man on his FEET carries on top of that** — two
+    /// tubes of three rings each, no cap on either, because the far end of a
+    /// leg is inside a step.
+    ///
+    /// ⚠ **These used to be left out of the reservation altogether**, on the
+    /// reasoning that a tenth of a bank is standing and a reservation costs
+    /// nothing to be a little out. It costs a great deal. A `Vec` that has to
+    /// grow DOUBLES, so being three percent short meant each of positions,
+    /// normals, uvs and indices allocating a second buffer twice the size of
+    /// the first and copying itself into it: a 25 MB buffer became 50 MB for
+    /// the length of a memcpy, four times over, on each of four banks.
+    ///
+    /// On a desktop that is a garbage figure nobody would ever see. On wasm32
+    /// linear memory only grows, so the worst instant of the load is the size
+    /// of the tab for the rest of the session — see
+    /// [`MemoryBill`](crate::app::bill::MemoryBill), and note that this is why
+    /// the counts below are COUNTED rather than estimated.
+    fn leg_vertices(throng: Throng) -> usize {
+        2 * (3 * throng.limb_sides)
+    }
+
+    fn leg_indices(throng: Throng) -> usize {
+        3 * (2 * (2 * 2 * throng.limb_sides))
+    }
+
+    /// Buffers for exactly `seated` figures, `standing` of whom have legs.
+    ///
+    /// **Exactly**, not approximately. Both counts come off a census pass over
+    /// the same hashes the placement itself uses — see [`Crowd::fill`] — which
+    /// is a few thousand hash evaluations against four buffers that between
+    /// them are a hundred megabytes on a full ground. It is the one arithmetic
+    /// in this file where being close is worth nothing at all.
+    fn exactly(seated: usize, standing: usize, throng: Throng) -> Self {
+        let vertices = seated * Self::vertices(throng) + standing * Self::leg_vertices(throng);
+        let indices = seated * Self::indices(throng) + standing * Self::leg_indices(throng);
+        Figures {
+            positions: Vec::with_capacity(vertices),
+            normals: Vec::with_capacity(vertices),
+            uvs: Vec::with_capacity(vertices),
+            indices: Vec::with_capacity(indices),
+            reserved: (vertices, indices),
+        }
+    }
+
+    /// **A closed tube through a stack of rings** — which is what every part
+    /// of a spectator is. `sides` points round each ring, and `uv` says where
+    /// each of them reads its colour, off how far round it is and which course
+    /// it belongs to.
+    ///
+    /// `seam` is for the one part whose tile is WRAPPED rather than flat. A
+    /// flat-coloured tube closes on itself and the last point is the first, so
+    /// there is nothing to duplicate; a head's `u` runs from one edge of its
+    /// tile to the other, and the point where it meets itself has to exist
+    /// twice — once at `u = 0` and once at `u = 1` — or the whole tile is
+    /// squeezed backwards across the back of his skull in one quad.
+    fn tube(
+        &mut self,
+        rings: &[Ring],
+        sides: usize,
+        ring_step: usize,
+        seam: bool,
+        uv: impl Fn(f32, usize) -> Vec2,
+    ) {
+        let points = if seam { sides + 1 } else { sides };
+        let base = self.positions.len() as u32;
+        for (course, ring) in rings.iter().enumerate().step_by(ring_step) {
+            for point in 0..points {
+                let turn = -1.0 + 2.0 * point as f32 / sides as f32;
+                self.vertex(ring.point(turn), uv(turn, course));
+            }
+        }
+        for course in 1..rings.len().div_ceil(ring_step) {
+            let (under, over) = (
+                base + ((course - 1) * points) as u32,
+                base + (course * points) as u32,
+            );
+            for point in 0..sides as u32 {
+                let (here, next) = (point, (point + 1) % points as u32);
+                self.face(under + here, under + next, over + next, over + here);
+            }
+        }
+    }
+
+    /// **A fan over the end of a ring**: the crown of a head, the back of a
+    /// hand. It faces the way the ring's own two axes cross, which for a limb
+    /// is out along the limb — see [`Seat::limb`].
+    fn cap(&mut self, ring: Ring, sides: usize, uv: impl Fn(f32) -> Vec2) {
+        let base = self.positions.len() as u32;
+        self.vertex(ring.centre, uv(0.0));
+        for point in 0..sides {
+            let turn = -1.0 + 2.0 * point as f32 / sides as f32;
+            self.vertex(ring.point(turn), uv(turn));
+        }
+        for point in 0..sides as u32 {
+            self.triangle(
+                base,
+                base + 1 + point,
+                base + 1 + (point + 1) % sides as u32,
+            );
+        }
+    }
+
+    fn vertex(&mut self, at: Vec3, uv: Vec2) {
+        self.positions.push(at.to_array());
+        self.normals.push([0.0; 3]);
+        self.uvs.push(uv.to_array());
+    }
+
+    /// One quad, its corners counter-clockwise seen from outside.
+    fn face(&mut self, a: u32, b: u32, c: u32, d: u32) {
+        self.triangle(a, b, c);
+        self.triangle(a, c, d);
+    }
+
+    /// One triangle, adding its own normal to each of its three corners.
+    ///
+    /// Deliberately NOT normalised first: the cross product of two edges is
+    /// twice the triangle's area, so a big face pulls a shared vertex further
+    /// than a sliver does. That is the weighting that keeps a lathe's poles
+    /// from being dragged sideways by the ring of thin triangles that meets
+    /// there.
+    fn triangle(&mut self, a: u32, b: u32, c: u32) {
+        let at = |index: u32| Vec3::from_array(self.positions[index as usize]);
+        let normal = (at(b) - at(a)).cross(at(c) - at(a));
+        for corner in [a, b, c] {
+            let running = &mut self.normals[corner as usize];
+            *running = (Vec3::from_array(*running) + normal).to_array();
+        }
+        self.indices.extend_from_slice(&[a, b, c]);
+    }
+
+    fn into_mesh(mut self) -> Option<Mesh> {
+        // The reservation is the whole of what keeps this bank inside one
+        // allocation each, and it is arithmetic over three tables that a
+        // change to any ring list would silently invalidate. Checked here
+        // rather than trusted, in debug, so every crowd test in this file is
+        // also a test of it.
+        debug_assert_eq!(
+            (self.positions.len(), self.indices.len()),
+            self.reserved,
+            "the crowd reserved {:?} and filled {:?}",
+            self.reserved,
+            (self.positions.len(), self.indices.len()),
+        );
+        if self.positions.is_empty() {
+            return None;
+        }
+        for normal in &mut self.normals {
+            // `normalize_or` rather than `normalize`: a ring given no width at
+            // all — which is what the apex of a fan is — collects nothing but
+            // degenerate triangles, and a zero-length normal reaches the
+            // shader as a black vertex.
+            *normal = Vec3::from_array(*normal).normalize_or(Vec3::Y).to_array();
+        }
+        Some(
+            Mesh::new(
+                PrimitiveTopology::TriangleList,
+                RenderAssetUsages::RENDER_WORLD,
+            )
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs)
+            .with_inserted_indices(Indices::U32(self.indices)),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A club drawing `attendance` into a ground that holds `capacity` — the
+    /// pair the database actually carries — hosting a side of its own
+    /// standing, so nothing but the arguments moves the answer.
+    fn venue(capacity: u32, attendance: u32, reputation: u16, youth: bool) -> VenueInfo {
+        VenueInfo {
+            field_style: 0,
+            capacity,
+            attendance,
+            reputation,
+            visitor: reputation,
+            youth,
+        }
+    }
+
+    fn terrace(rows: usize) -> Terrace {
+        Terrace {
+            length: 40.0,
+            rows,
+            riser: 0.64,
+            tread: 1.25,
+            from: 37.4,
+            slab: 1.9,
+        }
+    }
+
+    /// The rule the stands were rebuilt to answer: an academy fixture and a
+    /// small club's ground both get the smallest bank there is, whatever else
+    /// is true about them.
+    #[test]
+    fn a_youth_ground_is_five_steps_of_concrete() {
+        // A great club's under-18s, playing at the training ground behind a
+        // stadium that holds sixty thousand and fills it.
+        let academy = Stature::of(&venue(60_000, 54_000, 9_500, true));
+        assert_eq!(academy.rows(34), Stature::FEWEST_ROWS);
+        // …and the parent club's full house does NOT come with them. The
+        // stand is small and so is the crowd; the gate on record belongs to a
+        // different ground on a different day.
+        let senior = Stature::of(&venue(60_000, 54_000, 9_500, false));
+        assert!(
+            academy.occupancy() < senior.occupancy() * 0.25,
+            "the academy drew {} against the first team's {}",
+            academy.occupancy(),
+            senior.occupancy()
+        );
+
+        // …and a fourth-tier side nobody ever counted a crowd for, whose
+        // capacity the simulator ESTIMATED — generously — off the very
+        // reputation the cap exists to read.
+        let village = Stature::of(&venue(16_000, 0, 3_900, false));
+        assert_eq!(village.rows(34), Stature::FEWEST_ROWS);
+    }
+
+    /// …and that a great ground gets every row there is.
+    #[test]
+    fn a_great_ground_is_built_to_its_full_height() {
+        let elite = Stature::of(&venue(62_000, 54_000, 9_800, false));
+        assert_eq!(elite.rows(34), 34);
+        assert_eq!(elite.rows(31), 31);
+        assert_eq!(elite.overhang(4.0, 30.0), 30.0);
+    }
+
+    /// **The fixture this ladder was re-cut against.**
+    ///
+    /// Lokomotiv Moscow at home to Zenit: a 13,133 gate into a 16,000 ground,
+    /// world reputation 7,200 — the club's real row in `database.db`. It is an
+    /// ordinary big-club league match, the kind most of the football in this
+    /// game is, and it came out on screen as a low wall under a great deal of
+    /// empty sky. At 50,000-to-a-great-ground it drew thirteen rows of
+    /// twenty-one; the bank it gets now is a shade over twice as tall.
+    ///
+    /// The numbers are pinned rather than described because the whole point of
+    /// them is that a real fixture in the middle of the distribution reads as
+    /// a stadium. A change that quietly puts this one back under fifteen rows
+    /// is the regression this test exists to catch.
+    #[test]
+    fn a_moscow_derby_is_played_in_a_stadium() {
+        let loko = Stature::of(&venue(16_016, 13_133, 7_200, false));
+        let rows = loko.rows(34);
+        assert!(
+            (22..=27).contains(&rows),
+            "Lokomotiv drew 13,133 and got {rows} rows"
+        );
+        // Twenty-four rows at 0.72 m is 17 m of stand, against the 8.3 m the
+        // same gate used to be given.
+        assert!(rows as f32 * 0.72 > 15.0, "{rows} rows is not a stadium");
+        // …and it is a proper crowd in them: 13,133 into 16,016 is a ground
+        // four fifths full.
+        assert!(loko.occupancy() > 0.75, "{}", loko.occupancy());
+    }
+
+    /// The ladder has to span the world's clubs rather than bunch them at one
+    /// end. Percentiles measured across the 1,335 clubs in `database.db` that
+    /// carry a gate — see the note on [`Stature::GRAND_GATE`].
+    #[test]
+    fn the_ladder_spreads_the_worlds_grounds_across_it() {
+        // (gate, the band of rows it should land in, out of 34)
+        for (gate, low, high) in [
+            (500u32, 5usize, 8usize), // p10 — a village club
+            (1_500, 6, 11),           // p25
+            (4_000, 11, 17),          // p50
+            (14_000, 21, 28),         // p75 — Lokomotiv's neighbourhood
+            (25_700, 29, 34),         // p90
+            (42_600, 34, 34),         // p97 — every row there is
+        ] {
+            let rows = Stature::of(&venue(gate * 2, gate, 8_000, false)).rows(34);
+            assert!(
+                (low..=high).contains(&rows),
+                "a {gate} gate got {rows} rows, wanted {low}..={high}"
+            );
+        }
+    }
+
+    /// **The grass is the last thing a club lets go.**
+    ///
+    /// A pitch is a wage and a stand is capital, so the two ladders cannot be
+    /// the same ladder: a ground with half the concrete of a great one has
+    /// very nearly all of its grass, and the ordinary professional club that
+    /// makes up most of the world has a green striped pitch inside a modest
+    /// bowl. Read straight off the height instead — which is where this
+    /// started — and every second fixture in the game is played on a park
+    /// pitch.
+    #[test]
+    fn the_grass_is_the_last_thing_a_club_lets_go() {
+        // (gate, reputation, the band `keeping` should land in)
+        for (gate, reputation, low, high) in [
+            (620u32, 2_100u16, 0.00f32, 0.05f32), // a non-league club
+            (1_500, 4_200, 0.15, 0.45),           // p25
+            (4_000, 4_800, 0.45, 0.70),           // p50 — a proper pitch
+            (14_000, 6_500, 0.80, 0.95),          // p75 — Lokomotiv's
+            (50_000, 9_500, 0.99, 1.00),          // the top of the game
+        ] {
+            let stature = Stature::of(&venue(gate * 2, gate, reputation, false));
+            let keeping = stature.keeping();
+            assert!(
+                (low..=high).contains(&keeping),
+                "a {gate} gate at {reputation} keeps {keeping}, wanted {low}..={high}"
+            );
+            // …and never worse than the concrete, which is the whole claim.
+            assert!(
+                keeping >= stature.standing - 1e-6,
+                "a {gate} gate's grass ({keeping}) is behind its stand ({})",
+                stature.standing
+            );
+        }
+    }
+
+    /// **An academy pitch belongs to the club, not to the terrace round it.**
+    ///
+    /// A youth fixture is played at the training ground and gets the smallest
+    /// bank there is whoever the parent club are — but Manchester United's
+    /// training pitches are not a park, and a fourth-tier club's are. The gate
+    /// cannot tell those apart (there isn't one), so the reputation is read as
+    /// a floor and it is the only thing standing between an elite academy and
+    /// a village surface.
+    #[test]
+    fn an_academy_pitch_belongs_to_the_club_that_owns_it() {
+        let elite = Stature::of(&venue(60_000, 50_000, 9_400, true));
+        let modest = Stature::of(&venue(6_000, 3_000, 4_600, true));
+
+        assert_eq!(
+            elite.rows(34),
+            Stature::FEWEST_ROWS,
+            "a youth fixture is still five steps of concrete"
+        );
+        assert!(
+            elite.keeping() > 0.95,
+            "an elite academy plays on a park pitch: {}",
+            elite.keeping()
+        );
+        assert!(
+            modest.keeping() < 0.30,
+            "every academy in the world is immaculate: {}",
+            modest.keeping()
+        );
+    }
+
+    /// Between the two it has to actually vary, and it is the GATE that has to
+    /// move it. A curve that saturated at either end would be the tier lookup
+    /// the module note rejects, written out as arithmetic.
+    #[test]
+    fn the_gate_is_what_decides_the_height() {
+        let mut last = Stature::FEWEST_ROWS;
+        for attendance in [2_500, 7_000, 12_000, 18_000, 26_000] {
+            // The same ground every time — only the crowd in it differs, so
+            // nothing but the gate can be moving this.
+            let rows = Stature::of(&venue(60_000, attendance, 8_000, false)).rows(34);
+            assert!(
+                rows > last,
+                "a gate of {attendance} got {rows} rows, no more than the smaller crowd below it"
+            );
+            assert!(rows <= 34, "a gate of {attendance} came to {rows} rows");
+            last = rows;
+        }
+    }
+
+    /// …and the share of the ground that gate filled is what decides how many
+    /// coats are on the steps. Same crowd, twice the stadium, half as full.
+    #[test]
+    fn the_gate_against_the_ground_is_what_decides_the_crowd() {
+        let packed = Stature::of(&venue(12_000, 11_000, 8_000, false));
+        let rattling = Stature::of(&venue(40_000, 11_000, 8_000, false));
+        assert!(
+            packed.occupancy() > rattling.occupancy() + 0.3,
+            "{} against {}",
+            packed.occupancy(),
+            rattling.occupancy()
+        );
+        // Neither is ever a sell-out or a wake — an empty bank of concrete and
+        // a bank with a figure in every slot both read as a mistake.
+        for stature in [packed, rattling] {
+            assert!((Stature::SPARSEST..=Stature::FULLEST).contains(&stature.occupancy()));
+        }
+    }
+
+    /// **Who is visiting moves the crowd — and must not move the stand.**
+    ///
+    /// The two halves of this are one test on purpose. A ground filling for
+    /// the fixture everybody wants to see is right; the same ground GROWING
+    /// for it is the bug that was there when the height and the crowd came off
+    /// one number, and it would look plausible in any single screenshot.
+    #[test]
+    fn the_visitors_fill_the_ground_without_enlarging_it() {
+        // The same club at home three times: to a giant, to a peer, and to the
+        // side propping up the table.
+        let against = |visitor: u16| {
+            Stature::of(&VenueInfo {
+                field_style: 0,
+                capacity: 30_000,
+                attendance: 21_000,
+                reputation: 7_000,
+                visitor,
+                youth: false,
+            })
+        };
+        let (glamour, ordinary, nobody) = (against(9_500), against(7_000), against(3_500));
+
+        assert!(
+            glamour.occupancy() > ordinary.occupancy(),
+            "a great visiting side drew no better than a peer: {} against {}",
+            glamour.occupancy(),
+            ordinary.occupancy()
+        );
+        assert!(
+            nobody.occupancy() < ordinary.occupancy() - 0.1,
+            "the bottom club drew {} against a peer's {}",
+            nobody.occupancy(),
+            ordinary.occupancy()
+        );
+
+        // …and the concrete never moved.
+        for fixture in [glamour, nobody] {
+            assert_eq!(
+                fixture.rows(34),
+                ordinary.rows(34),
+                "the stadium changed size for the opposition"
+            );
+            assert_eq!(fixture.overhang(4.0, 30.0), ordinary.overhang(4.0, 30.0));
+        }
+    }
+
+    /// A small club hosting a giant sells the place out, which is the one case
+    /// the swing has to be allowed to run all the way into.
+    #[test]
+    fn a_giant_visiting_a_small_club_fills_it() {
+        let cup_tie = Stature::of(&VenueInfo {
+            field_style: 0,
+            capacity: 8_000,
+            attendance: 5_200,
+            reputation: 4_400,
+            visitor: 9_600,
+            youth: false,
+        });
+        assert!(cup_tie.occupancy() > 0.8, "{}", cup_tie.occupancy());
+    }
+
+    /// **The ends wear the club and the sides wear coats**, and a big club
+    /// wears more of both.
+    ///
+    /// The gap between an end and a side is the whole of what makes an end
+    /// read as one from across the ground, so it is asserted as a gap rather
+    /// than as two numbers: any change that narrows it has taken the ends away
+    /// whatever the constants still say.
+    #[test]
+    fn the_colours_belong_in_the_ends() {
+        let ground =
+            |gate: u32, reputation: u16| Stature::of(&venue(gate * 4 / 3, gate, reputation, false));
+        let great = ground(40_000, 9_500);
+        let village = ground(900, 4_100);
+
+        for club in [great, village] {
+            assert!(
+                club.allegiance(Stand::HomeEnd) > club.allegiance(Stand::Side) * 2.5,
+                "an end at {} against a side at {} is not an end",
+                club.allegiance(Stand::HomeEnd),
+                club.allegiance(Stand::Side)
+            );
+            // …and a kop is never a printed sheet: a quarter of any real one
+            // is in a coat.
+            assert!(club.allegiance(Stand::HomeEnd) < 0.8);
+        }
+
+        // Bigger club, more of its shirts — in both kinds of stand.
+        for stand in [Stand::HomeEnd, Stand::Side] {
+            assert!(
+                great.allegiance(stand) > village.allegiance(stand),
+                "the village club is as well supported as the great one"
+            );
+        }
+    }
+
+    /// …and that it actually reaches the mesh. The proportion is checked by
+    /// counting the vertices that point at the club's block of the palette
+    /// against the ones that point at the coats, which is the only place the
+    /// decision is visible once the mesh is built.
+    #[test]
+    fn an_end_is_built_in_the_clubs_colours_and_a_side_is_not() {
+        let palette = CrowdPalette::of_swatches(24, 16, 6, 6);
+        let stature = Stature::of(&venue(30_000, 24_000, 9_000, false));
+        // The sheet in order: 24 heads, 16 coats, 6 home, 6 away — 52 tiles.
+        // So a `u` past the heads is somebody's clothing, past the coats is
+        // somebody in the home club's colours, and past those is a visitor.
+        let (clothing, home, away) = (24.0 / 52.0, 40.0 / 52.0, 46.0 / 52.0);
+
+        let worn = |stand: Stand| {
+            let mesh = Crowd::fill(&terrace(10), stature, stand, &palette, 5, Throng::FULL)
+                .expect("a ten-step bank holds a crowd");
+            let Some(bevy::mesh::VertexAttributeValues::Float32x2(uvs)) =
+                mesh.attribute(Mesh::ATTRIBUTE_UV_0)
+            else {
+                panic!("the crowd carries no uvs");
+            };
+            // Clothing only. The drawn heads are in the sheet's top row and
+            // the backs of hands are flat SKIN in the head columns of the
+            // bottom row — both would dilute the count with vertices that were
+            // never a coat. What is left is a torso, two sleeves, and the
+            // trousers of whoever is on his feet, which are deliberately a
+            // neutral coat tile whatever else he came in: nobody turns up in
+            // the club's shorts in November.
+            let clothes: Vec<f32> = uvs
+                .iter()
+                .filter(|uv| uv[1] > 0.5 && uv[0] > clothing)
+                .map(|uv| uv[0])
+                .collect();
+            let share = |from: f32, to: f32| {
+                clothes.iter().filter(|u| **u > from && **u < to).count() as f32
+                    / clothes.len() as f32
+            };
+            (share(home, away), share(away, 1.0))
+        };
+
+        let (side_home, side_away) = worn(Stand::Side);
+        let (home_end, home_end_away) = worn(Stand::HomeEnd);
+        let (away_end_home, away_end_away) = worn(Stand::AwayEnd);
+
+        // **Each end belongs to one support.** Behind one goal the home club,
+        // behind the other the visitors, and neither gets into the other's.
+        assert!(
+            home_end > 0.35,
+            "only {home_end} of the home end came dressed for it"
+        );
+        assert!(
+            away_end_away > 0.35,
+            "only {away_end_away} of the away end came dressed for it"
+        );
+        assert!(
+            side_home < 0.2,
+            "{side_home} of the main stand is in colours"
+        );
+
+        assert_eq!(side_away, 0.0, "visitors got into the main stand");
+        assert_eq!(home_end_away, 0.0, "visitors got into the home end");
+        assert_eq!(away_end_home, 0.0, "the home club got into the away end");
+    }
+
+    /// A club nobody has ever counted a crowd for still gets one, at the
+    /// utilisation its capacity was estimated through — the alternative is an
+    /// empty ground, and no club draws nobody.
+    #[test]
+    fn an_uncounted_gate_falls_back_to_the_ground_it_is_in() {
+        let uncounted = Stature::of(&venue(30_000, 0, 8_000, false));
+        let counted = Stature::of(&venue(30_000, 24_600, 8_000, false));
+        assert_eq!(uncounted.rows(34), counted.rows(34));
+        assert!((uncounted.occupancy() - counted.occupancy()).abs() < 0.01);
+    }
+
+    /// A silent document is one written before there was a venue to describe,
+    /// and it has to keep building the stadium the viewer always built.
+    #[test]
+    fn a_silent_document_still_gets_its_stadium() {
+        let quiet = Stature::of(&VenueInfo::default());
+        assert_eq!(quiet.rows(34), 34);
+        assert!(quiet.occupancy() > 0.5, "{}", quiet.occupancy());
+    }
+
+    /// The steps have to be a solid flight: every slab reaching its own
+    /// surface and covering the one below it. That is the arithmetic the crowd
+    /// trusts when it sits down on it, and the concrete is poured off the
+    /// same two lines.
+    #[test]
+    fn the_flight_of_steps_is_solid() {
+        let terrace = terrace(12);
+        for row in 0..terrace.rows {
+            let top = terrace.slab_centre(row).y + terrace.riser * terrace.slab * 0.5;
+            let surface = terrace.step(row).y;
+            assert!(
+                (top - surface).abs() < 1e-4,
+                "step {row} has its surface at {surface} and the top of its slab at {top}"
+            );
+            if row > 0 {
+                let under = terrace.slab_centre(row).y - terrace.riser * terrace.slab * 0.5;
+                assert!(
+                    under < terrace.step(row - 1).y,
+                    "step {row} starts above the surface of the one below it"
+                );
+            }
+        }
+        assert!((terrace.crest() - terrace.step(terrace.rows - 1).y).abs() < 1e-4);
+    }
+
+    /// **A head is not a box.** Its outline has to narrow toward the crown and
+    /// come in again at the jaw, because that silhouette is the whole of what
+    /// reads as a head rather than as a brick — no amount of drawing on the
+    /// front of a box would have done it.
+    ///
+    /// Checked on the built mesh rather than on the constant, since it is the
+    /// lathe that has to carry it: a `SKULL` profile that was never read would
+    /// leave the constant looking perfectly correct.
+    #[test]
+    fn a_spectators_head_is_turned_rather_than_boxed() {
+        // A bank one place wide, so every point at a given depth belongs to
+        // ONE man and his profile can be read straight off the buffer. Across
+        // a full bank it cannot: the postures put heads at four different
+        // heights, so a height band holds one man's jaw and his neighbour's
+        // knee and the widest point in it is whoever happens to be furthest
+        // along the row.
+        let terrace = Terrace {
+            length: 2.0,
+            ..terrace(14)
+        };
+        let palette = CrowdPalette::of_swatches(24, 16, 6, 6);
+        let mesh = Crowd::fill(
+            &terrace,
+            Stature::of(&VenueInfo::default()),
+            Stand::Side,
+            &palette,
+            3,
+            Throng::FULL,
+        )
+        .expect("a bank one place wide still holds a crowd");
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(points)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("the crowd carries no positions");
+        };
+
+        // The first row with somebody SITTING UP in it. A man on his feet is a
+        // metre taller than his seat, so the two are told apart by how far
+        // above the step he reaches — and rows are told apart by depth, since
+        // a standing figure spans two of them in height.
+        //
+        // Sitting UP and not forward on the edge of his seat, which is the
+        // second filter: a man leaned twenty degrees carries the front of his
+        // head seven centimetres lower than the back of it, so a height band
+        // cuts across two rings at once and the profile stops being readable
+        // off `y` alone. He is upright when his crown is over his own seat.
+        let (step, his) = (0..terrace.rows)
+            .find_map(|row| {
+                let step = terrace.step(row);
+                let at = step.x + terrace.tread * Crowd::SEATED_AT;
+                let his: Vec<[f32; 3]> = points
+                    .iter()
+                    .copied()
+                    .filter(|p| (p[2] - at).abs() < terrace.tread * 0.36)
+                    .collect();
+                let crown = his
+                    .iter()
+                    .copied()
+                    .fold([0.0f32; 3], |top, p| if p[1] > top[1] { p } else { top });
+                let up = crown[1] - step.y;
+                (up > 0.80 && up < 1.10 && (crown[2] - at).abs() < 0.12).then_some((step, his))
+            })
+            .expect("fourteen rows of one place seat somebody sitting up");
+
+        // How far out from his own middle the mesh reaches, in bands measured
+        // as a share of his own height — which is what takes the ±12% every
+        // figure is scaled by back out again.
+        let top = his.iter().map(|p| p[1] - step.y).fold(0.0f32, f32::max);
+        let middle = his.iter().map(|p| p[0]).sum::<f32>() / his.len() as f32;
+        let width = |low: f32, high: f32| {
+            his.iter()
+                .filter(|p| ((low * top)..(high * top)).contains(&(p[1] - step.y)))
+                .map(|p| (p[0] - middle).abs())
+                .fold(0.0f32, f32::max)
+        };
+
+        // A box would give the same answer at every height it spans; a turned
+        // head has to be widest at the cheekbones, narrower at the jaw under
+        // them and taken well in at the crown. The bands are one ring each —
+        // jaw at 0.77 of his height, cheek at 0.86, forehead at 0.92 and crown
+        // at 0.98 — so a band wide enough to catch two of them would be
+        // measuring whichever is wider rather than the one it names.
+        let (jaw, cheek, crown) = (width(0.74, 0.81), width(0.83, 0.89), width(0.95, 1.0));
+        assert!(
+            cheek > jaw && cheek > crown,
+            "the head is widest at {cheek}, against a jaw of {jaw} and a crown of {crown}"
+        );
+        assert!(
+            crown < jaw,
+            "the crown ({crown}) is no narrower than the jaw ({jaw})"
+        );
+
+        // …and the shoulders under it are wider than the head, which is the
+        // other half of a silhouette that reads as a person. A box torso and a
+        // box head gave two rectangles of nearly the same width stacked on one
+        // another, which is a chess piece.
+        let shoulder = width(0.52, 0.62);
+        assert!(
+            shoulder > cheek * 1.6,
+            "his shoulders ({shoulder}) are barely wider than his head ({cheek})"
+        );
+    }
+
+    /// **The support is massed behind the goal**, not spread flat across the
+    /// end and out into the corners.
+    ///
+    /// An end bank is a hundred metres wide against a pitch of sixty-eight, so
+    /// a third of it is not behind the goal at all. Painted evenly the colour
+    /// bleeds round the whole bowl and the ground has no kop in it anywhere —
+    /// which is a thing you only see from the halfway line, and never in a
+    /// close-up.
+    #[test]
+    fn an_end_is_massed_behind_its_goal() {
+        const BLOCKS: usize = 6;
+        let terrace = Terrace {
+            length: 100.0,
+            ..terrace(14)
+        };
+        let palette = CrowdPalette::of_swatches(24, 16, 6, 6);
+        let stature = Stature::of(&venue(30_000, 24_000, 9_000, false));
+        let colours_from = 40.0 / 52.0;
+
+        let mesh = Crowd::fill(&terrace, stature, Stand::HomeEnd, &palette, 9, Throng::FULL)
+            .expect("a bank this size holds a crowd");
+        let (
+            Some(bevy::mesh::VertexAttributeValues::Float32x3(points)),
+            Some(bevy::mesh::VertexAttributeValues::Float32x2(uvs)),
+        ) = (
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION),
+            mesh.attribute(Mesh::ATTRIBUTE_UV_0),
+        )
+        else {
+            panic!("the crowd carries no positions or no uvs");
+        };
+
+        // What share of each block across the bank is in the club's colours.
+        let mut census = [(0usize, 0usize); BLOCKS];
+        for (point, uv) in points.iter().zip(uvs) {
+            if uv[1] < 0.5 {
+                continue; // a drawn head, not clothing
+            }
+            let block = ((point[0] / terrace.length + 0.5) * BLOCKS as f32) as usize;
+            let block = &mut census[block.min(BLOCKS - 1)];
+            block.1 += 1;
+            if uv[0] > colours_from {
+                block.0 += 1;
+            }
+        }
+        let share = |block: (usize, usize)| block.0 as f32 / block.1 as f32;
+
+        // The middle two blocks are behind the goal; the outer two are the
+        // corners, past the flags and running into the touchline stands.
+        let goal = (share(census[2]) + share(census[3])) * 0.5;
+        let corners = (share(census[0]) + share(census[BLOCKS - 1])) * 0.5;
+        assert!(
+            goal > corners * 2.0,
+            "the colour is not massed behind the goal: {goal} there against {corners} in the \
+             corners"
+        );
+        // …and the corners are not bare. A kop thins, it does not stop.
+        assert!(
+            corners > 0.05,
+            "the corners came out empty of colour: {corners}"
+        );
+    }
+
+    /// **An end fills from behind the goal and from the back, not evenly.**
+    ///
+    /// The companion to [`an_end_is_massed_behind_its_goal`], which measures
+    /// the same bank for COLOUR: a kop that is the club's colours at one
+    /// density all the way across is a printed sheet, and a kop that is the
+    /// same number of PEOPLE all the way across is a different printed sheet.
+    ///
+    /// Counted in vertices rather than in figures, as
+    /// [`the_crowd_gathers_rather_than_spreading_evenly`] does and for the
+    /// same reason, and bucketed up the bank off DEPTH rather than off height
+    /// so a man on his feet is counted on the step he is standing on.
+    #[test]
+    fn an_end_fills_from_behind_its_goal() {
+        const ACROSS: usize = 6;
+        const UP: usize = 2;
+        let terrace = Terrace {
+            length: 100.0,
+            ..terrace(14)
+        };
+        let palette = CrowdPalette::of_swatches(24, 16, 6, 6);
+        // Four fifths full: room for the empty fifth to gather somewhere.
+        let stature = Stature::of(&venue(30_000, 24_000, 9_000, false));
+
+        let mesh = Crowd::fill(&terrace, stature, Stand::HomeEnd, &palette, 9, Throng::FULL)
+            .expect("a bank this size holds a crowd");
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(points)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("the crowd carries no positions");
+        };
+
+        let mut census = [[0usize; ACROSS]; UP];
+        for point in points {
+            let along = ((point[0] / terrace.length + 0.5) * ACROSS as f32) as usize;
+            let back = (point[2] - terrace.from) / (terrace.tread * terrace.rows as f32);
+            let up = (back * UP as f32) as usize;
+            census[up.min(UP - 1)][along.min(ACROSS - 1)] += 1;
+        }
+
+        let goal = (census[UP - 1][2] + census[UP - 1][3]) as f32 * 0.5;
+        let corners = (census[0][0] + census[0][ACROSS - 1]) as f32 * 0.5;
+        assert!(
+            goal > corners * 1.5,
+            "the crowd is not massed behind the goal: {goal} at the back of the middle against              {corners} in the front corners. {census:?}"
+        );
+        // …and the corners still have people in them. An end thins out there;
+        // it does not stop, and a hole in a stand reads as a broken stand.
+        let busiest = census.iter().flatten().copied().max().unwrap_or(0) as f32;
+        assert!(
+            corners > busiest * 0.3,
+            "the front corners came out bare: {corners} against {busiest}. {census:?}"
+        );
+    }
+
+    /// **The column square behind the goal is rammed, front step to back.**
+    ///
+    /// The one hard edge in this file's crowd, and it is a hard edge because
+    /// it was marked on a screenshot rather than derived: the block that has
+    /// to be at a hundred per cent is a vertical stripe about a third of the
+    /// way out from the middle of the bank, and it runs the full height of the
+    /// stand. Anything that thins the front of it — a height term multiplied
+    /// through the whole bank being the obvious way to write this and the
+    /// wrong one — takes the one part of a ground that is never anything but
+    /// rammed and makes it patchy at the bottom.
+    #[test]
+    fn the_goalmouth_column_is_rammed_front_to_back() {
+        let (rows, slots) = (30usize, 160usize);
+        // Every seed, because the blocks are drawn off it: an end whose
+        // goalmouth happens to sit in a block the draw did not sell is exactly
+        // the failure this is here to catch.
+        for seed in 1..=16 {
+            let gathering = Gathering::over(Stand::HomeEnd, 0.84, seed, rows, slots);
+
+            // A third of the way out either side of the middle, which is the
+            // width of the mark: the whole of it, on every step.
+            for row in 0..rows {
+                for slot in [slots / 2, slots / 2 - slots / 6, slots / 2 + slots / 6] {
+                    let packed = gathering.at(row, slot);
+                    assert!(
+                        packed > 0.99,
+                        "seed {seed}: row {row} of the goalmouth column is only {packed} full \
+                         at slot {slot}"
+                    );
+                }
+            }
+
+            // …and the bank outside it is nothing like it, or the mark means
+            // nothing: a stand that is a hundred per cent everywhere is the
+            // flat one this replaced.
+            let corner = gathering.at(0, 0);
+            assert!(
+                corner < 0.6,
+                "seed {seed}: the front corner is {corner} full, which is no thinner than the kop"
+            );
+        }
+    }
+
+    /// **A touchline sells in blocks, and it shows.**
+    ///
+    /// What a main stand has instead of a kop. An end is one block and it goes
+    /// out in one piece, so its character is the massing behind the goal; a
+    /// touchline is a dozen blocks sold to a dozen sets of people, and what
+    /// says so from across the ground is that some of them went out entire and
+    /// one of them did not.
+    ///
+    /// Measured as a STEP rather than as a spread, because a spread is what
+    /// the smooth thinning gives too. The biggest change from one place to the
+    /// next has to be far larger than the average one: a stand that varies but
+    /// only gradually is the gradient painted on a wall this replaced.
+    #[test]
+    fn a_touchline_sells_in_blocks() {
+        let (rows, slots) = (34usize, 200usize);
+        let mut steps = Vec::new();
+        for seed in 1..=16 {
+            let gathering = Gathering::over(Stand::Side, 0.84, seed, rows, slots);
+
+            let row = rows / 2;
+            let along: Vec<f32> = (0..slots).map(|slot| gathering.at(row, slot)).collect();
+            let jumps: Vec<f32> = along.windows(2).map(|by| (by[1] - by[0]).abs()).collect();
+            let biggest = jumps.iter().copied().fold(0.0f32, f32::max);
+            let usual = jumps.iter().sum::<f32>() / jumps.len() as f32;
+            steps.push(biggest);
+
+            assert!(
+                biggest > usual * 20.0,
+                "seed {seed}: the fullest a touchline steps is {biggest} against {usual} place \
+                 to place, which is a gradient rather than a block"
+            );
+        }
+
+        // …and the step is worth seeing. A seam of a per cent is a seam
+        // nobody will ever find on a stand a hundred metres away.
+        let smallest = steps.iter().copied().fold(f32::MAX, f32::min);
+        assert!(
+            smallest > 0.08,
+            "the plainest block seam in sixteen grounds is only {smallest}"
+        );
+    }
+
+    /// **Gathering a crowd does not change how big it is.**
+    ///
+    /// The whole of [`Gathering`] rests on the fit: out by a tenth, every
+    /// ground in the game seats a tenth more or fewer people than the gate it
+    /// was handed, and nothing else in this file would say so. Checked across
+    /// the band [`Stature`] can hand it and on banks from a village terrace to
+    /// a great bowl, because the fit is done over the places a bank HAS.
+    #[test]
+    fn gathering_a_crowd_does_not_change_how_big_it_is() {
+        for stand in [Stand::HomeEnd, Stand::AwayEnd, Stand::Side] {
+            for occupancy in [Stature::SPARSEST, 0.5, 0.82, Stature::FULLEST] {
+                for (rows, slots) in [(5usize, 40usize), (34, 190), (1, 3)] {
+                    let gathering = Gathering::over(stand, occupancy, 5, rows, slots);
+                    let mut total = 0.0;
+                    for row in 0..rows {
+                        for slot in 0..slots {
+                            total += gathering.at(row, slot);
+                        }
+                    }
+                    let seated = total / (rows * slots) as f32;
+                    assert!(
+                        (seated - occupancy).abs() < 1e-3,
+                        "a {rows}x{slots} bank asked for {occupancy} seats {seated}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// **A sell-out is full in the corners too.**
+    ///
+    /// The other end of the same mechanism, and the thing a fixed shape gets
+    /// wrong: massing is what a ground does with the people it is SHORT of,
+    /// so as the gate rises the gradient has to flatten of its own accord
+    /// rather than keep carving a hole in a stand somebody paid to sit in.
+    #[test]
+    fn a_full_house_is_full_in_the_corners() {
+        let (rows, slots) = (30usize, 160usize);
+        let worst = |occupancy: f32| {
+            let gathering = Gathering::over(Stand::HomeEnd, occupancy, 5, rows, slots);
+            gathering.at(0, 0) / occupancy
+        };
+        assert!(
+            worst(Stature::FULLEST) > worst(Stature::SPARSEST) * 1.4,
+            "the corners do not fill as the ground does: {} at a sell-out against {} at an \
+             empty one",
+            worst(Stature::FULLEST),
+            worst(Stature::SPARSEST)
+        );
+    }
+
+    /// **A crowd arrives in knots, not as an even sprinkle.**
+    ///
+    /// Measured as the spread of density from block to block across a bank: an
+    /// independent draw per place gives every block the same fraction of the
+    /// ground's average, give or take sampling noise, and that flatness is
+    /// exactly what reads as wrong. Some parts of a stand have to be visibly
+    /// busier than others.
+    ///
+    /// Asserted against a BINOMIAL null rather than against zero, because a
+    /// per-place draw is not perfectly flat either — with about 150 places to
+    /// a block it wanders by a couple of per cent on its own, and a test that
+    /// only checked for "some variation" would pass on the very thing this
+    /// replaced.
+    #[test]
+    fn the_crowd_gathers_rather_than_spreading_evenly() {
+        const ACROSS: usize = 6;
+        const UP: usize = 3;
+        let terrace = Terrace {
+            length: 120.0,
+            rows: 24,
+            ..terrace(24)
+        };
+        let palette = CrowdPalette::of_swatches(24, 16, 6, 6);
+        // Two thirds full, so there is room both to clump and to leave gaps.
+        let stature = Stature::of(&venue(30_000, 20_000, 8_000, false));
+        let mesh = Crowd::fill(&terrace, stature, Stand::Side, &palette, 11, Throng::FULL)
+            .expect("a bank this size holds a crowd");
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(points)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("the crowd carries no positions");
+        };
+
+        // People per patch of the bank, over a grid — across AND up the rows,
+        // because an even spread has to be ruled out in both.
+        //
+        // ⚠ **Up the bank is read off DEPTH, not off height.** Vertices are
+        // the only thing a mesh hands back and a figure carries roughly the
+        // same number of them wherever he is, so counting vertices stands in
+        // for counting people — but only if the patch a vertex falls in is the
+        // patch its OWNER is sitting in. Bucketed by height, a man on his feet
+        // puts his head two rows up the census from the step he is standing
+        // on, and the top band fills with the shoulders of the row below it.
+        // Depth has no such problem: every part of a spectator is within half
+        // a tread of his own seat.
+        let mut census = [[0usize; ACROSS]; UP];
+        for point in points {
+            let along = ((point[0] / terrace.length + 0.5) * ACROSS as f32) as usize;
+            let back = (point[2] - terrace.from) / (terrace.tread * terrace.rows as f32);
+            let up = (back * UP as f32) as usize;
+            census[up.min(UP - 1)][along.min(ACROSS - 1)] += 1;
+        }
+
+        let patches: Vec<f32> = census.iter().flatten().map(|n| *n as f32).collect();
+        let mean = patches.iter().sum::<f32>() / patches.len() as f32;
+        let spread =
+            (patches.iter().map(|n| (n - mean).powi(2)).sum::<f32>() / patches.len() as f32).sqrt()
+                / mean;
+
+        // What the SAME census would come to if every place were drawn
+        // independently — which is what this replaced, and what a lazy
+        // "assert it varies at all" would happily pass. Binomial: the relative
+        // spread of a patch of `places`, each taken with probability `p`.
+        let run = terrace.length - Crowd::REACH * 2.0 * (1.0 + Crowd::SPREAD);
+        let places =
+            (run / Crowd::SPACING).floor() / ACROSS as f32 * terrace.rows as f32 / UP as f32;
+        let p = stature.occupancy();
+        let null = ((1.0 - p) / (p * places)).sqrt();
+
+        // Twice the noise floor, and it was 2.5 while the census was bucketed
+        // by height. That half is not clumping and never was: a figure is 0.85
+        // m tall on a 0.64 m riser, so its vertices straddle two height bands
+        // and the census carried a whole extra term for where a man's
+        // shoulders happened to fall. Reading the row off DEPTH takes it out —
+        // the measured spread fell from 0.117 to 0.099 against an unchanged
+        // density field — and what is left is the field alone.
+        assert!(
+            spread > null * 2.0,
+            "the crowd is spread evenly: patches vary by {spread} against {null} for an \
+             independent draw. {census:?}"
+        );
+        // …and not so much that a patch of the bank comes out bare. Empty
+        // SEATS are wanted; an empty quarter of a stand is a hole.
+        assert!(
+            patches.iter().all(|count| *count > mean * 0.15),
+            "a patch of the bank is all but empty: {census:?}"
+        );
+    }
+
+    /// **What the whole ground costs.**
+    ///
+    /// The crowd is by a long way the largest mesh in this scene, and the one
+    /// thing that would make it a bad trade is quietly letting it grow: this
+    /// viewer's frame is spent per entity, but a browser still has to upload
+    /// and transform these, and the buffers are built on the browser's only
+    /// thread during the bring-up (see [`crate::app::bringup`]).
+    ///
+    /// Measured against the four banks as `pitch` actually lays them out at a
+    /// great ground. The ceiling is roughly a quarter above where it sits, so
+    /// a deliberate change to [`Crowd::SPACING`] or the figure shows up here
+    /// as a decision rather than as a surprise.
+    #[test]
+    fn the_whole_crowd_fits_in_its_budget() {
+        use crate::scene::field::Field;
+        use crate::scene::pitch::Pitch;
+
+        let full = Stature::of(&venue(62_000, 54_000, 9_800, false));
+        let palette = CrowdPalette::of_swatches(24, 16, 6, 6);
+        // Read off `Pitch` rather than restated, so that moving a bank moves
+        // this measurement with it. The whole point of the assertion below is
+        // that it fails when the layout grows past what the ground has room
+        // for, and a copy of the layout cannot do that.
+        let along = Field::HALF_LENGTH + Pitch::END_MARGIN;
+        let across = Field::HALF_WIDTH + Pitch::SIDE_MARGIN;
+        let side = across + Pitch::SIDE_SETBACK;
+        let end = along + Pitch::END_SETBACK;
+
+        let mut vertices = 0;
+        let mut deepest: f32 = 0.0;
+        for (seed, (length, from, most, riser)) in [
+            (along * 2.0 + full.overhang(6.0, 30.0), side, 34, 0.72),
+            (along * 2.0 + full.overhang(6.0, 30.0), side, 34, 0.72),
+            (across * 2.0 + full.overhang(4.0, 24.0), end, 31, 0.70),
+            (across * 2.0 + full.overhang(4.0, 24.0), end, 31, 0.70),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let bank = Terrace {
+                length,
+                rows: full.rows(most),
+                riser,
+                tread: Pitch::TREAD,
+                from,
+                slab: Pitch::SLAB,
+            };
+            if seed < 2 {
+                deepest = deepest.max(bank.step(bank.rows - 1).x + bank.tread);
+            }
+            let stand = if seed < 2 {
+                Stand::Side
+            } else {
+                Stand::HomeEnd
+            };
+            vertices += Crowd::fill(&bank, full, stand, &palette, seed as u32 + 1, Throng::FULL)
+                .expect("a full bank holds a crowd")
+                .count_vertices();
+        }
+
+        // ⚠ **The touchline bank must not reach the gantry.** The broadcast
+        // rest shot parks at `HALF_WIDTH + SETBACK` — 82 m from the centre
+        // spot — and a rake that runs out past it puts the lens inside the
+        // terracing. This is the constraint that sets `Pitch::TREAD` and caps
+        // `Pitch::SIDE_SETBACK`, and the one a future "make the stands taller
+        // again" would break first.
+        //
+        // It sits at 73.8 m as this stands, so there are four metres of the
+        // budget left: rows, riser and setback all spend out of the same one.
+        assert!(
+            deepest < 78.0,
+            "the touchline bank finishes {deepest} m out, against a gantry at 82"
+        );
+
+        // 2,641,720 vertices as this stands: twenty thousand people at about a
+        // hundred and thirty vertices each, some hundred and twenty-five
+        // megabytes of static geometry once the indices are counted, and four
+        // submissions a frame to draw all of it. By a long way the largest
+        // mesh in the scene, and still four entities — which is what the frame
+        // is actually spent on.
+        //
+        // It is also the ceiling rather than the common case: this is the
+        // largest gate in the database (73,170) and every row of it. Lokomotiv
+        // Moscow comes to about nine tenths of it and a median club to a third,
+        // because the rows come off the fixture.
+        //
+        // **It was 1,249,864, at fifty-six vertices a man**, and what the other
+        // seventy bought was a person instead of a box with a smaller box on
+        // top: a turned torso with sloping shoulders, a rounded head skinned
+        // right round with his own face, two arms, and legs on the ones
+        // standing up. Paid for twice over — once by the figure and once by
+        // giving each of them more room ([`Crowd::SPACING`] went 0.62 to 0.70,
+        // which is an eighth fewer people in every ground).
+        //
+        // ⚠ **Measured before it was believed.** Headless Chrome on an RTX
+        // 3080 Ti at 1920x1080, the recipe `perf` documents: 2.4 ms a frame and
+        // 417 fps with the whole ground built, against the 3.9 ms the same
+        // instrument recorded before any of this. The frame is spent walking
+        // and submitting ENTITIES and there are still four of these, so a
+        // doubled vertex count costs nothing a frame — the whole of what it
+        // costs is upload and the ~90 ms the buffers take to build on the
+        // browser's one thread, which is a tenth of the shader compile that
+        // frame is already waiting on.
+        assert!(
+            vertices < 2_900_000,
+            "the crowd came to {vertices} vertices across the ground"
+        );
+        // …and it has to be a crowd rather than a token one. Half of this was
+        // measured on screen as a teal wall with people scattered on it — see
+        // the note on [`Crowd::SPACING`], and note that the floor is a count of
+        // VERTICES and so guards the figure as well as the population: a
+        // spectator whittled back to a pair of boxes would fall through it even
+        // at the same spacing.
+        assert!(
+            vertices > 2_200_000,
+            "the crowd came to only {vertices} vertices across the ground"
+        );
+    }
+
+    /// **…and a phone is asked to hold a fraction of it.**
+    ///
+    /// The crowd is the largest mesh in the scene by a long way, and on a
+    /// handheld it is not a frame cost but a MEMORY one: WebKit kills the tab
+    /// rather than drawing slowly, which is the failure this was written for
+    /// (2026-09-01 — the replay would not open on an iPhone or an iPad).
+    ///
+    /// The ratio is what is pinned rather than a figure, for the same reason
+    /// the squad grain pins one: a change that quietly took the handheld
+    /// crowd back up toward the full one would satisfy any absolute bound
+    /// that was loose enough to hold both.
+    #[test]
+    fn a_handheld_holds_a_fraction_of_the_crowd() {
+        use crate::scene::pitch::Pitch;
+        let stature = Stature::of(&venue(62_000, 54_000, 9_800, false));
+        let palette = CrowdPalette::of_swatches(24, 16, 6, 6);
+        let bank = Terrace {
+            length: 120.0,
+            rows: 34,
+            riser: 0.72,
+            tread: Pitch::TREAD,
+            from: 40.0,
+            slab: Pitch::SLAB,
+        };
+        let built = |throng| {
+            Crowd::fill(&bank, stature, Stand::Side, &palette, 1, throng)
+                .expect("a full bank holds a crowd")
+        };
+        let (full_bank, handheld_bank) = (built(Throng::FULL), built(Throng::HANDHELD));
+        let (full, handheld) = (full_bank.count_vertices(), handheld_bank.count_vertices());
+        // Both levers have to be pulling: the figure is already frugal at
+        // 8/8/4, so cutting its sides alone is worth about a third and the
+        // rest has to come from seating fewer people.
+        assert!(
+            (handheld as f32) < full as f32 * 0.40,
+            "a handheld builds {handheld} vertices against a computer's {full}, \n             which is {:.0}% and not the cut this exists to make",
+            handheld as f32 / full as f32 * 100.0
+        );
+        // …and it is still a crowd. Thinned past about a third and the bank
+        // reads as scattered people on a wall rather than as a full ground,
+        // which is the failure `Crowd::SPACING` records being measured once
+        // already.
+        assert!(
+            (handheld as f32) > full as f32 * 0.25,
+            "a handheld builds {handheld} vertices against {full}, which is not a crowd"
+        );
+
+        // **…and a ceiling in BYTES, which the ratio above cannot give.**
+        //
+        // A ratio pins the handheld scene to the roomy one, and a change that
+        // raised both would sail through it — which is exactly what happened
+        // on the way here: the figure went from fifty-six vertices to a
+        // hundred and thirty and every proportional test still passed. What
+        // WebKit kills a tab for is an absolute number, so one is written
+        // down.
+        //
+        // Counted off the mesh's own layout (32 bytes a vertex — position,
+        // normal, uv — and four a `U32` index) rather than off a stride
+        // written here, so a change to the vertex format moves this figure
+        // instead of quietly invalidating it.
+        //
+        // Bound the largest bank independently of desktop detail: the CPU
+        // geometry and upload copies coexist while this buffer is prepared.
+        let bytes = MemoryBill::mesh_bytes(&handheld_bank);
+        assert!(
+            bytes < 11 * 1024 * 1024,
+            "a handheld bank holds {:.1} MiB of spectators",
+            bytes as f32 / (1024.0 * 1024.0),
+        );
+    }
+
+    /// Missing or invalid overrides retain the device's safe startup default,
+    /// whichever tier the machine is on.
+    #[test]
+    fn the_page_can_empty_the_ground_and_cannot_be_given_nonsense() {
+        for tier in [Tier::Multisampled, Tier::PostProcessed] {
+            assert_eq!(Throng::of(Footprint::Roomy, tier, Some("off")), None);
+            assert_eq!(
+                Throng::of(Footprint::Roomy, tier, Some("handheld")),
+                Some(Throng::HANDHELD)
+            );
+            assert_eq!(
+                Throng::of(Footprint::Handheld, tier, Some("full")),
+                Some(Throng::FULL)
+            );
+            // Anything else is the device's own answer.
+            assert_eq!(Throng::of(Footprint::Handheld, tier, Some("of")), None);
+            assert_eq!(
+                Throng::of(Footprint::Handheld, tier, Some("handheld")),
+                Some(Throng::HANDHELD)
+            );
+        }
+        assert_eq!(
+            Throng::of(Footprint::Roomy, Tier::Multisampled, Some("of")),
+            Some(Throng::FULL)
+        );
+    }
+
+    /// **The crowd is cut by the tier that cuts the squad**: a multisampled
+    /// computer builds the full figure, a post-processed one the phone's
+    /// figure in the same seats, and a phone none.
+    #[test]
+    fn the_crowd_follows_the_rendering_tier() {
+        assert_eq!(
+            Throng::of(Footprint::Roomy, Tier::Multisampled, None),
+            Some(Throng::FULL)
+        );
+        assert_eq!(
+            Throng::of(Footprint::Roomy, Tier::PostProcessed, None),
+            Some(Throng::SPARE)
+        );
+        for tier in [Tier::Multisampled, Tier::PostProcessed] {
+            assert_eq!(Throng::of(Footprint::Handheld, tier, None), None);
+        }
+    }
+
+    /// **The two computer crowds are the same people in the same seats.** Each
+    /// bank's vertices and indices are two equations in how many sit and how
+    /// many stand; both banks answer them the same way, and the coarser
+    /// figure comes to well under two thirds of the geometry (about half).
+    #[test]
+    fn the_two_roomy_throngs_seat_the_same_crowd() {
+        use crate::scene::pitch::Pitch;
+        let stature = Stature::of(&venue(62_000, 54_000, 9_800, true));
+        let palette = CrowdPalette::of_swatches(24, 16, 6, 6);
+        let bank = Terrace {
+            length: 120.0,
+            rows: 34,
+            riser: 0.72,
+            tread: Pitch::TREAD,
+            from: 40.0,
+            slab: Pitch::SLAB,
+        };
+        let seated_and_standing = |throng: Throng| {
+            let mesh = Crowd::fill(&bank, stature, Stand::Side, &palette, 1, throng)
+                .expect("a full bank holds a crowd");
+            let vertices = mesh.count_vertices() as i64;
+            let indices = mesh.indices().expect("a bank is indexed").len() as i64;
+            let (seat, legs) = (
+                Figures::vertices(throng) as i64,
+                Figures::leg_vertices(throng) as i64,
+            );
+            let (seat_indices, leg_indices) = (
+                Figures::indices(throng) as i64,
+                Figures::leg_indices(throng) as i64,
+            );
+            let det = seat * leg_indices - legs * seat_indices;
+            assert_ne!(det, 0);
+            let seated = vertices * leg_indices - legs * indices;
+            let standing = seat * indices - vertices * seat_indices;
+            assert_eq!(seated % det, 0);
+            assert_eq!(standing % det, 0);
+            ((seated / det, standing / det), vertices)
+        };
+        let (full, full_vertices) = seated_and_standing(Throng::FULL);
+        let (spare, spare_vertices) = seated_and_standing(Throng::SPARE);
+        assert!(full.0 > 500 && full.1 > 0, "{full:?} is not a crowd");
+        assert_eq!(full, spare, "the two throngs seat different crowds");
+        assert!(
+            spare_vertices * 5 < full_vertices * 3,
+            "the coarse crowd is {spare_vertices} vertices against {full_vertices}"
+        );
+    }
+
+    /// Nobody stands in mid-air, and nobody stands on the pitch side of the
+    /// front row. Every figure has to be on the tread of a step of the flight
+    /// the concrete was poured off.
+    #[test]
+    fn every_spectator_is_sitting_on_a_step() {
+        let terrace = terrace(9);
+        let palette = CrowdPalette::of_swatches(24, 16, 6, 6);
+        let mesh = Crowd::fill(
+            &terrace,
+            Stature::of(&VenueInfo::default()),
+            Stand::HomeEnd,
+            &palette,
+            7,
+            Throng::FULL,
+        )
+        .expect("a nine-step bank forty metres long holds a crowd");
+
+        let surfaces: Vec<f32> = (0..terrace.rows).map(|row| terrace.step(row).y).collect();
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(points)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("the crowd carries no positions");
+        };
+
+        assert!(!points.is_empty(), "the bank came back empty");
+        for point in points {
+            let foot = surfaces
+                .iter()
+                .copied()
+                .filter(|surface| *surface <= point[1] + 1e-3)
+                .fold(f32::MIN, f32::max);
+            assert!(
+                foot > f32::MIN,
+                "somebody is below the first step at {}",
+                point[1]
+            );
+            // Nobody towers over his own step either. A man on his feet is
+            // 1.70 m of him, a big one is 1.90, and a big one with both arms
+            // up reaches 2.14 — which is what a person with his arms up
+            // reaches, and the most anything in this crowd is allowed to be.
+            assert!(
+                point[1] - foot < 2.25,
+                "somebody is {} m above the step under him",
+                point[1] - foot
+            );
+            assert!(
+                point[2] >= terrace.from,
+                "somebody is sitting {} m in front of the terrace",
+                terrace.from - point[2]
+            );
+            assert!(
+                point[0].abs() <= terrace.length * 0.5,
+                "somebody is {} m past the end of the bank",
+                point[0].abs() - terrace.length * 0.5
+            );
+        }
+    }
+}

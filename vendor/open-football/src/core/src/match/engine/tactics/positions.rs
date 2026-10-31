@@ -1,0 +1,319 @@
+use crate::PlayerPositionType;
+use crate::r#match::player::PlayerSide;
+use crate::r#match::{POSITION_POSITIONING, PositionType};
+
+#[derive(Debug, Clone)]
+pub struct MatchTacticalPosition {
+    pub position: PlayerPositionType,
+    pub waypoints: Vec<(f32, f32)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TacticalPositions {
+    pub current_position: PlayerPositionType,
+    pub tactical_positions: Vec<MatchTacticalPosition>,
+}
+
+impl TacticalPositions {
+    pub fn new(current_position: PlayerPositionType, side: Option<PlayerSide>) -> Self {
+        let tactical_positions = vec![MatchTacticalPosition {
+            position: current_position,
+            waypoints: Self::generate_waypoints_for_position(current_position, side),
+        }];
+
+        TacticalPositions {
+            current_position,
+            tactical_positions,
+        }
+    }
+
+    /// Redraw this player's routes for the role he holds **now** and the
+    /// end he is attacking.
+    ///
+    /// ⚠ It used to redraw each entry for the position stored ON the
+    /// entry, which is only the same thing while nobody changes role.
+    /// Both callers that change one — a substitute taking over someone
+    /// else's slot (`MatchField::substitute_player`) and an outfielder
+    /// stationed in goal (`Substitutions::station_in_goal`) — write
+    /// `current_position` and then call this, so the entry was left
+    /// pointing at the role the player used to hold.
+    /// `MatchPlayer::rebuild_waypoint_cache` filters on
+    /// `position == current_position` and matched nothing, so those
+    /// players carried an **empty** route for the rest of the match, and
+    /// neither this call nor a later rebuild could ever repair it (the
+    /// rebuild only fires on an empty cache, and produced another empty
+    /// one). Measured at up to 16.7% of forward route lookups in a run
+    /// with a full bench.
+    pub fn regenerate_waypoints(&mut self, side: Option<PlayerSide>) {
+        self.tactical_positions.clear();
+        self.tactical_positions.push(MatchTacticalPosition {
+            position: self.current_position,
+            waypoints: Self::generate_waypoints_for_position(self.current_position, side),
+        });
+    }
+
+    fn generate_waypoints_for_position(
+        position: PlayerPositionType,
+        side: Option<PlayerSide>,
+    ) -> Vec<(f32, f32)> {
+        // Get base position coordinates for this position and side
+        let (base_x, base_y) = Self::get_base_position_coordinates(position, side);
+
+        // Determine direction multiplier based on side
+        // Left side (Home): attacking right (positive x direction)
+        // Right side (Away): attacking left (negative x direction)
+        let direction = match side {
+            Some(PlayerSide::Left) => 1.0,
+            Some(PlayerSide::Right) => -1.0,
+            None => 1.0, // Default to left/home
+        };
+
+        // Goal positions
+        let (goal_x, goal_y) = match side {
+            Some(PlayerSide::Left) => (840.0, 275.0), // Attacking right goal
+            Some(PlayerSide::Right) => (0.0, 275.0),  // Attacking left goal
+            None => (840.0, 275.0),                   // Default
+        };
+
+        match position {
+            // Goalkeeper - stay near own goal with minimal movement pattern
+            PlayerPositionType::Goalkeeper => {
+                vec![(base_x + 20.0 * direction, base_y)]
+            }
+
+            // Defenders - extended path from defensive position through midfield
+            PlayerPositionType::DefenderLeft => {
+                vec![
+                    (base_x + 80.0 * direction, base_y),  // First push
+                    (base_x + 160.0 * direction, base_y), // Midfield approach
+                    (base_x + 240.0 * direction, base_y), // Deep into midfield
+                    (base_x + 320.0 * direction, base_y), // Attacking third
+                ]
+            }
+
+            PlayerPositionType::DefenderCenterLeft
+            | PlayerPositionType::DefenderCenter
+            | PlayerPositionType::DefenderCenterRight => {
+                vec![
+                    (base_x + 80.0 * direction, base_y),
+                    (base_x + 160.0 * direction, base_y),
+                    (base_x + 240.0 * direction, base_y),
+                    (base_x + 320.0 * direction, base_y),
+                ]
+            }
+
+            PlayerPositionType::DefenderRight => {
+                vec![
+                    (base_x + 80.0 * direction, base_y),
+                    (base_x + 160.0 * direction, base_y),
+                    (base_x + 240.0 * direction, base_y),
+                    (base_x + 320.0 * direction, base_y),
+                ]
+            }
+
+            PlayerPositionType::Sweeper => {
+                vec![
+                    (base_x + 60.0 * direction, base_y),
+                    (base_x + 120.0 * direction, base_y),
+                    (base_x + 180.0 * direction, base_y),
+                ]
+            }
+
+            // Defensive midfielder - extended path through midfield to attack
+            PlayerPositionType::DefensiveMidfielder => {
+                vec![
+                    (base_x + 100.0 * direction, base_y),
+                    (base_x + 200.0 * direction, base_y),
+                    (base_x + 300.0 * direction, base_y),
+                    (base_x + 400.0 * direction, base_y),
+                ]
+            }
+
+            // Wingbacks - diagonal path toward opponent's corner with more waypoints
+            PlayerPositionType::WingbackLeft => {
+                let target_y = if direction > 0.0 { 50.0 } else { 500.0 };
+                let mid_y = (base_y + target_y) / 2.0;
+                vec![
+                    (base_x + 120.0 * direction, base_y),
+                    (base_x + 240.0 * direction, mid_y),
+                    (base_x + 360.0 * direction, target_y),
+                    (base_x + 480.0 * direction, target_y),
+                ]
+            }
+
+            PlayerPositionType::WingbackRight => {
+                let target_y = if direction > 0.0 { 500.0 } else { 50.0 };
+                let mid_y = (base_y + target_y) / 2.0;
+                vec![
+                    (base_x + 120.0 * direction, base_y),
+                    (base_x + 240.0 * direction, mid_y),
+                    (base_x + 360.0 * direction, target_y),
+                    (base_x + 480.0 * direction, target_y),
+                ]
+            }
+
+            // Midfielders - extended path through attacking third
+            PlayerPositionType::MidfielderLeft => {
+                vec![
+                    (base_x + 120.0 * direction, base_y),
+                    (base_x + 240.0 * direction, base_y),
+                    (base_x + 360.0 * direction, base_y),
+                    (base_x + 480.0 * direction, base_y),
+                ]
+            }
+
+            PlayerPositionType::MidfielderCenterLeft
+            | PlayerPositionType::MidfielderCenter
+            | PlayerPositionType::MidfielderCenterRight => {
+                vec![
+                    (base_x + 120.0 * direction, base_y),
+                    (base_x + 240.0 * direction, base_y),
+                    (base_x + 360.0 * direction, base_y),
+                    (base_x + 480.0 * direction, base_y),
+                ]
+            }
+
+            PlayerPositionType::MidfielderRight => {
+                vec![
+                    (base_x + 120.0 * direction, base_y),
+                    (base_x + 240.0 * direction, base_y),
+                    (base_x + 360.0 * direction, base_y),
+                    (base_x + 480.0 * direction, base_y),
+                ]
+            }
+
+            // Attacking midfielders - progressive path toward goal
+            PlayerPositionType::AttackingMidfielderLeft
+            | PlayerPositionType::AttackingMidfielderCenter
+            | PlayerPositionType::AttackingMidfielderRight => {
+                let distance_to_goal = (goal_x - base_x).abs();
+                let step = distance_to_goal / 4.0;
+                vec![
+                    (base_x + step * direction, base_y),
+                    (base_x + step * 2.0 * direction, base_y),
+                    (base_x + step * 3.0 * direction, base_y),
+                    (goal_x, goal_y),
+                ]
+            }
+
+            // Forwards - extended path to opponent's goal with intermediate waypoints
+            PlayerPositionType::ForwardLeft
+            | PlayerPositionType::ForwardCenter
+            | PlayerPositionType::ForwardRight => {
+                let distance_to_goal = (goal_x - base_x).abs();
+                let step = distance_to_goal / 3.0;
+                vec![
+                    (base_x + step * direction, base_y),
+                    (base_x + step * 2.0 * direction, base_y),
+                    (goal_x, goal_y),
+                ]
+            }
+
+            // Striker - direct path to opponent's goal with intermediate waypoints
+            PlayerPositionType::Striker => {
+                let distance_to_goal = (goal_x - base_x).abs();
+                let step = distance_to_goal / 3.0;
+                vec![
+                    (base_x + step * direction, base_y),
+                    (base_x + step * 2.0 * direction, base_y),
+                    (goal_x, goal_y),
+                ]
+            }
+        }
+    }
+
+    fn get_base_position_coordinates(
+        position: PlayerPositionType,
+        side: Option<PlayerSide>,
+    ) -> (f32, f32) {
+        // Find the base coordinates from POSITION_POSITIONING constant based on side
+        for (pos, home, away) in POSITION_POSITIONING {
+            if *pos == position {
+                match side {
+                    Some(PlayerSide::Left) => {
+                        if let PositionType::Home(x, y) = home {
+                            return (*x as f32, *y as f32);
+                        }
+                    }
+                    Some(PlayerSide::Right) => {
+                        if let PositionType::Away(x, y) = away {
+                            return (*x as f32, *y as f32);
+                        }
+                    }
+                    None => {
+                        // Default to home position if side is not specified
+                        if let PositionType::Home(x, y) = home {
+                            return (*x as f32, *y as f32);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Default position if not found (center of the field)
+        (420.0, 272.5)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TacticalPositions;
+    use crate::PlayerPositionType;
+    use crate::r#match::player::PlayerSide;
+
+    /// A route belongs to the role its owner holds NOW.
+    ///
+    /// The two callers that change a role — a substitute taking over
+    /// someone else's slot, and an outfielder stationed in goal — write
+    /// `current_position` and then call `regenerate_waypoints`. It used
+    /// to redraw the entry for the position stored on the entry, so the
+    /// entry kept pointing at the old role;
+    /// `MatchPlayer::rebuild_waypoint_cache` filters on
+    /// `position == current_position`, found nothing, and left those
+    /// players with an empty route for the rest of the match.
+    #[test]
+    fn a_role_change_repoints_the_route_at_the_new_role() {
+        let mut tp =
+            TacticalPositions::new(PlayerPositionType::MidfielderCenter, Some(PlayerSide::Left));
+        tp.current_position = PlayerPositionType::ForwardRight;
+        tp.regenerate_waypoints(Some(PlayerSide::Left));
+
+        assert_eq!(tp.tactical_positions.len(), 1);
+        assert_eq!(
+            tp.tactical_positions[0].position,
+            PlayerPositionType::ForwardRight,
+            "the stored entry must follow the role, or the cache filter matches nothing"
+        );
+        assert!(
+            !tp.tactical_positions[0].waypoints.is_empty(),
+            "a re-pointed entry must carry a route"
+        );
+        // And it is HIS route, not the one he walked on with.
+        let fresh =
+            TacticalPositions::new(PlayerPositionType::ForwardRight, Some(PlayerSide::Left));
+        assert_eq!(
+            tp.tactical_positions[0].waypoints,
+            fresh.tactical_positions[0].waypoints
+        );
+    }
+
+    /// Swapping ends is not a role change: the entry keeps its position
+    /// and only the geometry flips. This is the half-time path, and it
+    /// is the one case where the old loop was already correct.
+    #[test]
+    fn swapping_ends_keeps_the_role_and_flips_the_route() {
+        let mut tp =
+            TacticalPositions::new(PlayerPositionType::DefenderLeft, Some(PlayerSide::Left));
+        let first_half = tp.tactical_positions[0].waypoints.clone();
+        tp.regenerate_waypoints(Some(PlayerSide::Right));
+
+        assert_eq!(
+            tp.tactical_positions[0].position,
+            PlayerPositionType::DefenderLeft
+        );
+        assert_ne!(
+            tp.tactical_positions[0].waypoints, first_half,
+            "the route must be redrawn toward the other goal"
+        );
+    }
+}

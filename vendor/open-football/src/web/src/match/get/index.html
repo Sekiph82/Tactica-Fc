@@ -1,0 +1,839 @@
+{% extends "match/match_layout.html" %}
+
+{% block content %}
+<div class="fm-page fm-match-page">
+    <div class="container-fluid">
+        <div class="row">
+            <div class="col-xl-2 d-none d-xl-block">
+                <div class="fm-match-squad fm-match-squad-home">
+                    <div class="fm-squad-hdr">
+                        <span class="fm-squad-hdr-dot fm-squad-hdr-dot-home"></span>
+                        <a href="{{ home_team_url }}" class="fm-squad-title">{{ home_team_name }}</a>
+                    </div>
+                    <div class="fm-squad-section">
+                        {% for player in home_squad_main %}
+                        <a href="/{{ lang }}/players/{{ player.slug }}" class="fm-squad-player{% if player.subbed_off_minute.is_some() %} fm-squad-player-off{% endif %}{% if player.is_player_of_the_match %} fm-squad-player-motm{% endif %}">
+                            <small>{{ player.position }}</small>
+                            <span class="fm-sp-name">{{ player.last_name }}</span>
+                            {% if player.is_player_of_the_match %}<span class="fm-motm-badge">&#9733;</span>{% endif %}
+                            {% if let Some(min) = player.subbed_off_minute %}<span class="fm-sub-badge fm-sub-out"><i class="fa fa-arrow-down"></i> {{ min }}'</span>{% endif %}
+                            {% if !player.rating.is_empty() %}<span class="fm-rating-badge fm-rating-{{ player.rating_tier }}">{{ player.rating }}</span>{% endif %}
+                        </a>
+                        {% endfor %}
+                    </div>
+                    <div class="fm-squad-divider">{{ i18n.t("substitutes") }}</div>
+                    <div class="fm-squad-section">
+                        {% for player in home_squad_subs %}
+                        <a href="/{{ lang }}/players/{{ player.slug }}" class="fm-squad-player{% if player.sub_minute.is_some() %} fm-squad-player-subbed{% else %} fm-squad-player-bench{% endif %}{% if player.subbed_off_minute.is_some() %} fm-squad-player-off{% endif %}{% if player.is_player_of_the_match %} fm-squad-player-motm{% endif %}">
+                            <small>{{ player.position }}</small>
+                            <span class="fm-sp-name">{{ player.last_name }}</span>
+                            {% if player.is_player_of_the_match %}<span class="fm-motm-badge">&#9733;</span>{% endif %}
+                            {% if let Some(min) = player.sub_minute %}<span class="fm-sub-badge fm-sub-in"><i class="fa fa-arrow-up"></i> {{ min }}'</span>{% endif %}
+                            {% if let Some(min) = player.subbed_off_minute %}<span class="fm-sub-badge fm-sub-out"><i class="fa fa-arrow-down"></i> {{ min }}'</span>{% endif %}
+                            {% if !player.rating.is_empty() %}<span class="fm-rating-badge fm-rating-{{ player.rating_tier }}">{{ player.rating }}</span>{% endif %}
+                        </a>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            <div class="col-xl-8">
+                {% if match_recordings_enabled && match_viewer_available %}
+                <div id="match-play-area">
+                    {# The camera controls the replay never says out loud — the
+                       transport bar shows the ones it has buttons for, and these
+                       have none. Each icon is the input itself with the part that
+                       does the work lit, so the picture names the control and the
+                       words only have to say what it does. Above the stage rather
+                       than below: it is what stands between the header and the
+                       replay, so the page needs no padding of its own.
+
+                       Two legends rather than one, because there are two sets of
+                       controls: a wheel and a right button on a desktop, a pinch
+                       and a stick on a phone (see `src/match/src/touch.rs`). The
+                       stylesheet shows whichever belongs to the pointer in use —
+                       a phone was previously shown NEITHER, which left the one
+                       device whose controls have to be discovered by feel as the
+                       one device with nothing to read. #}
+                    <p class="match-hints match-hints--mouse">
+                        <span class="match-hint">
+                            <svg class="match-hint-icon" viewBox="0 0 14 20" aria-hidden="true" focusable="false">
+                                <rect class="mh-shell" x="1" y="1" width="12" height="18" rx="6"/>
+                                <path class="mh-shell" d="M1.1 8.6H12.9"/>
+                                <rect class="mh-live" x="5.9" y="2.6" width="2.2" height="4.2" rx="1.1"/>
+                            </svg>
+                            {{ i18n.t("match_hint_zoom") }}
+                        </span>
+                        <span class="match-hint">
+                            <svg class="match-hint-icon" viewBox="0 0 14 20" aria-hidden="true" focusable="false">
+                                <path class="mh-live" d="M8.6 1.22A6 6 0 0 1 13 7v1.6H8.6Z"/>
+                                <rect class="mh-shell" x="1" y="1" width="12" height="18" rx="6"/>
+                                <path class="mh-shell" d="M1.1 8.6H12.9"/>
+                                <rect class="mh-shell" x="5.9" y="2.6" width="2.2" height="4.2" rx="1.1"/>
+                            </svg>
+                            {{ i18n.t("match_hint_camera") }}
+                        </span>
+                        {# The same mouse a third time with the other button lit,
+                           so the three of them read as one control described
+                           three ways. Next to the camera hint because it IS a
+                           camera control — it points the broadcast rig at one
+                           footballer instead of at the ball, and the ring drawn
+                           under him on the grass is the only other thing that
+                           says so. #}
+                        <span class="match-hint">
+                            <svg class="match-hint-icon" viewBox="0 0 14 20" aria-hidden="true" focusable="false">
+                                <path class="mh-live" d="M5.4 1.22A6 6 0 0 0 1 7v1.6H5.4Z"/>
+                                <rect class="mh-shell" x="1" y="1" width="12" height="18" rx="6"/>
+                                <path class="mh-shell" d="M1.1 8.6H12.9"/>
+                                <rect class="mh-shell" x="5.9" y="2.6" width="2.2" height="4.2" rx="1.1"/>
+                            </svg>
+                            {{ i18n.t("match_hint_follow") }}
+                        </span>
+                        <span class="match-hint">
+                            <svg class="match-hint-icon match-hint-icon--keys" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                                <rect class="mh-shell" x="7.2" y="3.95" width="5.6" height="5.6" rx="1.2"/>
+                                <rect class="mh-shell" x="0.7" y="10.45" width="5.6" height="5.6" rx="1.2"/>
+                                <rect class="mh-shell" x="7.2" y="10.45" width="5.6" height="5.6" rx="1.2"/>
+                                <rect class="mh-shell" x="13.7" y="10.45" width="5.6" height="5.6" rx="1.2"/>
+                                <path class="mh-live" d="M10 5.75L11.25 7.75H8.75Z"/>
+                                <path class="mh-live" d="M10 14.25L8.75 12.25H11.25Z"/>
+                                <path class="mh-live" d="M2.5 13.25L4.5 12V14.5Z"/>
+                                <path class="mh-live" d="M17.5 13.25L15.5 12V14.5Z"/>
+                            </svg>
+                            {{ i18n.t("match_hint_fly") }}
+                        </span>
+                    </p>
+                    {# And the same three controls as a finger finds them: one
+                       finger turns the camera, two work the lens, and the stick
+                       drawn over the bottom-left of the replay flies it. The
+                       third icon IS that stick, pushed off centre — the legend
+                       and the control are the same picture, so there is nothing
+                       to match up. #}
+                    <p class="match-hints match-hints--touch">
+                        <span class="match-hint">
+                            <svg class="match-hint-icon match-hint-icon--wide" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                                <circle class="mh-live" cx="6.4" cy="10" r="2.7"/>
+                                <path class="mh-shell" d="M10.4 10H16.6"/>
+                                <path class="mh-shell" d="M14.4 7.8L16.8 10l-2.4 2.2"/>
+                            </svg>
+                            {{ i18n.t("match_hint_touch_camera") }}
+                        </span>
+                        <span class="match-hint">
+                            <svg class="match-hint-icon match-hint-icon--wide" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                                <path class="mh-shell" d="M8.3 11.7L4.6 15.4"/>
+                                <path class="mh-shell" d="M4.6 11.8v3.6h3.6"/>
+                                <path class="mh-shell" d="M11.7 8.3L15.4 4.6"/>
+                                <path class="mh-shell" d="M15.4 8.2V4.6h-3.6"/>
+                                <circle class="mh-live" cx="12.2" cy="7.8" r="1.9"/>
+                                <circle class="mh-live" cx="7.8" cy="12.2" r="1.9"/>
+                            </svg>
+                            {{ i18n.t("match_hint_touch_zoom") }}
+                        </span>
+                        {# The tap, drawn as what it produces: the ring the
+                           viewer paints on the grass under the player being
+                           followed, with the thumb in the middle of it. The
+                           legend and the marker are the same shape, so there is
+                           nothing to match up. #}
+                        <span class="match-hint">
+                            <svg class="match-hint-icon match-hint-icon--wide" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                                <circle class="mh-shell" cx="10" cy="10" r="6.6"/>
+                                <circle class="mh-live" cx="10" cy="10" r="2.8"/>
+                            </svg>
+                            {{ i18n.t("match_hint_touch_follow") }}
+                        </span>
+                        <span class="match-hint">
+                            <svg class="match-hint-icon match-hint-icon--wide" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                                <circle class="mh-shell" cx="10" cy="10" r="7.3"/>
+                                <circle class="mh-live" cx="12.5" cy="7.5" r="3.1"/>
+                            </svg>
+                            {{ i18n.t("match_hint_touch_fly") }}
+                        </span>
+                    </p>
+                    <div class="match-stage" id="match-stage">
+                        <canvas id="match-canvas" class="match-canvas"></canvas>
+                        {# The loading state, OVER the canvas rather than behind
+                           it. Behind it was enough while the placeholder only
+                           had to be painted over by the first frame; it is not
+                           enough now that the wait has phases, because the
+                           canvas is opaque from the first frame the viewer
+                           draws and the stadium is not finished for several
+                           more.
+
+                           Everything that moves in here moves by `transform`
+                           or `opacity`, which is not decoration: linking one
+                           of Bevy's shaders blocks the main thread for the
+                           better part of four seconds, and an animation the
+                           compositor owns is the only kind that keeps running
+                           through that. The bar's own width is driven from
+                           script and therefore does NOT move during a stall —
+                           it steps between them, which is the truth.
+
+                           The phrases are attributes rather than script
+                           literals so the translations stay in the template
+                           and out of the JavaScript. #}
+                        <div class="match-loader" id="match-loader"
+                             data-total-bytes="{{ match_viewer_bytes }}"
+                             data-phase-download="{{ i18n.t("match_loading_download") }}"
+                             data-phase-starting="{{ i18n.t("match_loading_starting") }}"
+                             data-phase-building="{{ i18n.t("match_loading_stadium") }}"
+                             data-phase-recording="{{ i18n.t("match_loading_recording") }}"
+                             data-phase-squad="{{ i18n.t("match_loading_teams") }}"
+                             data-phase-failed="{{ i18n.t("match_loading_failed") }}">
+                            <div class="match-loader-ring" aria-hidden="true"></div>
+                            <p class="match-loader-phase" id="match-loader-phase"
+                               role="status" aria-live="polite">{{ i18n.t("match_loading_download") }}</p>
+                            <div class="match-loader-track" id="match-loader-track"
+                                 role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                                <div class="match-loader-fill" id="match-loader-fill"></div>
+                            </div>
+                            <p class="match-loader-note">{{ i18n.t("match_loading_note") }}</p>
+                            {# What the viewer is HOLDING, phase by phase.
+
+                               Empty and invisible unless `?perf=1` asked for
+                               it, because it is a diagnostic and not part of
+                               the product — but it is the only diagnostic that
+                               reaches the device this page fails on. iOS kills
+                               the whole renderer process when a tab crosses
+                               its memory ceiling, which leaves no console, no
+                               stack and no error page; a phone has no
+                               inspector to attach either, short of a Mac and a
+                               cable. The phase line and these figures stay on
+                               screen until the reload takes them, so the
+                               person holding the device can read which course
+                               the scene died on and what it was holding when
+                               it did. Untranslated on purpose: it is numbers
+                               and two English words, for whoever is chasing a
+                               crash. #}
+                            <p class="match-loader-bill" id="match-loader-bill" hidden></p>
+                        </div>
+                        <button type="button" id="match-fullscreen" class="match-fullscreen"
+                                title="{{ i18n.t("match_fullscreen") }}"
+                                aria-label="{{ i18n.t("match_fullscreen") }}"
+                                data-enter-label="{{ i18n.t("match_fullscreen") }}"
+                                data-exit-label="{{ i18n.t("match_exit_fullscreen") }}">
+                            <i class="fas fa-expand" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </div>
+                {% else if match_recordings_enabled %}
+                <div class="fm-match-recording-disabled">
+                    <i class="fa fa-cubes"></i>
+                    <p>{{ i18n.t("match_viewer_missing") }}</p>
+                    <p class="fm-match-recording-note"><code>rustup target add wasm32-unknown-unknown</code></p>
+                </div>
+                {% else %}
+                <div class="fm-match-recording-disabled">
+                    <i class="fa fa-video-slash"></i>
+                    <p>{{ i18n.t("match_recording_disabled") }}</p>
+                    <p>{{ i18n.t("match_recording_disabled_local") }}</p>
+                    <p class="fm-match-recording-note"><code>open_football</code></p>
+                    <a href="https://github.com/ZOXEXIVO/open-football/releases" target="_blank" rel="noopener">{{ i18n.t("match_recording_disabled_link") }}</a>
+                </div>
+                {% endif %}
+            </div>
+            <div class="col-xl-2 d-none d-xl-block">
+                <div class="fm-match-squad fm-match-squad-away">
+                    <div class="fm-squad-hdr">
+                        <span class="fm-squad-hdr-dot fm-squad-hdr-dot-away"></span>
+                        <a href="{{ away_team_url }}" class="fm-squad-title">{{ away_team_name }}</a>
+                    </div>
+                    <div class="fm-squad-section">
+                        {% for player in away_squad_main %}
+                        <a href="/{{ lang }}/players/{{ player.slug }}" class="fm-squad-player{% if player.subbed_off_minute.is_some() %} fm-squad-player-off{% endif %}{% if player.is_player_of_the_match %} fm-squad-player-motm{% endif %}">
+                            <small>{{ player.position }}</small>
+                            <span class="fm-sp-name">{{ player.last_name }}</span>
+                            {% if player.is_player_of_the_match %}<span class="fm-motm-badge">&#9733;</span>{% endif %}
+                            {% if let Some(min) = player.subbed_off_minute %}<span class="fm-sub-badge fm-sub-out"><i class="fa fa-arrow-down"></i> {{ min }}'</span>{% endif %}
+                            {% if !player.rating.is_empty() %}<span class="fm-rating-badge fm-rating-{{ player.rating_tier }}">{{ player.rating }}</span>{% endif %}
+                        </a>
+                        {% endfor %}
+                    </div>
+                    <div class="fm-squad-divider">{{ i18n.t("substitutes") }}</div>
+                    <div class="fm-squad-section">
+                        {% for player in away_squad_subs %}
+                        <a href="/{{ lang }}/players/{{ player.slug }}" class="fm-squad-player{% if player.sub_minute.is_some() %} fm-squad-player-subbed{% else %} fm-squad-player-bench{% endif %}{% if player.subbed_off_minute.is_some() %} fm-squad-player-off{% endif %}{% if player.is_player_of_the_match %} fm-squad-player-motm{% endif %}">
+                            <small>{{ player.position }}</small>
+                            <span class="fm-sp-name">{{ player.last_name }}</span>
+                            {% if player.is_player_of_the_match %}<span class="fm-motm-badge">&#9733;</span>{% endif %}
+                            {% if let Some(min) = player.sub_minute %}<span class="fm-sub-badge fm-sub-in"><i class="fa fa-arrow-up"></i> {{ min }}'</span>{% endif %}
+                            {% if let Some(min) = player.subbed_off_minute %}<span class="fm-sub-badge fm-sub-out"><i class="fa fa-arrow-down"></i> {{ min }}'</span>{% endif %}
+                            {% if !player.rating.is_empty() %}<span class="fm-rating-badge fm-rating-{{ player.rating_tier }}">{{ player.rating }}</span>{% endif %}
+                        </a>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="fm-match-squads-mobile d-xl-none">
+            <div class="fm-match-squad fm-match-squad-home">
+                <div class="fm-squad-hdr">
+                    <span class="fm-squad-hdr-dot fm-squad-hdr-dot-home"></span>
+                    <a href="{{ home_team_url }}" class="fm-squad-title">{{ home_team_name }}</a>
+                </div>
+                <div class="fm-squad-section">
+                    {% for player in home_squad_main %}
+                    <a href="/{{ lang }}/players/{{ player.slug }}" class="fm-squad-player{% if player.subbed_off_minute.is_some() %} fm-squad-player-off{% endif %}{% if player.is_player_of_the_match %} fm-squad-player-motm{% endif %}">
+                        <small>{{ player.position }}</small>
+                        <span class="fm-sp-name">{{ player.last_name }}</span>
+                        {% if player.is_player_of_the_match %}<span class="fm-motm-badge">&#9733;</span>{% endif %}
+                        {% if let Some(min) = player.subbed_off_minute %}<span class="fm-sub-badge fm-sub-out"><i class="fa fa-arrow-down"></i> {{ min }}'</span>{% endif %}
+                        {% if !player.rating.is_empty() %}<span class="fm-rating-badge fm-rating-{{ player.rating_tier }}">{{ player.rating }}</span>{% endif %}
+                    </a>
+                    {% endfor %}
+                </div>
+                <div class="fm-squad-divider">{{ i18n.t("substitutes") }}</div>
+                <div class="fm-squad-section">
+                    {% for player in home_squad_subs %}
+                    <a href="/{{ lang }}/players/{{ player.slug }}" class="fm-squad-player{% if player.sub_minute.is_some() %} fm-squad-player-subbed{% else %} fm-squad-player-bench{% endif %}{% if player.subbed_off_minute.is_some() %} fm-squad-player-off{% endif %}{% if player.is_player_of_the_match %} fm-squad-player-motm{% endif %}">
+                        <small>{{ player.position }}</small>
+                        <span class="fm-sp-name">{{ player.last_name }}</span>
+                        {% if player.is_player_of_the_match %}<span class="fm-motm-badge">&#9733;</span>{% endif %}
+                        {% if let Some(min) = player.sub_minute %}<span class="fm-sub-badge fm-sub-in"><i class="fa fa-arrow-up"></i> {{ min }}'</span>{% endif %}
+                        {% if let Some(min) = player.subbed_off_minute %}<span class="fm-sub-badge fm-sub-out"><i class="fa fa-arrow-down"></i> {{ min }}'</span>{% endif %}
+                        {% if !player.rating.is_empty() %}<span class="fm-rating-badge fm-rating-{{ player.rating_tier }}">{{ player.rating }}</span>{% endif %}
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="fm-match-squad fm-match-squad-away">
+                <div class="fm-squad-hdr">
+                    <span class="fm-squad-hdr-dot fm-squad-hdr-dot-away"></span>
+                    <a href="{{ away_team_url }}" class="fm-squad-title">{{ away_team_name }}</a>
+                </div>
+                <div class="fm-squad-section">
+                    {% for player in away_squad_main %}
+                    <a href="/{{ lang }}/players/{{ player.slug }}" class="fm-squad-player{% if player.subbed_off_minute.is_some() %} fm-squad-player-off{% endif %}{% if player.is_player_of_the_match %} fm-squad-player-motm{% endif %}">
+                        <small>{{ player.position }}</small>
+                        <span class="fm-sp-name">{{ player.last_name }}</span>
+                        {% if player.is_player_of_the_match %}<span class="fm-motm-badge">&#9733;</span>{% endif %}
+                        {% if let Some(min) = player.subbed_off_minute %}<span class="fm-sub-badge fm-sub-out"><i class="fa fa-arrow-down"></i> {{ min }}'</span>{% endif %}
+                        {% if !player.rating.is_empty() %}<span class="fm-rating-badge fm-rating-{{ player.rating_tier }}">{{ player.rating }}</span>{% endif %}
+                    </a>
+                    {% endfor %}
+                </div>
+                <div class="fm-squad-divider">{{ i18n.t("substitutes") }}</div>
+                <div class="fm-squad-section">
+                    {% for player in away_squad_subs %}
+                    <a href="/{{ lang }}/players/{{ player.slug }}" class="fm-squad-player{% if player.sub_minute.is_some() %} fm-squad-player-subbed{% else %} fm-squad-player-bench{% endif %}{% if player.subbed_off_minute.is_some() %} fm-squad-player-off{% endif %}{% if player.is_player_of_the_match %} fm-squad-player-motm{% endif %}">
+                        <small>{{ player.position }}</small>
+                        <span class="fm-sp-name">{{ player.last_name }}</span>
+                        {% if player.is_player_of_the_match %}<span class="fm-motm-badge">&#9733;</span>{% endif %}
+                        {% if let Some(min) = player.sub_minute %}<span class="fm-sub-badge fm-sub-in"><i class="fa fa-arrow-up"></i> {{ min }}'</span>{% endif %}
+                        {% if let Some(min) = player.subbed_off_minute %}<span class="fm-sub-badge fm-sub-out"><i class="fa fa-arrow-down"></i> {{ min }}'</span>{% endif %}
+                        {% if !player.rating.is_empty() %}<span class="fm-rating-badge fm-rating-{{ player.rating_tier }}">{{ player.rating }}</span>{% endif %}
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if match_recordings_enabled && match_viewer_available %}
+<script>
+    // Two measurements the stylesheet cannot take for itself, both explained
+    // where they are used: `--match-chrome` (the stage is sized against what
+    // the header leaves of the viewport, and this header grows with the number
+    // of scorers) and `--fm-sb-shift` (how far off the page's centre line the
+    // scoreboard sits, doubled, because the margin that corrects it moves the
+    // result by half of itself). The shift is measured off the SCOREBOARD's
+    // own box rather than the result inside it — the margin lands on the
+    // result, so measuring that instead would read back its own correction
+    // and oscillate. Writing only on change keeps the observer from ringing
+    // itself.
+    (function () {
+        var header = document.querySelector(".fm-header");
+        var board = header && header.querySelector(".fm-header-scoreboard");
+        var area = document.getElementById("match-play-area");
+        if (!header || !area) {
+            return;
+        }
+
+        function set(element, name, value) {
+            if (element.style.getPropertyValue(name) !== value) {
+                element.style.setProperty(name, value);
+            }
+        }
+
+        function apply() {
+            set(area, "--match-chrome", header.getBoundingClientRect().height + "px");
+            if (board) {
+                var box = board.getBoundingClientRect();
+                var style = window.getComputedStyle(board);
+                var left = box.left + parseFloat(style.paddingLeft);
+                var right = box.right - parseFloat(style.paddingRight);
+                var shift = document.documentElement.clientWidth / 2 - (left + right) / 2;
+                set(header, "--fm-sb-shift", Math.max(0, Math.round(shift * 2)) + "px");
+            }
+        }
+
+        apply();
+        if (window.ResizeObserver) {
+            var observer = new ResizeObserver(apply);
+            observer.observe(header);
+            if (board) {
+                observer.observe(board);
+            }
+        } else {
+            window.addEventListener("resize", apply);
+        }
+    })();
+</script>
+<script>
+    // Fullscreen for the replay stage. Deliberately a plain script rather than
+    // part of the module below: it is the one control that has to work even
+    // when the WebAssembly viewer fails to load, and a module that throws on
+    // import takes everything in it down with it.
+    (function () {
+        var stage = document.getElementById("match-stage");
+        var button = document.getElementById("match-fullscreen");
+        if (!stage || !button) {
+            return;
+        }
+
+        var icon = button.querySelector("i");
+        // Safari still ships the prefixed names, and the unprefixed ones are
+        // simply absent there rather than aliased.
+        var request = stage.requestFullscreen || stage.webkitRequestFullscreen;
+        var exit = document.exitFullscreen || document.webkitExitFullscreen;
+
+        // iOS Safari has no element fullscreen at all — only video gets it. The
+        // fallback pins the stage over the viewport, which is the same picture
+        // minus the browser chrome, and is why the Escape handler below is not
+        // redundant with the browser's own. Native fullscreen suppresses the
+        // page's scrollbar itself; the fallback has to be told, or the bar
+        // stays and takes a strip off the width the stage is covering.
+        var FALLBACK = "match-stage-faux-fullscreen";
+        var LOCK = "match-scroll-locked";
+
+        function isNative() {
+            return (document.fullscreenElement || document.webkitFullscreenElement) === stage;
+        }
+
+        function isOpen() {
+            return isNative() || stage.classList.contains(FALLBACK);
+        }
+
+        function sync() {
+            var open = isOpen();
+            var label = button.getAttribute(open ? "data-exit-label" : "data-enter-label");
+            button.setAttribute("title", label);
+            button.setAttribute("aria-label", label);
+            icon.classList.toggle("fa-expand", !open);
+            icon.classList.toggle("fa-compress", open);
+        }
+
+        function open() {
+            if (request) {
+                // A rejected promise means the browser declined (an iframe
+                // without the permission, a policy block) — fall back rather
+                // than leave the button dead.
+                var started = request.call(stage);
+                if (started && typeof started.catch === "function") {
+                    started.catch(function () {
+                        openFallback();
+                    });
+                }
+            } else {
+                openFallback();
+            }
+            sync();
+        }
+
+        function openFallback() {
+            stage.classList.add(FALLBACK);
+            document.documentElement.classList.add(LOCK);
+            sync();
+        }
+
+        function close() {
+            if (isNative() && exit) {
+                exit.call(document);
+            }
+            stage.classList.remove(FALLBACK);
+            document.documentElement.classList.remove(LOCK);
+            sync();
+        }
+
+        button.addEventListener("click", function () {
+            if (isOpen()) {
+                close();
+            } else {
+                open();
+            }
+        });
+
+        // Escape. The browser already exits NATIVE fullscreen on it, and this
+        // handler is what covers the fallback — plus the case where the canvas
+        // has keyboard focus, since the viewer claims keys on it.
+        document.addEventListener("keydown", function (event) {
+            if ((event.key === "Escape" || event.key === "Esc") && isOpen()) {
+                close();
+            }
+        });
+
+        // Leaving fullscreen any other way — the browser's own chrome, a
+        // window-manager shortcut — has to put the icon back.
+        document.addEventListener("fullscreenchange", sync);
+        document.addEventListener("webkitfullscreenchange", sync);
+    })();
+</script>
+<script type="module">
+    // Everything the replay does lives in the WebAssembly viewer built from
+    // `src/match`; this hands it the canvas and the fixture, and steps back.
+    //
+    // What it does NOT step back from is the wait. Opening a match for the
+    // first time in a browser session costs about thirty megabytes of
+    // WebAssembly and then four Bevy shader programs, each of which takes the
+    // browser the better part of four seconds to link — synchronously, on the
+    // one thread this page has. That wait cannot be removed here (see
+    // `src/match/src/bringup.rs` for the measurements and for how it is at
+    // least broken into pieces the page can be repainted between); what it can
+    // be is legible. So the download is read off the stream as it arrives, and
+    // the viewer announces every course of the stadium it lays.
+    import init, { MatchViewer } from "/static/viewer/match_viewer.js?v={{ match_viewer_version }}";
+
+    const loader = document.getElementById("match-loader");
+    const phase = document.getElementById("match-loader-phase");
+    const track = document.getElementById("match-loader-track");
+    const fill = document.getElementById("match-loader-fill");
+    const bill = document.getElementById("match-loader-bill");
+
+    // What each stretch of the wait is worth, end to end. The download is the
+    // only one with a real fraction inside it; the rest advance a step at a
+    // time, which is honest — a shader link reports nothing at all until it
+    // is over.
+    const DOWNLOAD_SHARE = 0.35;
+    const STARTING_AT = 0.45;
+    const BUILDING_FROM = 0.5;
+    const BUILDING_TO = 0.86;
+    const RECORDING_AT = 0.9;
+    const SQUAD_AT = 0.95;
+
+    let done = false;
+    let shown = -1;
+
+    // Once the stadium is up there is something worth looking at behind this,
+    // and the recording may be minutes away — a match that is still being
+    // simulated has no recording to fetch yet, and the viewer keeps asking. So
+    // the cover comes off at that point and what is left is a status line
+    // along the bottom that does not take the pointer.
+    function standAside() {
+        if (loader) {
+            loader.classList.add("match-loader-clear");
+        }
+    }
+
+    function show(name, fraction) {
+        if (done || !loader) {
+            return;
+        }
+        const text = loader.dataset["phase" + name.charAt(0).toUpperCase() + name.slice(1)];
+        if (text && phase.textContent !== text) {
+            phase.textContent = text;
+        }
+        // Whole percents only. The download calls this once per chunk of the
+        // response — some hundreds of times — and every one of those would
+        // otherwise be a style write for a bar that has not visibly moved.
+        const percent = Math.max(0, Math.min(100, Math.round(fraction * 100)));
+        if (percent === shown) {
+            return;
+        }
+        shown = percent;
+        fill.style.width = percent + "%";
+        track.setAttribute("aria-valuenow", String(percent));
+    }
+
+    function finish() {
+        if (done || !loader) {
+            return;
+        }
+        done = true;
+        fill.style.width = "100%";
+        track.setAttribute("aria-valuenow", "100");
+        loader.classList.add("match-loader-gone");
+        // After the fade, so the canvas is not left under a transparent box
+        // that still eats nothing but is still in the layer tree.
+        window.setTimeout(() => loader.remove(), 400);
+    }
+
+    function fail() {
+        if (done || !loader) {
+            return;
+        }
+        // Before `done`, or the message it is being set for never lands.
+        show("failed", 0);
+        loader.classList.add("match-loader-failed");
+        done = true;
+    }
+
+    // The viewer's own progress. Registered before `init` so the first course
+    // cannot be laid before anybody is listening.
+    // Whether the memory readout is wanted at all. Read once, from the same
+    // `?perf=1` that turns the frame-cost strip on inside the viewer.
+    const instrumented = new URLSearchParams(location.search).get("perf") === "1";
+
+    // What the viewer says it is holding, written beside the phase it said it
+    // at. See the note on the element itself for why a phone needs this on
+    // screen rather than in a console.
+    function weigh(detail) {
+        if (!instrumented || !bill || typeof detail.heap !== "number") {
+            return;
+        }
+        bill.hidden = false;
+        bill.textContent =
+            (detail.footprint || "?") +
+            " · heap " + Math.round(detail.heap) +
+            " (peak " + Math.round(detail.peak) + ")" +
+            " · assets " + Math.round(detail.assets) + " MiB";
+    }
+
+    document.addEventListener("match-viewer-progress", (event) => {
+        const detail = event.detail || {};
+        weigh(detail);
+        if (detail.phase === "ready") {
+            finish();
+            return;
+        }
+        if (detail.phase === "building") {
+            const through = detail.total ? detail.done / detail.total : 0;
+            show("building", BUILDING_FROM + (BUILDING_TO - BUILDING_FROM) * through);
+            return;
+        }
+        if (detail.phase === "recording") {
+            standAside();
+            show("recording", RECORDING_AT);
+            return;
+        }
+        if (detail.phase === "squad") {
+            standAside();
+            show("squad", SQUAD_AT);
+            return;
+        }
+        show("starting", STARTING_AT);
+    });
+
+    // The wasm, with the bytes counted on the way past.
+    //
+    // The stream is rebuilt rather than drained into a buffer so the browser
+    // still compiles it AS it arrives — `WebAssembly.instantiateStreaming`
+    // takes a `Response`, and it is handed one whose body is this pump. The
+    // total comes from the page and not from `Content-Length`, because the
+    // file is stored gzipped and served that way: the header describes the
+    // compressed transfer while every chunk read here has already been
+    // inflated, so the two are a factor of five apart.
+    async function counted(url) {
+        const response = await fetch(url);
+        const total = Number(loader && loader.dataset.totalBytes) || 0;
+        // Any of these missing and the count cannot be trusted, so the
+        // response is handed over untouched: a bar that does not move is a
+        // great deal better than a replay that does not start.
+        if (!response.ok || !response.body || !total || typeof ReadableStream !== "function") {
+            return response;
+        }
+        try {
+            const reader = response.body.getReader();
+            let seen = 0;
+            const body = new ReadableStream({
+                async pull(controller) {
+                    const chunk = await reader.read();
+                    if (chunk.done) {
+                        controller.close();
+                        return;
+                    }
+                    seen += chunk.value.byteLength;
+                    show("download", Math.min(seen / total, 1) * DOWNLOAD_SHARE);
+                    controller.enqueue(chunk.value);
+                },
+                cancel(reason) {
+                    return reader.cancel(reason);
+                },
+            });
+            return new Response(body, { headers: { "Content-Type": "application/wasm" } });
+        } catch (error) {
+            console.warn("match viewer: download progress unavailable", error);
+            return response;
+        }
+    }
+
+    // Which pace to ask of the viewer. Left alone it caps itself at 120
+    // updates a second (`ViewerConfig::fps_cap`), timed by a wall clock —
+    // and a wall clock is the wrong instrument on a display the cap cannot
+    // help anyway: the browser presents on the display's own vsync, the
+    // timer drifts against it, and every crossing shows one frame twice and
+    // the next as a double step. That judder is invisible while the football
+    // plays and glaring on the line-up's slow pass along the faces. Uncapped
+    // (zero) the viewer runs one update per animation frame — locked to the
+    // vsync it is presented on, the only smooth cadence a browser has. So
+    // the display is measured, and the cap is waived wherever it could never
+    // have engaged. A panel genuinely faster than the cap keeps it: 240
+    // frames a second of pictures nobody can tell apart is the fan coming
+    // on for a replay, which is the decision the cap records.
+    const UNCAP_BELOW = 130; // the viewer's own 120, plus measurement jitter
+    function displayRefresh() {
+        return new Promise((resolve) => {
+            const stamps = [];
+            // A hidden tab is given no animation frames at all, so the
+            // sampling races a timer; zero means "could not tell", and the
+            // config is then left exactly as the server wrote it.
+            const bail = window.setTimeout(() => resolve(0), 800);
+            function tick(now) {
+                stamps.push(now);
+                if (stamps.length <= 10) {
+                    requestAnimationFrame(tick);
+                    return;
+                }
+                window.clearTimeout(bail);
+                const gaps = [];
+                for (let i = 1; i < stamps.length; i += 1) {
+                    gaps.push(stamps[i] - stamps[i - 1]);
+                }
+                // The median, because the page is busy underneath this —
+                // the wasm is downloading and compiling while it samples —
+                // and a few janked frames must not read as a slower display.
+                gaps.sort((a, b) => a - b);
+                const gap = gaps[Math.floor(gaps.length / 2)];
+                resolve(gap > 0 ? 1000 / gap : 0);
+            }
+            requestAnimationFrame(tick);
+        });
+    }
+    // Started now, alongside the download, so by the time the wasm is ready
+    // the answer is too and the start waits on nothing.
+    const refreshRate = displayRefresh();
+
+    counted("/static/viewer/match_viewer_bg.wasm?v={{ match_viewer_version }}")
+        .then((response) => init({ module_or_path: response }))
+        .then(() => refreshRate)
+        .then((refresh) => {
+            show("starting", STARTING_AT);
+            const config = {{ viewer_config_json|safe }};
+            // Only where the server has not chosen a cap itself.
+            if (config && !("fps_cap" in config) && refresh > 0 && refresh <= UNCAP_BELOW) {
+                config.fps_cap = 0;
+            }
+            // `?perf=1` turns on the frame-cost readout: the strip on the
+            // transport bar and a console line every two seconds saying
+            // where the frame went — our systems, the rest of Bevy's main
+            // world, or the renderer and the browser.
+            //
+            // It is set from the page rather than from the server because
+            // the question it answers is about the MACHINE, not about the
+            // match: a replay that is smooth on one computer and unwatchable
+            // on the next is the same document either way, and whoever is
+            // looking into it has only the second computer. It deliberately
+            // does not turn on `debug`, which is the engine's overlay —
+            // every player's state named over his head is not what somebody
+            // chasing a frame rate asked for.
+            const asked = new URLSearchParams(location.search);
+            if (config && asked.get("perf") === "1") {
+                config.perf = true;
+            }
+            // …and `?grain=full` / `?grain=spare` / `?grain=far` set the
+            // finest cut the twenty-two are drawn at, which the machine's own
+            // tier would otherwise decide; a man far from the camera is cut
+            // coarser still, and `far` cuts everybody at the coarsest. This is
+            // what makes the decision checkable: a viewer can watch the same
+            // match each way on his own computer and read the frame cost off
+            // the bar each time.
+            if (config && ["full", "spare", "far"].includes(asked.get("grain"))) {
+                config.grain = asked.get("grain");
+            }
+            // …and `?device=handheld` / `?device=roomy` force what kind of
+            // machine the viewer takes this to be, which decides the
+            // sampling, the squad grain AND how much crowd is built.
+            //
+            // A diagnostic first: a phone that reloads the tab rather than
+            // opening the match leaves nothing to read afterwards, because
+            // the renderer was killed rather than having failed. Being able
+            // to ask for the small scene from the address bar of the device
+            // that is failing is the only bisection available there.
+            if (config && ["handheld", "roomy"].includes(asked.get("device"))) {
+                config.device = asked.get("device");
+            }
+            // …and the four knobs that take the scene APART, which is a
+            // different job from `?device=` and the reason they exist
+            // separately from it.
+            //
+            // `?device=handheld` builds the small scene; these say WHICH part
+            // of the big one was too large. A tab killed for its memory leaves
+            // no console, no stack and no error page — the renderer is
+            // destroyed and the browser simply starts the page again — so on
+            // the phone that is failing there is nothing to read afterwards
+            // and nothing to attach a debugger to. Bisection from the address
+            // bar is the whole instrument:
+            //
+            //   ?crowd=off      the four banks of spectators, ~88% of the
+            //                   scene's geometry
+            //   ?squad=off      the twenty-two and their faces
+            //   ?stage=1.3      how many megapixels the replay is drawn into,
+            //                   which sets the render attachments
+            //   ?readahead=1    how many chunks of the recording are parsed
+            //                   at once
+            //
+            // Each is validated here rather than in the viewer so a typo is an
+            // ignored parameter and not a match that will not open.
+            if (config && ["off", "handheld", "full"].includes(asked.get("crowd"))) {
+                config.crowd = asked.get("crowd");
+            }
+            if (config && asked.get("squad") === "off") {
+                config.squad = "off";
+            }
+            // ⚠ Both read through `has` first: `Number(null)` is 0, not NaN,
+            // so an absent `?readahead` would otherwise read as "fetch
+            // nothing ahead" and the replay would stall at every chunk
+            // boundary on every page in the game.
+            const megapixels = asked.has("stage") ? Number(asked.get("stage")) : NaN;
+            if (config && megapixels > 0 && megapixels <= 32) {
+                config.stage = megapixels;
+            }
+            const readAhead = asked.has("readahead") ? Number(asked.get("readahead")) : NaN;
+            if (config && Number.isInteger(readAhead) && readAhead >= 0 && readAhead <= 8) {
+                config.readahead = readAhead;
+            }
+            MatchViewer.start(JSON.stringify(config));
+            surrenderOnLeaving();
+        })
+        .catch((error) => {
+            console.error("match viewer failed to start", error);
+            fail();
+        });
+
+    // Give the GPU back when the page is left.
+    //
+    // Nothing in the viewer tears itself down, and a browser does not
+    // necessarily throw the document away when it is navigated from: WebKit
+    // holds it in the back/forward cache, whole and running, so a replay's
+    // attachments, its linear memory and its WebGL context all survive the
+    // move to the next page. Two or three match pages in a session and the
+    // tab is holding two or three complete stadiums, which is the shape of a
+    // fault that shows up on the third match rather than the first — and on
+    // the one browser whose per-tab ceiling is low enough to notice.
+    //
+    // A lost context releases the largest part of that immediately, and it is
+    // the part nothing else can reach: the colour pair, the resolve target
+    // and the depth buffer for both views live in the driver, not in any heap
+    // this page can measure. `getContext` returns the context wgpu is already
+    // holding rather than making a second one, so this is the same object the
+    // replay was being drawn with.
+    //
+    // `pagehide` rather than `unload`: `unload` is what DISQUALIFIES a page
+    // from the back/forward cache in the first place, and registering it
+    // would make every other page in the game slower to come back to. On
+    // `pagehide` the picture is already gone from the screen, and a viewer
+    // who presses Back gets the page rebuilt — which is what they would have
+    // got from any browser that declined to cache it.
+    function surrenderOnLeaving() {
+        window.addEventListener("pagehide", () => {
+            const canvas = document.getElementById("match-canvas");
+            const gl = canvas && canvas.getContext("webgl2");
+            const lose = gl && gl.getExtension("WEBGL_lose_context");
+            if (lose) {
+                lose.loseContext();
+            }
+        });
+    }
+</script>
+{% endif %}
+{% endblock %}

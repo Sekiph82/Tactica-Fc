@@ -1,0 +1,245 @@
+use crate::r#match::MatchResult;
+use chrono::Duration;
+use chrono::NaiveDate;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+
+/// Default retention window — three completed seasons. Long enough for anyrt
+/// realistic UI lookup (historical results, head-to-head, player career
+/// recaps within the current save era) while keeping the HashMap bounded
+/// on multi-decade saves.
+pub const DEFAULT_RETENTION_DAYS: i64 = 365 * 3 + 1;
+
+/// Entries are `Arc`-shared rather than owned outright, and that is a
+/// memory decision, not an aliasing one. The whole `SimulatorData` graph is
+/// deep-cloned every time the holiday runner publishes a snapshot (see
+/// `ProcessingRun::publish_progress` in the web crate) so readers can keep
+/// serving the last world while the sim mutates a private copy. Owned
+/// entries made that clone scale with elapsed simulation time: a stored
+/// result drags `player_stats`, `physical_snapshots`, `chances` and both
+/// `FieldSquad`s along, so a year-long holiday grew the per-publish copy
+/// from ~1.3 GB into the tens of GB and pushed the process into swap —
+/// which surfaced as the web app timing out mid-holiday. Behind an `Arc`
+/// the clone is one pointer bump per entry, the payload is shared with the
+/// published snapshot instead of duplicated, and the copy stays flat as the
+/// save ages.
+///
+/// Nothing here hands out `&mut MatchResult`, so the sharing is invisible
+/// to callers: every read below still borrows, and the two mutators replace
+/// whole values.
+#[derive(Debug, Clone)]
+pub struct MatchStorage {
+    results: HashMap<String, Arc<MatchResult>>,
+    /// Secondary index: date → match ids recorded that day. Used to drop
+    /// old entries without walking the main HashMap.
+    by_date: BTreeMap<NaiveDate, Vec<String>>,
+    retention_days: i64,
+}
+
+impl Default for MatchStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MatchStorage {
+    pub fn new() -> Self {
+        MatchStorage {
+            results: HashMap::new(),
+            by_date: BTreeMap::new(),
+            retention_days: DEFAULT_RETENTION_DAYS,
+        }
+    }
+
+    pub fn with_retention_days(mut self, days: i64) -> Self {
+        self.retention_days = days.max(30);
+        self
+    }
+
+    /// Insert a match result tagged with the sim date it was played on.
+    /// Older `push` sites that don't have a date handy should pass the
+    /// current simulation date; undated inserts would defeat rotation.
+    pub fn push(&mut self, match_result: MatchResult, date: NaiveDate) {
+        let id = match_result.id.clone();
+        self.results.insert(id.clone(), Arc::new(match_result));
+        self.by_date.entry(date).or_default().push(id);
+    }
+
+    /// Overwrite an already-stored result in place, keyed by id, WITHOUT
+    /// touching the date index. `process_match_day_results` pushes a
+    /// *pre-processing* snapshot of each match (Player of the Match still
+    /// `None`, raw engine ratings) at match-day time; the finalized values
+    /// aren't set until `process_match_events` runs later in the tick. This
+    /// lets that later pass sync the finalized record over the snapshot so
+    /// downstream readers of `League.matches` (per-match web page, weekly
+    /// award aggregator) see the nominee and canonical ratings.
+    ///
+    /// Deliberately a no-op when the id was never stored: creating a fresh,
+    /// date-unindexed entry here would escape both `trim` and
+    /// `iter_in_range`. Because `by_date` is left alone, re-syncing can't
+    /// double-count a match in range-based aggregation. Returns whether an
+    /// entry was replaced.
+    pub fn replace_if_present(&mut self, match_result: MatchResult) -> bool {
+        if let Some(slot) = self.results.get_mut(&match_result.id) {
+            *slot = Arc::new(match_result);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn get<M>(&self, match_id: M) -> Option<&MatchResult>
+    where
+        M: AsRef<str>,
+    {
+        self.results.get(match_id.as_ref()).map(Arc::as_ref)
+    }
+
+    pub fn len(&self) -> usize {
+        self.results.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.results.is_empty()
+    }
+
+    /// Iterate every result whose recording date falls in `[start, end)`.
+    /// Borrowed lookup so the per-week aggregator can score players without
+    /// cloning the underlying `MatchResult` (which carries position data
+    /// and player stats — non-trivial in size).
+    pub fn iter_in_range<'a>(
+        &'a self,
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> impl Iterator<Item = &'a MatchResult> + 'a {
+        self.by_date
+            .range(start..end)
+            .flat_map(|(_, ids)| ids.iter())
+            .filter_map(move |id| self.results.get(id).map(Arc::as_ref))
+    }
+
+    /// Borrowed walk over every stored result, regardless of date. Use
+    /// this when the caller wants the full retained window (per-league
+    /// stores are reset on season-start, so "all stored" already means
+    /// "this season").
+    pub fn iter(&self) -> impl Iterator<Item = &MatchResult> {
+        self.results.values().map(Arc::as_ref)
+    }
+
+    /// Drop every match recorded before `today − retention_days`. O(K log N)
+    /// in the number of evicted dates; cheap to call on season boundaries.
+    pub fn trim(&mut self, today: NaiveDate) {
+        let cutoff = today - Duration::days(self.retention_days);
+        let evict_dates: Vec<NaiveDate> = self.by_date.range(..cutoff).map(|(d, _)| *d).collect();
+        for date in evict_dates {
+            if let Some(ids) = self.by_date.remove(&date) {
+                for id in ids {
+                    self.results.remove(&id);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::r#match::{MatchResult, Score, TeamScore};
+
+    fn mk(id: &str) -> MatchResult {
+        MatchResult {
+            id: id.to_string(),
+            league_slug: "slug".to_string(),
+            league_id: 0,
+            details: None,
+            score: Score {
+                home_team: TeamScore::new_with_score(0, 0),
+                away_team: TeamScore::new_with_score(0, 0),
+                details: vec![],
+                home_shootout: 0,
+                away_shootout: 0,
+            },
+            home_team_id: 0,
+            away_team_id: 0,
+            friendly: false,
+        }
+    }
+
+    fn day(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn test_match_storage_new() {
+        let match_storage = MatchStorage::new();
+        assert!(match_storage.is_empty());
+    }
+
+    #[test]
+    fn test_match_storage_push() {
+        let mut match_storage = MatchStorage::new();
+        let match_result = mk("match_1");
+        match_storage.push(match_result.clone(), day(2024, 1, 1));
+        assert_eq!(match_storage.len(), 1);
+        assert_eq!(match_storage.get("match_1"), Some(&match_result));
+    }
+
+    #[test]
+    fn test_match_storage_get() {
+        let mut match_storage = MatchStorage::new();
+        let match_result = mk("match_1");
+        match_storage.push(match_result.clone(), day(2024, 1, 1));
+
+        assert_eq!(match_storage.get("match_1"), Some(&match_result));
+        assert_eq!(match_storage.get("nonexistent_id"), None);
+    }
+
+    #[test]
+    fn replace_if_present_overwrites_in_place_without_touching_date_index() {
+        let mut s = MatchStorage::new();
+        let mut original = mk("match_1");
+        original.league_id = 1;
+        s.push(original, day(2024, 1, 1));
+
+        // Same id, different payload — mimics the finalized record synced
+        // over the match-day snapshot.
+        let mut finalized = mk("match_1");
+        finalized.league_id = 2;
+        assert!(s.replace_if_present(finalized));
+
+        // Value was overwritten (PartialEq is id-only, so check a field).
+        assert_eq!(s.get("match_1").unwrap().league_id, 2);
+        // No duplicate entry created, and the date index isn't re-appended,
+        // so range aggregation still sees the match exactly once.
+        assert_eq!(s.len(), 1);
+        assert_eq!(s.iter_in_range(day(2024, 1, 1), day(2024, 1, 2)).count(), 1);
+    }
+
+    #[test]
+    fn replace_if_present_is_noop_when_absent() {
+        let mut s = MatchStorage::new();
+        assert!(!s.replace_if_present(mk("never_stored")));
+        assert!(s.is_empty());
+        assert!(s.get("never_stored").is_none());
+    }
+
+    #[test]
+    fn trim_drops_old_matches() {
+        let mut s = MatchStorage::new().with_retention_days(365);
+        s.push(mk("old"), day(2020, 1, 1));
+        s.push(mk("recent"), day(2024, 6, 1));
+        s.trim(day(2024, 12, 31));
+        assert!(s.get("old").is_none());
+        assert!(s.get("recent").is_some());
+    }
+
+    #[test]
+    fn trim_uses_retention_window() {
+        let mut s = MatchStorage::new().with_retention_days(60);
+        s.push(mk("m1"), day(2024, 1, 1)); // 74 days before 2024-03-15
+        s.push(mk("m2"), day(2024, 3, 1)); // 14 days before 2024-03-15
+        s.trim(day(2024, 3, 15));
+        assert!(s.get("m1").is_none());
+        assert!(s.get("m2").is_some());
+    }
+}

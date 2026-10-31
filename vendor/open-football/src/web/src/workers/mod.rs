@@ -1,0 +1,325 @@
+pub mod routes;
+
+use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::views::{self, MenuSection, SubTitleFlag};
+use crate::worker::{WorkerSnapshot, WorkerStatus};
+use crate::{ApiResult, GameAppData, I18n};
+use askama::Template;
+use axum::Json;
+use axum::extract::{Path, State};
+use axum::response::IntoResponse;
+use core::MatchRuntime;
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize)]
+pub struct WorkersPageRequest {
+    pub lang: String,
+}
+
+#[derive(Template, askama_web::WebTemplate)]
+#[template(path = "workers/index.html")]
+pub struct WorkersPageTemplate {
+    pub css_version: &'static str,
+    pub computer_name: &'static str,
+    pub cpu_brand: &'static str,
+    pub cores_count: usize,
+    pub i18n: I18n,
+    pub lang: String,
+    pub title: String,
+    pub sub_title_prefix: String,
+    pub sub_title_suffix: String,
+    pub sub_title: String,
+    pub sub_title_link: String,
+    pub sub_title_flag: Option<SubTitleFlag>,
+    pub header_color: String,
+    pub foreground_color: String,
+    pub menu_sections: Vec<MenuSection>,
+
+    pub total: usize,
+    pub ready: usize,
+    pub total_threads: usize,
+    pub total_batches: u64,
+    pub total_matches: u64,
+    pub total_failures: u64,
+
+    pub workers: Vec<WorkerRowDto>,
+}
+
+/// Render-friendly per-worker row. Mirrors `WorkerSnapshot` with the
+/// status flattened into a label + detail pair the template can drop
+/// into a chip without further branching.
+pub struct WorkerRowDto {
+    pub address: String,
+    pub computer_name: String,
+    pub cpu_brand: String,
+    pub threads: usize,
+    pub version: String,
+    pub status_label: &'static str,
+    pub status_detail: String,
+    pub batches_sent: u64,
+    pub matches_completed: u64,
+    pub failures: u64,
+    pub last_latency_ms: Option<u64>,
+    /// Pretty-printed matches-per-second EWMA from the registry,
+    /// formatted with one decimal place. `None` until the worker has
+    /// completed at least one batch — the dispatcher seeds it from
+    /// thread count for that first dispatch.
+    pub throughput_mps: Option<String>,
+    pub last_error: Option<String>,
+}
+
+impl WorkerRowDto {
+    fn from_snapshot(w: WorkerSnapshot) -> Self {
+        let throughput_mps = w.throughput_mps().map(|v| format!("{:.1}", v));
+        let (status_label, status_detail) = match &w.status {
+            WorkerStatus::Connecting => ("connecting", String::new()),
+            WorkerStatus::Ready => ("ready", String::new()),
+            WorkerStatus::VersionMismatch { worker_version } => {
+                ("version_mismatch", worker_version.clone())
+            }
+            WorkerStatus::Unreachable { reason } => ("unreachable", reason.clone()),
+        };
+        WorkerRowDto {
+            address: w.address,
+            computer_name: w.computer_name,
+            cpu_brand: w.cpu_brand,
+            threads: w.threads,
+            version: w.version,
+            status_label,
+            status_detail,
+            batches_sent: w.stats.batches_sent,
+            matches_completed: w.stats.matches_completed,
+            failures: w.stats.failures,
+            last_latency_ms: w.stats.last_latency_ms,
+            throughput_mps,
+            last_error: w.stats.last_error,
+        }
+    }
+
+    /// Synthetic row for the coordinator's own in-process rayon pool —
+    /// the dispatcher's virtual `Local` slot. Always rendered first so
+    /// the operator can see the local machine's capacity alongside
+    /// remote workers. Per-batch counters (batches/matches/failures
+    /// /last_latency) aren't tracked for the local slot, only its
+    /// EWMA throughput is.
+    fn local_row(throughput_mps: Option<String>) -> Self {
+        WorkerRowDto {
+            address: "in-process".to_string(),
+            computer_name: COMPUTER_NAME.clone(),
+            cpu_brand: CPU_BRAND.clone(),
+            threads: MatchRuntime::engine_pool().num_threads(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            status_label: "local",
+            status_detail: String::new(),
+            batches_sent: 0,
+            matches_completed: 0,
+            failures: 0,
+            last_latency_ms: None,
+            throughput_mps,
+            last_error: None,
+        }
+    }
+}
+
+pub async fn workers_page_action(
+    State(state): State<GameAppData>,
+    Path(route_params): Path<WorkersPageRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let i18n = state.i18n.for_lang(&route_params.lang);
+    let current_path = format!("/{}/workers", route_params.lang);
+    let menu_sections = views::search_menu(&i18n, &route_params.lang, &current_path);
+
+    let snapshot = state.workers.snapshot().await;
+    let local_throughput_mpms = state.workers.local_throughput().await;
+
+    let total = snapshot.len();
+    let mut ready = 0usize;
+    let mut total_threads = 0usize;
+    let mut total_batches = 0u64;
+    let mut total_matches = 0u64;
+    let mut total_failures = 0u64;
+    for w in &snapshot {
+        if matches!(w.status, WorkerStatus::Ready) {
+            ready += 1;
+        }
+        total_threads += w.threads;
+        total_batches = total_batches.saturating_add(w.stats.batches_sent);
+        total_matches = total_matches.saturating_add(w.stats.matches_completed);
+        total_failures = total_failures.saturating_add(w.stats.failures);
+    }
+
+    let local_throughput_mps = local_throughput_mpms.map(|m| format!("{:.1}", m * 1000.0));
+    let local_row = WorkerRowDto::local_row(local_throughput_mps);
+    total_threads += local_row.threads;
+
+    let mut workers: Vec<WorkerRowDto> = Vec::with_capacity(snapshot.len() + 1);
+    workers.push(local_row);
+    workers.extend(snapshot.into_iter().map(WorkerRowDto::from_snapshot));
+
+    Ok(WorkersPageTemplate {
+        css_version: CSS_VERSION,
+        computer_name: &COMPUTER_NAME,
+        cpu_brand: &CPU_BRAND,
+        cores_count: *CPU_CORES,
+        i18n,
+        lang: route_params.lang.clone(),
+        title: "Workers".to_string(),
+        sub_title_prefix: String::new(),
+        sub_title_suffix: String::new(),
+        sub_title: String::new(),
+        sub_title_link: String::new(),
+        sub_title_flag: None,
+        header_color: String::new(),
+        foreground_color: String::new(),
+        menu_sections,
+        total,
+        ready,
+        total_threads,
+        total_batches,
+        total_matches,
+        total_failures,
+        workers,
+    })
+}
+
+/// Body of the "add worker" dialog POST. `port` defaults to the worker's
+/// standard listen port (18001) when the dialog leaves it untouched, but
+/// it's always sent explicitly by the form.
+#[derive(Deserialize)]
+pub struct AddWorkerRequest {
+    pub host: String,
+    pub port: u16,
+}
+
+/// Dial the worker the operator typed into the dialog, run the
+/// version-checked handshake, register it, and hand the outcome back as
+/// JSON so the dialog can show "connected — vX, N threads" or the
+/// failure reason without a page reload.
+pub async fn workers_add_action(
+    State(state): State<GameAppData>,
+    Json(body): Json<AddWorkerRequest>,
+) -> impl IntoResponse {
+    let address = format!("{}:{}", body.host.trim(), body.port);
+    Json(state.workers.add_worker(address).await)
+}
+
+/// Live status payload polled by the workers page. Mirrors the figures the
+/// page renders server-side so the table — status badges, "last seen",
+/// per-worker counters and the summary tiles — refreshes in place as the
+/// health monitor pings, fences, and reconnects workers, without a full
+/// page reload. New/removed rows still require a reload (workers are only
+/// added by the operator, which reloads anyway).
+#[derive(Serialize)]
+pub struct WorkersStatusDto {
+    pub ready: usize,
+    pub total: usize,
+    pub total_threads: usize,
+    pub total_batches: u64,
+    pub total_matches: u64,
+    pub total_failures: u64,
+    pub workers: Vec<WorkerStatusDto>,
+}
+
+#[derive(Serialize)]
+pub struct WorkerStatusDto {
+    pub address: String,
+    pub status_label: &'static str,
+    pub status_detail: String,
+    pub last_seen_secs: Option<u64>,
+    pub threads: usize,
+    pub version: String,
+    pub batches_sent: u64,
+    pub matches_completed: u64,
+    pub failures: u64,
+    pub last_latency_ms: Option<u64>,
+    pub throughput_mps: Option<String>,
+    pub last_error: Option<String>,
+}
+
+impl WorkersStatusDto {
+    fn from_snapshot(snapshot: Vec<WorkerSnapshot>) -> Self {
+        // Match the page's summary: ready/total count only remote workers,
+        // total_threads adds the local in-process pool on top.
+        let total = snapshot.len();
+        let mut ready = 0usize;
+        let mut total_threads = MatchRuntime::engine_pool().num_threads();
+        let mut total_batches = 0u64;
+        let mut total_matches = 0u64;
+        let mut total_failures = 0u64;
+        let mut workers = Vec::with_capacity(total);
+        for w in snapshot {
+            if matches!(w.status, WorkerStatus::Ready) {
+                ready += 1;
+            }
+            total_threads += w.threads;
+            total_batches = total_batches.saturating_add(w.stats.batches_sent);
+            total_matches = total_matches.saturating_add(w.stats.matches_completed);
+            total_failures = total_failures.saturating_add(w.stats.failures);
+            workers.push(WorkerStatusDto::from_snapshot(w));
+        }
+        WorkersStatusDto {
+            ready,
+            total,
+            total_threads,
+            total_batches,
+            total_matches,
+            total_failures,
+            workers,
+        }
+    }
+}
+
+impl WorkerStatusDto {
+    fn from_snapshot(w: WorkerSnapshot) -> Self {
+        let throughput_mps = w.throughput_mps().map(|v| format!("{:.1}", v));
+        let status_detail = match &w.status {
+            WorkerStatus::VersionMismatch { worker_version } => worker_version.clone(),
+            WorkerStatus::Unreachable { reason } => reason.clone(),
+            _ => String::new(),
+        };
+        WorkerStatusDto {
+            status_label: w.status.label(),
+            status_detail,
+            last_seen_secs: w.last_seen_secs,
+            address: w.address,
+            threads: w.threads,
+            version: w.version,
+            batches_sent: w.stats.batches_sent,
+            matches_completed: w.stats.matches_completed,
+            failures: w.stats.failures,
+            last_latency_ms: w.stats.last_latency_ms,
+            throughput_mps,
+            last_error: w.stats.last_error,
+        }
+    }
+}
+
+/// JSON snapshot of every worker's live status, polled by the workers page.
+pub async fn workers_status_action(State(state): State<GameAppData>) -> impl IntoResponse {
+    let snapshot = state.workers.snapshot().await;
+    Json(WorkersStatusDto::from_snapshot(snapshot))
+}
+
+/// Body of the "remove worker" button POST — the address of the worker
+/// row the operator clicked.
+#[derive(Deserialize)]
+pub struct RemoveWorkerRequest {
+    pub address: String,
+}
+
+/// Outcome of a remove request: `removed` is `false` when no worker with
+/// that address was registered (e.g. a double-click after a reload).
+#[derive(Serialize)]
+pub struct RemoveWorkerResponse {
+    pub removed: bool,
+}
+
+/// Drop a worker from the registry by address. The local in-process slot
+/// has no registry entry, so it can never be removed this way.
+pub async fn workers_remove_action(
+    State(state): State<GameAppData>,
+    Json(body): Json<RemoveWorkerRequest>,
+) -> impl IntoResponse {
+    let removed = state.workers.remove_worker(body.address.trim()).await;
+    Json(RemoveWorkerResponse { removed })
+}

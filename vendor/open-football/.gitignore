@@ -1,0 +1,31 @@
+/target
+**/*.rs.bk
+styles.min.css
+
+# Built by src/web/build.rs from src/match, same as styles.min.css above.
+src/web/assets/static/viewer/*
+!src/web/assets/static/viewer/match_viewer_bg.wasm
+!src/web/assets/static/viewer/match_viewer_bg.wasm.gz
+!src/web/assets/static/viewer/match_viewer.js
+!src/web/assets/static/viewer/match_viewer.js.gz
+
+**/target
+
+.idea/
+.qwen/
+.agents/
+.claude/
+
+match_results
+publish
+
+artifacts
+
+dist
+docs
+
+# macOS finder metadata
+.DS_Store
+**/.DS_Store
+
+openspec/changes/

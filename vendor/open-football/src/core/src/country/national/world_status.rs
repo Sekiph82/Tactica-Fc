@@ -1,0 +1,238 @@
+//! World-wide passes that toggle `PlayerStatusType::Int` across every
+//! club in every continent based on the current squads. Foreign-based
+//! call-ups (a Brazilian playing in Spain, …) only get the right flag
+//! when this scans every continent's clubs — the per-country call-up
+//! can't reach them without breaking borrows.
+
+use super::NationalTeam;
+use crate::club::player::mind::{ActorRef, EpisodeKind};
+use crate::continent::Continent;
+use crate::{
+    HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
+    HappinessEventType, NationalTeamEventContext, NationalTeamEventKind, PlayerStatusType,
+};
+use chrono::NaiveDate;
+use rayon::iter::ParallelIterator;
+use rayon::prelude::IntoParallelRefMutIterator;
+use std::collections::HashSet;
+
+impl NationalTeam {
+    /// Apply / release `PlayerStatusType::Int` across every club in
+    /// every continent, based on each country's current squad.
+    ///
+    /// Fires happiness events on transitions: a fresh call-up is a big
+    /// moment for a young pro; being dropped after a run of caps hurts
+    /// pride. Keeping events here (not in the per-country call-up)
+    /// means each player only sees one event per cycle even if their
+    /// nation has already been processed before their club's continent.
+    pub(crate) fn apply_callup_statuses_across_world(
+        continents: &mut [Continent],
+        date: NaiveDate,
+    ) {
+        let mut called_up: HashSet<u32> = HashSet::new();
+        for continent in continents.iter() {
+            for country in continent.countries.iter() {
+                for sp in &country.national_team.squad {
+                    called_up.insert(sp.player_id);
+                }
+            }
+        }
+
+        continents
+            .par_iter_mut()
+            .flat_map(|continent| continent.countries.par_iter_mut())
+            .for_each(|country| {
+                for club in country.clubs.iter_mut() {
+                    let club_id = club.id;
+                    for team in club.teams.iter_mut() {
+                        for player in team.players.iter_mut() {
+                            let is_called_up = called_up.contains(&player.id);
+                            let was_in = player.statuses.has(PlayerStatusType::Int);
+
+                            if is_called_up {
+                                player.statuses.add(date, PlayerStatusType::Int);
+                                if !was_in {
+                                    let caps = player.player_attributes.international_apps;
+                                    let mag = if caps == 0 {
+                                        10.0
+                                    } else if caps < 10 {
+                                        6.0
+                                    } else {
+                                        3.0
+                                    };
+                                    let kind = if caps == 0 {
+                                        NationalTeamEventKind::FirstCallup
+                                    } else {
+                                        NationalTeamEventKind::Recall
+                                    };
+                                    let nctx = NationalTeamEventContext::new(kind)
+                                        .with_previous_caps(caps);
+                                    let happiness_ctx = HappinessEventContext::new(
+                                        HappinessEventCause::Other,
+                                        HappinessEventSeverity::from_magnitude(mag),
+                                        HappinessEventScope::Personal,
+                                    )
+                                    .with_national_team_context(nctx);
+                                    player.happiness.add_event_with_context(
+                                        HappinessEventType::NationalTeamCallup,
+                                        mag,
+                                        None,
+                                        happiness_ctx,
+                                    );
+                                    // A first cap is a flashbulb night in
+                                    // anybody's career; a recall after
+                                    // months out is a lesser but real one.
+                                    // Filed with no actor -- the country
+                                    // picked him, and the country is not
+                                    // somebody he has a standing account
+                                    // with.
+                                    let mctx = player.mind_context(date, Some(club_id));
+                                    player.mind.remember(
+                                        if caps == 0 {
+                                            EpisodeKind::FirstCap
+                                        } else {
+                                            EpisodeKind::MajorTournamentSquad
+                                        },
+                                        ActorRef::NONE,
+                                        &mctx,
+                                    );
+                                }
+                            } else if was_in {
+                                player.statuses.remove(PlayerStatusType::Int);
+                                let caps = player.player_attributes.international_apps;
+                                let mag = if caps >= 20 {
+                                    -6.0
+                                } else if caps >= 5 {
+                                    -4.0
+                                } else {
+                                    -2.0
+                                };
+                                let nctx = NationalTeamEventContext::new(
+                                    NationalTeamEventKind::DroppedDueToCompetition,
+                                )
+                                .with_previous_caps(caps);
+                                let happiness_ctx = HappinessEventContext::new(
+                                    HappinessEventCause::Other,
+                                    HappinessEventSeverity::from_magnitude(mag),
+                                    HappinessEventScope::Personal,
+                                )
+                                .with_national_team_context(nctx);
+                                player.happiness.add_event_with_context(
+                                    HappinessEventType::NationalTeamDropped,
+                                    mag,
+                                    None,
+                                    happiness_ctx,
+                                );
+                                // Losing an international place is a
+                                // thing a player carries into every club
+                                // decision he makes for the next year.
+                                if caps >= 5 {
+                                    let mctx = player.mind_context(date, Some(club_id));
+                                    player.mind.remember(
+                                        EpisodeKind::NationalSnub,
+                                        ActorRef::NONE,
+                                        &mctx,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+    }
+
+    /// Apply / release `PlayerStatusType::IntU21` across every club based
+    /// on each country's current U21 squad. Mirrors the senior pass but
+    /// toggles only the U21 status, so it never disturbs a senior `Int`
+    /// flag — important because senior and U21 windows overlap. Happiness
+    /// events are intentionally omitted for the first pass (the senior
+    /// pass owns the national-team morale events).
+    pub(crate) fn apply_u21_callup_statuses_across_world(
+        continents: &mut [Continent],
+        date: NaiveDate,
+    ) {
+        let mut called_up: HashSet<u32> = HashSet::new();
+        for continent in continents.iter() {
+            for country in continent.countries.iter() {
+                for sp in &country.u21_national_team.squad {
+                    called_up.insert(sp.player_id);
+                }
+            }
+        }
+
+        continents
+            .par_iter_mut()
+            .flat_map(|continent| continent.countries.par_iter_mut())
+            .for_each(|country| {
+                for club in country.clubs.iter_mut() {
+                    for team in club.teams.iter_mut() {
+                        for player in team.players.iter_mut() {
+                            let is_called_up = called_up.contains(&player.id);
+                            let was_in = player.statuses.has(PlayerStatusType::IntU21);
+                            if is_called_up && !was_in {
+                                player.statuses.add(date, PlayerStatusType::IntU21);
+                            } else if !is_called_up && was_in {
+                                player.statuses.remove(PlayerStatusType::IntU21);
+                            }
+                        }
+                    }
+                }
+            });
+    }
+
+    /// World-wide release of `PlayerStatusType::IntU21` for U21-selected
+    /// players. Removes only the U21 status — a player who is also a
+    /// senior international keeps their `Int` flag untouched.
+    pub(crate) fn release_u21_callup_statuses_across_world(continents: &mut [Continent]) {
+        let mut released_ids: HashSet<u32> = HashSet::new();
+        for continent in continents.iter() {
+            for country in continent.countries.iter() {
+                for sp in &country.u21_national_team.squad {
+                    released_ids.insert(sp.player_id);
+                }
+            }
+        }
+
+        continents
+            .par_iter_mut()
+            .flat_map(|continent| continent.countries.par_iter_mut())
+            .for_each(|country| {
+                for club in country.clubs.iter_mut() {
+                    for team in club.teams.iter_mut() {
+                        for player in team.players.iter_mut() {
+                            if released_ids.contains(&player.id) {
+                                player.statuses.remove(PlayerStatusType::IntU21);
+                            }
+                        }
+                    }
+                }
+            });
+    }
+
+    /// World-wide variant of `release_callup_statuses_across_continent`.
+    pub(crate) fn release_callup_statuses_across_world(continents: &mut [Continent]) {
+        let mut released_ids: HashSet<u32> = HashSet::new();
+        for continent in continents.iter() {
+            for country in continent.countries.iter() {
+                for sp in &country.national_team.squad {
+                    released_ids.insert(sp.player_id);
+                }
+            }
+        }
+
+        continents
+            .par_iter_mut()
+            .flat_map(|continent| continent.countries.par_iter_mut())
+            .for_each(|country| {
+                for club in country.clubs.iter_mut() {
+                    for team in club.teams.iter_mut() {
+                        for player in team.players.iter_mut() {
+                            if released_ids.contains(&player.id) {
+                                player.statuses.remove(PlayerStatusType::Int);
+                            }
+                        }
+                    }
+                }
+            });
+    }
+}

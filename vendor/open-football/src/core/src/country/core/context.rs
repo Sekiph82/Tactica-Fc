@@ -1,0 +1,96 @@
+use crate::PeopleNameGeneratorData;
+use crate::country::SeasonDates;
+use std::sync::Arc;
+
+#[derive(Clone)]
+pub struct CountryContext {
+    pub id: u32,
+    pub code: String,
+    /// Shared read-only name pools. Held behind `Arc` because a
+    /// `GlobalContext` is cloned at every scope refinement (per club,
+    /// team, and player); a by-value `PeopleNameGeneratorData` deep-cloned
+    /// its `Vec<String>` catalogues on each of those, dominating the tick.
+    /// The `Arc` makes every refinement an O(1) refcount bump.
+    pub people_names: Option<Arc<PeopleNameGeneratorData>>,
+    pub season_dates: SeasonDates,
+    pub tv_revenue_multiplier: f32,
+    pub sponsorship_market_strength: f32,
+    pub stadium_attendance_factor: f32,
+    /// Country-level price multiplier for transfers and budgets (from country data).
+    /// England 1.5, Spain 1.2, Colombia 0.4, etc. Default 1.0.
+    pub price_level: f32,
+    /// Country football-ecosystem strength (0..10000). Drives, among other
+    /// things, how realistic the academy generator is allowed to be when
+    /// minting elite prospects: a Brazilian academy of the same physical
+    /// quality as a Cambodian one should produce stronger youth on average.
+    pub reputation: u16,
+    /// Months until the next major tournament this country is heading
+    /// toward. `u8::MAX` for none in view. Stamped by the continent tick
+    /// from the national-competition cycle arithmetic, and read by the
+    /// player mind — the tournament calendar is the only clock in
+    /// football that dates a player's *club* situation from outside the
+    /// club.
+    pub months_to_tournament: u8,
+    /// Days until the next registration window opens here — 0 while one
+    /// is open. `u16::MAX` when no calendar resolves, which reads as "no
+    /// window in view" rather than "one opens today". The deadline a man
+    /// who means to go somewhere actually lives against.
+    pub days_to_next_window: u16,
+}
+
+impl CountryContext {
+    pub fn new(id: u32) -> Self {
+        CountryContext {
+            id,
+            code: String::new(),
+            people_names: None,
+            season_dates: SeasonDates::default(),
+            tv_revenue_multiplier: 1.0,
+            sponsorship_market_strength: 1.0,
+            stadium_attendance_factor: 1.0,
+            price_level: 1.0,
+            reputation: 0,
+            months_to_tournament: u8::MAX,
+            days_to_next_window: u16::MAX,
+        }
+    }
+
+    pub fn with_people_names(id: u32, people_names: Arc<PeopleNameGeneratorData>) -> Self {
+        CountryContext {
+            id,
+            code: String::new(),
+            people_names: Some(people_names),
+            season_dates: SeasonDates::default(),
+            tv_revenue_multiplier: 1.0,
+            sponsorship_market_strength: 1.0,
+            stadium_attendance_factor: 1.0,
+            price_level: 1.0,
+            reputation: 0,
+            months_to_tournament: u8::MAX,
+            days_to_next_window: u16::MAX,
+        }
+    }
+
+    /// Stamp the days to the next registration window, worked out from
+    /// the country's own calendar.
+    pub fn with_window_clock(mut self, days: u16) -> Self {
+        self.days_to_next_window = days;
+        self
+    }
+
+    /// Stamp the tournament clock the continent worked out this tick.
+    pub fn with_tournament_clock(mut self, months: u8) -> Self {
+        self.months_to_tournament = months;
+        self
+    }
+
+    pub fn with_code(mut self, code: String) -> Self {
+        self.code = code;
+        self
+    }
+
+    pub fn with_season_dates(mut self, season_dates: SeasonDates) -> Self {
+        self.season_dates = season_dates;
+        self
+    }
+}

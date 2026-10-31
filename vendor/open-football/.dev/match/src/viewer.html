@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Dev Match Viewer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0e1419; color: #c8d6e0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.header { text-align: center; padding: 16px 0 12px; }
+.score { font-size: 26px; font-weight: 700; letter-spacing: 2px; }
+.score .sep { color: #3a4f5c; margin: 0 12px; }
+.team-home { color: #6ba3d6; }
+.team-away { color: #d6836b; }
+.levels { font-size: 12px; color: #5d7180; margin-top: 6px; letter-spacing: 1px; }
+.stage-wrap { padding: 0 20px 20px; max-width: 1500px; margin: 0 auto; }
+/* The viewer canvas sizes itself to this box, so the box is what pins the
+   aspect ratio. The placeholder sits behind the canvas and is painted over
+   once the first frame lands — no script has to clear it. */
+.stage { position: relative; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 6px; background: #080c12; }
+.stage-placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 13px; color: #7a8c98; text-align: center; padding: 0 24px; }
+#match-canvas { position: relative; display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
+.hint { text-align: center; font-size: 11px; color: #4a5a66; padding-bottom: 18px; letter-spacing: 0.4px; }
+</style>
+</head>
+<body>
+<div class="header">
+    <div class="score">
+        <span class="team-home">__HOME_NAME__</span>
+        <span>__HOME_GOALS__</span>
+        <span class="sep">-</span>
+        <span>__AWAY_GOALS__</span>
+        <span class="team-away">__AWAY_NAME__</span>
+    </div>
+    <div class="levels">__SUBTITLE__</div>
+</div>
+<div class="stage-wrap">
+    <div class="stage">
+        <div class="stage-placeholder" id="placeholder">__PLACEHOLDER__</div>
+        <canvas id="match-canvas"></canvas>
+    </div>
+</div>
+<div class="hint">space toggles playback &middot; drag the bar to scrub &middot; WASD / arrows fly the camera, Q and E drop and lift it, shift for speed &middot; right-drag aims &middot; wheel zooms &middot; "Reset view" puts the shot back &middot; engine events go to the browser console</div>
+
+<script type="module">
+    // Rendering, playback and the debug overlays all live in the WebAssembly
+    // viewer built from src/match; this hands it the canvas and the fixture.
+    import init, { MatchViewer } from "/static/viewer/match_viewer.js";
+
+    // The match page's diagnostic overrides, validated the same way, so the
+    // measuring recipe in `src/match/src/app/perf.rs` can ask this harness for
+    // `?squad=off` or `?grain=spare` exactly as it would ask the game.
+    const config = __CONFIG__;
+    const asked = new URLSearchParams(location.search);
+    if (["full", "spare", "far"].includes(asked.get("grain"))) {
+        config.grain = asked.get("grain");
+    }
+    if (["handheld", "roomy"].includes(asked.get("device"))) {
+        config.device = asked.get("device");
+    }
+    if (["off", "handheld", "full"].includes(asked.get("crowd"))) {
+        config.crowd = asked.get("crowd");
+    }
+    if (asked.get("squad") === "off") {
+        config.squad = "off";
+    }
+    const megapixels = asked.has("stage") ? Number(asked.get("stage")) : NaN;
+    if (megapixels > 0 && megapixels <= 32) {
+        config.stage = megapixels;
+    }
+
+    init({ module_or_path: "/static/viewer/match_viewer_bg.wasm" })
+        .then(() => MatchViewer.start(JSON.stringify(config)))
+        .catch((error) => {
+            console.error("match viewer failed to start", error);
+            document.getElementById("placeholder").textContent = "viewer failed to start: " + error;
+        });
+</script>
+</body>
+</html>

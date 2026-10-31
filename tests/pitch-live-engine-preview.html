@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tactica FC · Live engine pitch preview</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import React, { useMemo, useState } from 'react';
+      import { createRoot } from 'react-dom/client';
+      import { ageOn } from '../src/game/dates';
+      import { caFromValue, makePlayer } from '../src/game/data/generate';
+      import { MatchSim } from '../src/game/engine/match';
+      import { Rng } from '../src/game/rng';
+      import { autoSelect, newTactic } from '../src/game/tactics';
+      import { Pitch2D } from '../src/ui/Pitch2D';
+      import '../src/styles.css';
+
+      const world = await fetch(`${import.meta.env.BASE_URL}data/world.json`).then((response) => {
+        if (!response.ok) throw new Error(`world.json returned ${response.status}`);
+        return response.json();
+      });
+      const matchDate = '2025-08-01';
+      const clubIds = world.clubs.filter((row) => row[4] === 'GB1').map((row) => row[0]);
+      const squads = new Map();
+      for (const row of world.players) {
+        if (!clubIds.includes(row[5])) continue;
+        const player = makePlayer({
+          id: row[0], first: row[1], last: row[2], dob: row[3], nation: row[4], club: row[5], sub: row[6], foot: row[7], height: row[8],
+          ca: caFromValue(row[9], ageOn(row[3], matchDate)), value: row[9], date: matchDate, seed: 1,
+        });
+        if (!squads.has(player.club)) squads.set(player.club, []);
+        squads.get(player.club).push(player);
+      }
+      const makeTeam = (club, longPassing = false) => {
+        const players = squads.get(club) ?? [];
+        const tactic = autoSelect(newTactic('4-4-2'), players);
+        if (longPassing) tactic.team = { ...tactic.team, passing: 2 };
+        return { club, tactic, players: new Map(players.map((player) => [player.id, player])) };
+      };
+      const actionLabels = {
+        pass: 'Short pass', throughBall: 'Through ball', longBall: 'Long ball', cross: 'Cross',
+        shot: 'Shot', tackle: 'Tackle', keeper: 'Goalkeeper', rebound: 'Rebound', deflection: 'Deflection', looseBall: 'Loose ball',
+      };
+      const qaWeather = 'rain';
+      function collectRealMatchActions() {
+        const wanted = new Set(['pass', 'throughBall', 'longBall', 'cross', 'shot', 'tackle']);
+        for (let seed = 1; seed <= 48; seed++) {
+          const sim = new MatchSim(makeTeam(clubIds[0], true), makeTeam(clubIds[1]), { commentary: false, recordVisualEvents: true, weather: qaWeather }, new Rng(seed));
+          const selected = new Map();
+          let seen = 0;
+          while (sim.step()) {
+            const snap = sim.pitch();
+            for (const action of sim.visualTimeline.slice(seen)) {
+              if (wanted.has(action.kind) && !selected.has(action.kind)) selected.set(action.kind, { action, snap });
+            }
+            seen = sim.visualTimeline.length;
+            if ([...wanted].every((kind) => selected.has(kind))) {
+              return { seed, home: clubIds[0], away: clubIds[1], actions: selected };
+            }
+          }
+        }
+        throw new Error('Could not find a deterministic sample containing every requested action in 48 seeds.');
+      }
+
+      function LiveEnginePreview() {
+        const match = useMemo(() => collectRealMatchActions(), []);
+        const choices = [...match.actions.entries()];
+        const [kind, setKind] = useState(choices[0]?.[0]);
+        const selected = match.actions.get(kind);
+        const clubName = (id) => world.clubs.find((row) => row[0] === id)?.[1] ?? `Club ${id}`;
+        return React.createElement('main', { className: 'live-engine-preview' },
+          React.createElement('header', null,
+            React.createElement('h1', null, 'TACTICA FC · Real match engine action preview'),
+            React.createElement('p', null, `No career is started or saved. Samples below come from MatchSim, seed ${match.seed}: ${clubName(match.home)} vs ${clubName(match.away)} · ${qaWeather} weather.`)),
+          React.createElement('nav', { className: 'live-engine-controls' }, ...choices.map(([key, sample]) =>
+            React.createElement('button', { key, className: kind === key ? 'primary' : '', onClick: () => setKind(key) }, actionLabels[key] ?? key,
+              ` · ${sample.action.minute}' ${sample.action.outcome}`))),
+          selected && React.createElement('section', null,
+            React.createElement('p', { className: 'live-engine-meta' }, `${actionLabels[kind]} · ${selected.action.minute}' · ${selected.action.outcome} · actor #${selected.action.actor}${selected.action.target ? ` → #${selected.action.target}` : ''}`),
+            React.createElement('div', { className: 'match-stage live-engine-stage' },
+              React.createElement(Pitch2D, {
+                snap: selected.snap, action: selected.action, me: 0, colors: ['#f5f5f5', '#171717', '#17315a', '#ed3348'],
+                weather: qaWeather,
+                minute: `${String(selected.action.minute).padStart(2, '0')}:00`, banner: `${actionLabels[kind]} · ${selected.action.outcome}`,
+                bannerCls: selected.action.outcome === 'goal' ? 'goal' : '', stepMs: 520,
+              }))),
+        );
+      }
+
+      createRoot(document.getElementById('root')).render(React.createElement(LiveEnginePreview));
+    </script>
+    <style>
+      body { margin: 0; min-height: 100vh; background: #06111d; color: #edf4f7; font: 15px system-ui, sans-serif; }
+      .live-engine-preview { max-width: 1440px; margin: 0 auto; padding: 18px; }
+      .live-engine-preview h1 { margin: 0 0 5px; font-size: 22px; }
+      .live-engine-preview p { margin: 0 0 12px; color: #a8bbc6; }
+      .live-engine-controls { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 12px; }
+      .live-engine-controls button { white-space: nowrap; }
+      .live-engine-meta { font-weight: 700; }
+      .live-engine-stage { width: 100%; aspect-ratio: 2.6 / 1; min-height: 300px; }
+      @media (max-width: 700px) { .live-engine-preview { padding: 8px; } .live-engine-stage { aspect-ratio: 1.65 / 1; min-height: 280px; } }
+    </style>
+  </body>
+</html>

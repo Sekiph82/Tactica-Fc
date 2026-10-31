@@ -1,0 +1,736 @@
+//! **The match lifecycle** — the `play()` entry points and the config
+//! they build, plus `play_inner`, the per-state loop that runs the ticks
+//! for one `MatchState` and hands back its stoppage time.
+
+use crate::r#match::CompetitionKind;
+use crate::r#match::engine::context::MatchEngineConfig;
+use crate::r#match::engine::engine::phase_prof::PhaseProf;
+#[cfg(feature = "match-stub")]
+use crate::r#match::engine::engine::run::stub::StubMatch;
+use crate::r#match::engine::engine::*;
+use crate::r#match::engine::result::{DeadTime, PeriodKind, PlayingTime};
+use crate::r#match::engine::teamplay::standard::MatchStandard;
+
+impl<const W: usize, const H: usize> FootballEngine<W, H> {
+    pub fn new() -> Self {
+        FootballEngine {}
+    }
+
+    #[allow(unreachable_code)]
+    pub fn play(
+        left_squad: MatchSquad,
+        right_squad: MatchSquad,
+        match_recordings: bool,
+        is_friendly: bool,
+        is_knockout: bool,
+    ) -> MatchResultRaw {
+        let config = MatchEngineConfig {
+            match_recordings,
+            competition: Self::competition_of(is_friendly),
+            is_knockout,
+            ..Default::default()
+        };
+        Self::play_with_config(left_squad, right_squad, config)
+    }
+
+    /// Seeded entry point. Compatibility wrapper around
+    /// `play_with_config`. `seed = Some(_)` pins the engine's owned
+    /// RNG (substitution timing, penalty shootout, foul card rolls,
+    /// corner aerial contest, every converted player decision).
+    /// `None` falls back to OS entropy, matching legacy behaviour.
+    #[allow(unreachable_code)]
+    pub fn play_seeded(
+        left_squad: MatchSquad,
+        right_squad: MatchSquad,
+        match_recordings: bool,
+        is_friendly: bool,
+        is_knockout: bool,
+        seed: Option<u64>,
+    ) -> MatchResultRaw {
+        let config = MatchEngineConfig {
+            seed,
+            match_recordings,
+            competition: Self::competition_of(is_friendly),
+            is_knockout,
+            ..Default::default()
+        };
+        Self::play_with_config(left_squad, right_squad, config)
+    }
+
+    /// The competition the flag-only entry points stand for: a friendly,
+    /// or an ordinary league match.
+    fn competition_of(is_friendly: bool) -> CompetitionKind {
+        if is_friendly {
+            CompetitionKind::Friendly
+        } else {
+            CompetitionKind::League
+        }
+    }
+
+    /// Full-config entry point. Lets the caller inject seed, fixture
+    /// date, environment (weather/pitch/crowd/importance/derby),
+    /// referee profile, friendly/knockout flags, and the
+    /// match_recordings switch in one place — instead of patching the
+    /// context after construction. Required by the calibration harness
+    /// to run a real rainy match or a strict-referee fixture, and by
+    /// any replay test that needs exact-seed control over today's
+    /// date.
+    #[allow(unreachable_code)]
+    pub fn play_with_config(
+        mut left_squad: MatchSquad,
+        mut right_squad: MatchSquad,
+        config: MatchEngineConfig,
+    ) -> MatchResultRaw {
+        // Skip the simulation and draw the result from the squads — see
+        // the `match-stub` feature in `core/Cargo.toml`.
+        #[cfg(feature = "match-stub")]
+        {
+            return Self::play_stub(left_squad, right_squad, &config);
+        }
+
+        PhaseProf::init_from_env();
+        let score = Score::new(left_squad.team_id, right_squad.team_id);
+
+        // Snapshot starting tactics by team-id BEFORE the squads move
+        // into `MatchField::new`. The first half always has the home
+        // team on the left side, so left == home / right == away here.
+        let starting_home_tactic = Some(left_squad.tactics.tactic_type);
+        let starting_away_tactic = Some(right_squad.tactics.tactic_type);
+
+        let standard = MatchStandard::measure(&mut left_squad, &mut right_squad);
+        let players = MatchPlayerCollection::from_squads(&left_squad, &right_squad);
+
+        let mut match_position_data = if !config.match_recordings {
+            ResultMatchPositionData::empty()
+        } else if MatchRuntime::events_mode() {
+            ResultMatchPositionData::new_with_tracking().with_scope(MatchRuntime::recording_scope())
+        } else {
+            ResultMatchPositionData::new().with_scope(MatchRuntime::recording_scope())
+        };
+
+        let mut field = MatchField::new(W, H, left_squad, right_squad);
+
+        let mut context = MatchContext::new_with_config(&field, players, score, &config);
+        // Stash the starting tactics inside the context's match plan so
+        // `build_result` can read them — no extra parameters threaded
+        // through the state machine.
+        context.starting_home_tactic = starting_home_tactic;
+        context.starting_away_tactic = starting_away_tactic;
+        context.standard = Some(standard);
+        for p in &field.players {
+            context.seed_psychology(p);
+        }
+
+        // Seed the chemistry map from the kickoff XI of each side.
+        // Pair scores stay constant for the match — live events could
+        // adjust them, but the initial baseline is what feeds the pass
+        // evaluator's one-touch bonus from the first whistle.
+        let chemistry_roster: Vec<(u32, u32, PlayerFieldPositionGroup, f32, f32)> = field
+            .players
+            .iter()
+            .map(|p| {
+                (
+                    p.id,
+                    p.team_id,
+                    p.tactical_position.current_position.position_group(),
+                    p.position.y,
+                    p.skills.mental.teamwork,
+                )
+            })
+            .collect();
+        let field_h = field.size.height as f32;
+        context
+            .chemistry
+            .seed_from_roster(&chemistry_roster, field_h);
+
+        // Home-crowd arousal — the play-quality half of home advantage.
+        // Stamped once on every match player (starters AND bench, so
+        // substitutes carry it on) and consumed inside `effective_skill`.
+        // Scaled by the environment so an empty-stadium friendly confers
+        // ~nothing (matching the COVID ghost-game finding that home
+        // advantage largely vanishes without crowds) and a packed derby
+        // confers the full edge. At the default environment (crowd 0.55
+        // × home_advantage 0.50 → edge 0.275) this is home ≈ +3.3% /
+        // away ≈ −2.75% effective skill. Magnitude was titrated against
+        // the engine's measured response: ±(+1.7/−1.4)% produced a
+        // +5.5pp home-win gap at equal strength; the documented real
+        // split (~45/25/30, +0.35 home goals) needs roughly double
+        // that, landing here. The officiating half (referee marginal
+        // calls) stacks on top via `RefereeProfile::home_bias`.
+        let home_edge = (context.environment.crowd_intensity * context.environment.home_advantage)
+            .clamp(0.0, 1.0);
+        // Re-titrated 2026-08-08 (0.12 / 0.07 → 0.26 / 0.15). The
+        // comment above records a titration against the engine's
+        // measured response, and that response moved: with defenders
+        // finally getting goal-side of the ball (`DefensiveRecovery`) a
+        // small effective-skill edge converts into far fewer goals than
+        // it did when every shot was a one-on-one with the keeper.
+        // Re-measured over 3000 matches at the old values the home edge
+        // had decayed to **+0.097 goals/match against a real +0.35**,
+        // with results at 35.6 / 36.3 / 28.1 against this module's own
+        // documented target of 42-48 / 23-30 / 27-34 — home wins 7pp
+        // short and draws 6pp long.
+        // Re-titrated again 2026-08-11 (0.26 / 0.15 → 0.13 / 0.075). The
+        // engine's response to an effective-skill edge moved a SECOND
+        // time, and in the opposite direction: with man-marking assigned
+        // per-opponent and defenders actually engaging carriers, a small
+        // skill edge now compounds through every duel in a possession
+        // instead of washing out. Measured at the old values: **70.0 /
+        // 25.0 / 5.0** with home 1.77 goals against away 0.43, against
+        // this module's documented target of 42-48 / 23-30 / 27-34 and a
+        // real home-goal edge of ~+0.35.
+        //
+        // Re-titrated a THIRD time, 2026-09-06 (0.13 / 0.075 → 0.05 /
+        // 0.029), and this one was DECOMPOSED first rather than tuned
+        // blind — see `MatchContext::home_flat`, which takes all three
+        // declared channels (this one, the tactical press/risk/tempo
+        // lift, and `RefereeProfile::home_bias`) to neutral at once.
+        //
+        // That arm was the thing worth knowing. With every channel off,
+        // 400 equal-strength fixtures came out **34.0 / 29.0 / 37.0 with
+        // home 1.38 goals against away 1.51** — symmetric to inside the
+        // noise, and if anything leaning AWAY. So there is no hidden
+        // side-swap bug handing the home team an edge; the whole of the
+        // measured **60.5 / 24.0 / 15.5** was these constants, and a
+        // 5.8% effective-skill gap was being amplified into +0.87
+        // goals a match against a real +0.35.
+        //
+        // Titrated on the override (400 fixtures an arm, home/away/goal
+        // gap): flat −0.13 · 0.050 **+0.37** · 0.070 +0.50 · 0.095 +0.77
+        // · 0.130 +0.87. Monotone, and 0.050 lands 47.8 / 25.2 / 27.0
+        // against a real 45 / 25 / 30.
+        //
+        // ⚠ Note what else it lands. Draws came out at 25.2% against a
+        // real 25%, from 24.0% here and 29.0% flat. The draw surplus
+        // recorded in the titration memo as "the remaining
+        // distributional defect" was, at this setting, not a separate
+        // mechanism at all: the excess home wins were eating the AWAY
+        // wins, and away is the column that was 15pp short.
+        //
+        // Re-read 2026-10-08 after the dead-ball ledger and the split extra
+        // time, 400 seeded fixtures an arm (home goal edge): flat −0.07 ·
+        // 0.050 +0.34 · 0.070 +0.26 · 0.095 +0.43. Left at 0.050; the draw
+        // surplus that remains (36%) tracks the engine's 2.3 goals a match,
+        // not the home edge.
+        //
+        // The lesson the three re-titrations share: this constant is not
+        // a property of home advantage, it is a property of how strongly
+        // THIS engine converts skill into goals, so it has to be re-read
+        // after any change to the duel model.
+        // A/B + titration controls — see `MatchContext::home_flat` and
+        // `MatchContext::home_arousal_override`.
+        let home_edge = if MatchContext::home_flat() {
+            0.0
+        } else {
+            home_edge
+        };
+        let (home_gain, away_gain) =
+            MatchContext::home_arousal_override().unwrap_or((0.050, 0.029));
+        let home_arousal = 1.0 + home_gain * home_edge;
+        let away_arousal = 1.0 - away_gain * home_edge;
+        let home_team_id = field.home_team_id;
+        for p in field.players.iter_mut().chain(field.substitutes.iter_mut()) {
+            p.crowd_arousal = if p.team_id == home_team_id {
+                home_arousal
+            } else {
+                away_arousal
+            };
+        }
+
+        if MatchRuntime::events_mode() {
+            context.enable_logging();
+        }
+
+        let mut state_manager = StateManager::new();
+
+        // Match kickoff — the home side starts the game with possession on
+        // the centre spot. Without this the ball sits at centre until the
+        // emergency chaser override fires, producing a ~14-second dead
+        // patch.
+        StateManager::kick_off_period(&mut context, &mut field);
+
+        while let Some(state) = state_manager.next(&context.score, context.is_knockout) {
+            context.state.set(state);
+
+            match state {
+                MatchState::PenaltyShootout => Self::run_penalty_shootout(&mut field, &mut context),
+                _ => Self::play_inner(&mut field, &mut context, &mut match_position_data),
+            }
+
+            StateManager::handle_state_finish(&mut context, &mut field);
+        }
+
+        // Whatever the twenty-two were doing when the whistle went. The
+        // transition recorder sees a state a player is still in as one he
+        // never left, which reads identically to a dead end — see
+        // `TransitionGraph::note_final_states`.
+        #[cfg(feature = "match-logs")]
+        crate::r#match::TransitionGraph::note_final_states(field.players.iter().map(|p| p.state));
+
+        let result = Self::build_result(field, context, match_position_data);
+        if PhaseProf::enabled() {
+            PhaseProf::report_and_reset("match");
+        }
+        result
+    }
+
+    /// Stub match: the full-time result drawn from the two squads with no
+    /// simulation behind it. See [`StubMatch`].
+    #[cfg(feature = "match-stub")]
+    pub(in crate::r#match::engine) fn play_stub(
+        left_squad: MatchSquad,
+        right_squad: MatchSquad,
+        config: &MatchEngineConfig,
+    ) -> MatchResultRaw {
+        StubMatch::new(&left_squad, &right_squad, config).play()
+    }
+
+    // ───────────────────────────────────────────────────────────────────────
+    // Match state loop
+    // ───────────────────────────────────────────────────────────────────────
+
+    pub(in crate::r#match::engine::engine) fn play_inner(
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        match_data: &mut ResultMatchPositionData,
+    ) {
+        let prof_on = PhaseProf::enabled();
+
+        let mut next_sub_time_ms: u64 = 0;
+        let mut sub_times_initialized = false;
+        // The board is up and the manager is waiting for the ball to go dead.
+        let mut sub_due = false;
+        // Rate limit on the off-plan look at the bench — the one that lets a
+        // side react to the match instead of to its own review timer.
+        let mut next_sub_look_ms: u64 = 0;
+        // Whether a change is played out at all — see
+        // [`MatchContext::sub_walk_off`], the A/B control for what the walk
+        // costs. Read once, here, rather than at each of the four sites that
+        // branch on it.
+        let walk_on = !MatchContext::sub_walk_off();
+        // Medical (forced-injury) pass scheduling — independent of the
+        // discretionary sub timer, re-armed at the start of each period.
+        let mut next_medical_time_ms: u64 = 0;
+        // Rate limit on the "is anybody too hurt to go on?" sweep, which now
+        // runs off dead balls rather than off the injury roll's own clock.
+        let mut next_medical_check_ms: u64 = 0;
+        let mut medical_period: Option<MatchState> = None;
+
+        let mut tick_ctx = GameTickContext::new(field, &context.players);
+        let mut events = EventCollection::with_capacity(10);
+
+        let mut tick_parity: u32 = 0;
+        let mut coach_eval_counter: u32 = 0;
+        let mut tactical_eval_counter: u32 = 0;
+        // Tactical refresh uses an adaptive cadence: BASE during stable
+        // play, TRANSITION right after possession swings / set-piece
+        // restarts / goals / coach-instruction changes / ball entering
+        // or leaving the attacking third. Each "transition trigger"
+        // opens a TRANSITION_WINDOW_TICKS window during which the
+        // cheaper TRANSITION interval is used.
+        const BASE_TACTICAL_INTERVAL_TICKS: u32 = 25;
+        const TRANSITION_TACTICAL_INTERVAL_TICKS: u32 = 10;
+        const TRANSITION_WINDOW_TICKS: u32 = 40;
+        let mut transition_window_remaining: u32 = TRANSITION_WINDOW_TICKS;
+        // Snapshots used to detect transition triggers between refresh
+        // points without a per-tick walk over players.
+        let mut last_owner_id: Option<u32> = field.ball.current_owner;
+        let mut last_possession_team: Option<u32> = last_owner_id
+            .and_then(|id| field.players.iter().find(|p| p.id == id).map(|p| p.team_id));
+        let mut last_home_score: u8 = context.score.home_team.get();
+        let mut last_away_score: u8 = context.score.away_team.get();
+        let mut last_home_instruction = context.coach_home.instruction;
+        let mut last_away_instruction = context.coach_away.instruction;
+        let mut last_home_zone = context.tactical_home.ball_zone;
+        let mut last_away_zone = context.tactical_away.ball_zone;
+        // Position recording cursor — replaces the per-tick
+        // `timestamp % POSITION_RECORD_INTERVAL_MS == 0` check. Round
+        // the starting timestamp UP to the next multiple of the
+        // recording interval so a half restart preserves the original
+        // 30 ms cadence (the loop increments time *before* the body,
+        // so we never see `t == 0`).
+        let initial_t = context.total_match_time;
+        let mut next_position_record_ms: u64 =
+            (initial_t / Self::POSITION_RECORD_INTERVAL_MS + 1) * Self::POSITION_RECORD_INTERVAL_MS;
+        let track_positions = match_data.is_tracking_positions();
+
+        // **The interval.**
+        //
+        // `HalfTime` is a state that runs no ticks — `increment_time` returns
+        // false for it on the first call, so the loop below never executes a
+        // body. A change at the break is still worth making: it is the single
+        // most common substitution minute in real football, because it costs
+        // the manager nothing — none of his three windows, and a dressing room
+        // to explain it in.
+        //
+        // It is not MADE here, though. There is no play here to show it in,
+        // so the whistle only opens the interval and the look below spends it
+        // at the first stoppage of the second half, walked on and clipped like
+        // any other change — see [`SubstitutionWindows::open_interval`].
+        if context.state.match_state.is_interval() {
+            context.substitution_windows.open_interval();
+            return;
+        }
+
+        // The clock running out does not end a period while a penalty is
+        // still to be taken or still travelling — the laws extend it.
+        while context.increment_time() || field.ball.penalty_in_progress(context.current_tick()) {
+            // Post-goal dead time. No ball physics, no AI, no events, no
+            // coach evals — see `MatchContext::dead_ball_until_ms` for why
+            // the pause is load-bearing (it consumed the post-goal hot
+            // window that made goals beget goals).
+            //
+            // What DOES run is the celebration: the ball settling in the
+            // net, the scorer's run, the pile-on, somebody fetching the ball
+            // back. It is a cutscene — no decision inside it can reach a
+            // ball, a duel or the RNG stream — and the restart it performs
+            // at the end of the window leaves precisely the state the old
+            // instant reset left at the start of it. Recording it is the
+            // point: with the tick body skipped outright the replay held
+            // the last pre-goal frame for a minute, which is why the ball
+            // appeared to stop dead on the goal line.
+            if context.total_match_time < context.dead_ball_until_ms {
+                // Two cutscenes share the window and never overlap — a
+                // substitution cannot be staged inside a celebration (the
+                // pass that stages one sits below this `continue`) and a goal
+                // cannot be scored inside a substitution (there is no ball
+                // physics in either). See `SubstitutionBreak`.
+                context.note_tick(PlayingTime::Dead(if context.goal_celebration.is_some() {
+                    DeadTime::Celebration
+                } else {
+                    DeadTime::Substitution
+                }));
+                let playing_out = advance_goal_celebration(field, context)
+                    | advance_substitution_break(field, context);
+                if playing_out
+                    && track_positions
+                    && context.total_match_time >= next_position_record_ms
+                {
+                    Self::write_match_positions(field, context.total_match_time, match_data);
+                    next_position_record_ms += Self::POSITION_RECORD_INTERVAL_MS;
+                }
+                continue;
+            }
+
+            // The window has closed. Any celebration still standing performs
+            // its restart here, BEFORE the first live tick — so play resumes
+            // from the kickoff set-up, exactly as it did when the reset
+            // happened at the far end of the window. It cannot be done inside
+            // the branch above, whose own condition is what keeps the clock
+            // short of the restart instant. A substitution window that is
+            // still open lands its walkers for the same reason.
+            if context.goal_celebration.is_some() {
+                advance_goal_celebration(field, context);
+            }
+            if context.substitution_break.is_some() {
+                advance_substitution_break(field, context);
+            }
+
+            tick_parity += 1;
+            coach_eval_counter += 1;
+            tactical_eval_counter += 1;
+            transition_window_remaining = transition_window_remaining.saturating_sub(1);
+
+            // Coach evaluates every 500 ticks (~5 seconds of match time)
+            if coach_eval_counter >= 500 {
+                coach_eval_counter = 0;
+                let prof_t = prof_on.then(Instant::now);
+                Self::evaluate_coaches(field, context);
+                // Once every coach-eval slice, also probe for situational
+                // formation overrides — the manager swap to a chasing /
+                // protecting shape based on score and minute. Cheap: a
+                // single match arm and an equality check against the
+                // current type per side.
+                Self::evaluate_situational_shape(field, &mut *context);
+                if let Some(t) = prof_t {
+                    PhaseProf::add(PhaseProf::P_COACH, t.elapsed().as_nanos() as u64);
+                }
+                // Condition-trajectory sampling for the dev harness —
+                // average condition per position group per 15-min band.
+                // Rides the coach cadence so it costs one 22-player walk
+                // every 5 sim-seconds, match-logs builds only.
+                #[cfg(feature = "match-logs")]
+                {
+                    use crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag;
+                    use std::sync::atomic::Ordering;
+                    let band =
+                        time_band_diag::band_for_minute((context.total_match_time / 60_000) as u32);
+                    for p in field.players.iter().filter(|p| !p.off_pitch) {
+                        let group = match p.tactical_position.current_position.position_group() {
+                            crate::PlayerFieldPositionGroup::Goalkeeper => 0,
+                            crate::PlayerFieldPositionGroup::Defender => 1,
+                            crate::PlayerFieldPositionGroup::Midfielder => 2,
+                            crate::PlayerFieldPositionGroup::Forward => 3,
+                        };
+                        time_band_diag::COND_SUM_BY_BAND_GROUP[band][group].fetch_add(
+                            p.player_attributes.condition.max(0) as u64,
+                            Ordering::Relaxed,
+                        );
+                        time_band_diag::COND_N_BY_BAND_GROUP[band][group]
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+
+            // Team-level tactical state (phase, possession timers, line
+            // height) used a fixed 10-tick cadence. Adaptive cadence:
+            // stable possession uses BASE (25 ticks), while a 40-tick
+            // window after any transition trigger drops to TRANSITION
+            // (10 ticks) so phase/line-height/transition windows still
+            // resolve crisply when the game state actually shifts.
+            //
+            // Triggers (each cheap, no per-tick player walks):
+            //   • possession owner team changed
+            //   • score changed (goal scored — handled via reset path)
+            //   • coach instruction changed for either side
+            //   • ball zone moved into / out of attacking third for
+            //     either side
+            //
+            // Set-piece restarts are covered indirectly: kickoff /
+            // corner / goal kick all reassign the ball owner, which
+            // flips `last_possession_team` and re-opens the window.
+            //
+            // Cheap fast path: most ticks have the same `current_owner`
+            // as the previous tick (passes/dribbles span many ticks).
+            // Only re-resolve `team_id` via a 22-element scan when the
+            // raw id actually changed since the last evaluation.
+            let raw_owner = field.ball.current_owner;
+            let current_owner_team = if raw_owner == last_owner_id {
+                last_possession_team
+            } else {
+                last_owner_id = raw_owner;
+                raw_owner
+                    .and_then(|id| field.players.iter().find(|p| p.id == id).map(|p| p.team_id))
+            };
+            let possession_changed =
+                current_owner_team != last_possession_team && current_owner_team.is_some();
+            let home_score_now = context.score.home_team.get();
+            let away_score_now = context.score.away_team.get();
+            let score_changed =
+                home_score_now != last_home_score || away_score_now != last_away_score;
+            let home_instr_now = context.coach_home.instruction;
+            let away_instr_now = context.coach_away.instruction;
+            let instr_changed =
+                home_instr_now != last_home_instruction || away_instr_now != last_away_instruction;
+            let home_zone_now = context.tactical_home.ball_zone;
+            let away_zone_now = context.tactical_away.ball_zone;
+            // Attacking-third entry/exit on either side.
+            use crate::r#match::BallZone;
+            let zone_changed = matches!(home_zone_now, BallZone::AttackingThird)
+                != matches!(last_home_zone, BallZone::AttackingThird)
+                || matches!(away_zone_now, BallZone::AttackingThird)
+                    != matches!(last_away_zone, BallZone::AttackingThird);
+            if possession_changed || score_changed || instr_changed || zone_changed {
+                transition_window_remaining = TRANSITION_WINDOW_TICKS;
+                if possession_changed {
+                    last_possession_team = current_owner_team;
+                }
+                if score_changed {
+                    last_home_score = home_score_now;
+                    last_away_score = away_score_now;
+                }
+                if instr_changed {
+                    last_home_instruction = home_instr_now;
+                    last_away_instruction = away_instr_now;
+                }
+                if zone_changed {
+                    last_home_zone = home_zone_now;
+                    last_away_zone = away_zone_now;
+                }
+            }
+
+            let tactical_interval = if transition_window_remaining > 0 {
+                TRANSITION_TACTICAL_INTERVAL_TICKS
+            } else {
+                BASE_TACTICAL_INTERVAL_TICKS
+            };
+            if tactical_eval_counter >= tactical_interval {
+                let interval = tactical_eval_counter;
+                tactical_eval_counter = 0;
+                let prof_t = prof_on.then(Instant::now);
+                Self::refresh_tactical_states(field, context, interval);
+                if let Some(t) = prof_t {
+                    PhaseProf::add(PhaseProf::P_TACTICAL, t.elapsed().as_nanos() as u64);
+                }
+                // refresh_tactical_states may have repointed
+                // ball_zone — re-snapshot to avoid spuriously
+                // re-triggering the window on the next tick.
+                last_home_zone = context.tactical_home.ball_zone;
+                last_away_zone = context.tactical_away.ball_zone;
+            }
+
+            context.note_tick(field.ball.playing_time(context.current_tick()));
+            if let Some((origin, _)) = field.ball.restart_in_progress() {
+                context.note_restart_wait(origin);
+            }
+
+            // Full tick: ball + player AI + events
+            // Light tick: ball + player movement only (no AI re-evaluation)
+            if tick_parity & 1 == 0 {
+                Self::game_tick_light(field, context, match_data, &mut tick_ctx, &mut events);
+            } else {
+                Self::game_tick_inner(field, context, match_data, &mut tick_ctx, &mut events);
+            }
+
+            // Replay-position recording, gated by a cursor instead of
+            // a per-tick modulo. Same 30 ms cadence as before; just one
+            // u64 comparison + add per tick when nothing is being
+            // tracked (the dominant production case).
+            if track_positions && context.total_match_time >= next_position_record_ms {
+                Self::write_match_positions(field, context.total_match_time, match_data);
+                next_position_record_ms += Self::POSITION_RECORD_INTERVAL_MS;
+            }
+
+            // Forced medical substitutions run in ANY playing period —
+            // real football replaces an injured player whenever it
+            // happens, first half included. The pass owns the in-match
+            // injury roll; first check lands 3-8 minutes into each
+            // period, then every 6-14 minutes.
+            let medical_enabled = context.state.match_state.is_timed();
+            if medical_enabled {
+                if medical_period != Some(context.state.match_state) {
+                    medical_period = Some(context.state.match_state);
+                    next_medical_time_ms =
+                        context.time.time + context.rng.range_u64(3, 8) * 60 * 1000;
+                    next_medical_check_ms = 0;
+                }
+                // The ROLL keeps its own clock: it draws from the match RNG,
+                // and the stream is shared with every calibrated decision
+                // downstream, so moving when it fires moves the whole match.
+                if context.time.time >= next_medical_time_ms {
+                    Substitutions::process_injuries(field, context);
+                    if !walk_on {
+                        Substitutions::process_medical(field, context);
+                    }
+                    next_medical_time_ms =
+                        context.time.time + context.rng.range_u64(6, 14) * 60 * 1000;
+                }
+                // The REPLACEMENTS wait for the ball to be dead, like every
+                // other substitution — a physio does not come on while the
+                // game is going. Checked once a second of match clock rather
+                // than every dead-ball tick: the scan is four walks of the
+                // roster and the answer cannot change faster than a player's
+                // condition does.
+                if walk_on
+                    && context.time.time >= next_medical_check_ms
+                    && Substitutions::play_is_stopped(field)
+                {
+                    let before = context.substitutions.len();
+                    Substitutions::process_medical(field, context);
+                    if context.substitutions.len() > before {
+                        match_data.mark_substitution(context.total_match_time);
+                    }
+                    next_medical_check_ms = context.time.time + 1_000;
+                }
+            }
+
+            // The manager's ROUTINE review of his bench runs from the second
+            // half on, plus extra time when a knockout tie reaches it. Its
+            // clock is deliberately confined to those periods: it is the only
+            // substitution site that draws from `MatchContext::rng`, and a
+            // benchless fixture must keep consuming exactly the stream it
+            // consumed before the pressure model existed. The extra change
+            // extra time brings is granted at the period boundary — see
+            // `MatchContext::grant_extra_time_allowance`.
+            //
+            // What runs in the FIRST half is the off-plan look below, which
+            // draws nothing. A first-half change is a reaction — to an
+            // injury, a booking, a game that has fallen apart — and a
+            // reaction does not wait for a review that is not due.
+            let subs_enabled = context.state.match_state.is_timed()
+                && context.state.match_state != MatchState::FirstHalf;
+
+            if subs_enabled {
+                if !sub_times_initialized {
+                    next_sub_time_ms = context.rng.range_u64(10, 20) * 60 * 1000;
+                    sub_times_initialized = true;
+                }
+
+                let period_time = context.time.time;
+                // **The manager reviews his bench on his own clock, and acts
+                // between reviews when the match makes him.**
+                //
+                // The timer is the routine review: every manager has a plan
+                // — "something around the hour" — and this is it, drawn once
+                // per period and re-armed each time it fires. What it is
+                // NOT, any more, is the thing that decides the minute: that
+                // is [`BenchPressure`], read per side inside the pass, and
+                // the second condition below is what lets it act without
+                // waiting for the next review. Between them, a quiet game
+                // gets its changes on the plan and a game that has gone
+                // wrong gets them when it goes wrong.
+                //
+                // Deciding and acting stay two steps, and the split is not
+                // stylistic: a change stops the match for its own
+                // [`SubstitutionBreak`] window, which must not be the
+                // thing that stops it — see
+                // [`Substitutions::play_is_stopped`]. Whichever of the two
+                // conditions below fires, the change still waits for the
+                // ball to be dead.
+                //
+                // The RE-ARM has to stay on the tick the timer fired: it is
+                // an [`MatchContext::rng`] draw, the stream is shared with
+                // every calibrated decision in the match, and moving it to
+                // the next throw-in would reshuffle every roll downstream of
+                // it in matches that never make a substitution at all —
+                // every one the calibration harness plays, whose squads have
+                // no bench. For the same reason the review clock is left
+                // exactly as it was rather than being folded into the
+                // pressure model: a benchless fixture must consume the
+                // stream it consumed before this model existed, and it does.
+                if period_time >= next_sub_time_ms {
+                    sub_due = true;
+                    next_sub_time_ms = period_time + context.rng.range_u64(5, 15) * 60 * 1000;
+                }
+            }
+
+            // **The look.** Either the review came due, or enough match has
+            // passed since the last look that the pressure could have moved.
+            //
+            // The pass is cheap for a side with nothing to do — it walks its
+            // own roster and returns — and returns before touching anything
+            // at all for a side with no bench, which is every fixture the
+            // calibration harness plays. Rate-limited to a second of match
+            // clock so a spell of throw-ins does not re-walk both rosters on
+            // every tick: nothing the read depends on moves faster than a
+            // player's condition does.
+            let look_enabled = context.state.match_state.is_timed();
+            let urgent_look = look_enabled && context.time.time >= next_sub_look_ms;
+            if (sub_due || urgent_look) && (!walk_on || Substitutions::play_is_stopped(field)) {
+                sub_due = false;
+                next_sub_look_ms = context.time.time + 1_000;
+                // Deterministic "today" — captured at context
+                // construction. Used only for the youth-protection
+                // sub branch, where the comparison is age <= 17.
+                let today = context.today;
+                let per_pass_cap = context.max_substitutions_per_pass;
+                // A clipped recording keeps what somebody wants to watch,
+                // and a change is one of those — see `mark_substitution`.
+                // One mark per stoppage, however many men crossed the
+                // line on it: overlapping clips are merged at full time
+                // anyway, and a double change is one moment.
+                let before = context.substitutions.len();
+                Substitutions::process(field, context, per_pass_cap, today);
+                if walk_on && context.substitutions.len() > before {
+                    match_data.mark_substitution(context.total_match_time);
+                }
+            }
+        }
+
+        let (period, length) = match context.state.match_state {
+            MatchState::FirstHalf => (PeriodKind::FirstHalf, MATCH_HALF_TIME_MS),
+            MatchState::SecondHalf => (PeriodKind::SecondHalf, MATCH_HALF_TIME_MS),
+            _ => (PeriodKind::ExtraTime, MATCH_EXTRA_TIME_MS),
+        };
+        context
+            .tally
+            .note_added_time(period, context.time.time.saturating_sub(length));
+
+        // The whistle can go while the ball is still in the net, or while two
+        // men are still walking across the touchline. Settle both before the
+        // period boundary runs its own resets, so nothing downstream sees a
+        // half-processed goal or a substitute standing in the run-off.
+        finish_goal_celebration(field, context);
+        finish_substitution_break(field, context);
+    }
+}

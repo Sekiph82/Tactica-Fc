@@ -1,0 +1,947 @@
+//! **The `match-logs` censuses the tick runs.** Sampled from
+//! `game_tick_inner`, inert in a normal build, and read by the
+//! `dev_match` harness — never delete these.
+//!
+//! * the defending side's shape, sampled only while it is actually
+//!   defending, because an average over a whole match is dominated by
+//!   possession;
+//! * what the man nearest the carrier in our box actually DOES about
+//!   him, bucketed by which gate stopped him;
+//! * whether a chaser is running AT a loose ball or merely alongside it.
+
+use crate::PlayerPositionType;
+use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::engine::engine::*;
+use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::goalkeepers::states::state::GoalkeeperState;
+use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::player::state::PlayerState;
+use nalgebra::Vector3;
+
+impl<const W: usize, const H: usize> FootballEngine<W, H> {
+    /// Sample the DEFENDING side's shape while it is actually defending.
+    ///
+    /// Two questions, both of which an aggregate over a whole match
+    /// answers wrongly because most of a match is spent attacking:
+    ///
+    /// * **Is the back line a rigid body?** `depth spread` is the range of
+    ///   the back four along the goal-to-goal axis. A real back four
+    ///   staggers — the cover defender drops behind the presser, the far
+    ///   full-back tucks in — so 25-65u (3-8 m) is normal. Near zero means
+    ///   four players sharing one depth target and sliding as one.
+    /// * **Does anybody meet the attacker?** For every opponent inside our
+    ///   defensive third, how far away is the nearest defender. Real
+    ///   marking distances in a settled block are 2-6 m on the ball side.
+    ///
+    /// Sampled every 25 ticks (quarter-second) and only while an opponent
+    /// carries the ball in our half, so the numbers describe defending
+    /// rather than an average dominated by possession.
+    #[cfg(feature = "match-logs")]
+    pub(in crate::r#match::engine::engine) fn sample_defensive_shape(
+        field: &MatchField,
+        context: &MatchContext,
+    ) {
+        use crate::mid_run_diag::DefenceDiag;
+
+        const SAMPLE_INTERVAL_TICKS: u64 = 25;
+        /// A defender this close is contesting the attacker. 24u = 3 m.
+        const MARKED_RADIUS: f32 = 24.0;
+
+        if context.current_tick() % SAMPLE_INTERVAL_TICKS != 0 {
+            return;
+        }
+        let Some(carrier) = field
+            .ball
+            .current_owner
+            .and_then(|id| field.players.iter().find(|p| p.id == id))
+        else {
+            return;
+        };
+        let attacking_team = carrier.team_id;
+        let Some(defending_side) = field
+            .players
+            .iter()
+            .find(|p| p.team_id != attacking_team)
+            .and_then(|p| p.side)
+        else {
+            return;
+        };
+        let field_width = field.size.width as f32;
+        let own_goal_x = match defending_side {
+            PlayerSide::Left => 0.0,
+            PlayerSide::Right => field_width,
+        };
+        // Only sample while the ball is in the defending side's half —
+        // otherwise "the back line" is a pressing line and the marking
+        // question is meaningless.
+        if (field.ball.position.x - own_goal_x).abs() > field_width * 0.5 {
+            return;
+        }
+
+        // ── Back-line shape ──────────────────────────────────────────
+        let mut xs = [0.0f32; 8];
+        let mut ys = [0.0f32; 8];
+        let mut n = 0usize;
+        for p in field.players.iter() {
+            if p.team_id == attacking_team || n == xs.len() {
+                continue;
+            }
+            let pos = p.tactical_position.current_position;
+            // `is_defender()` is the POSITION GROUP, and that group holds
+            // `DefensiveMidfielder` (see `position_group`). A DM sits ten
+            // to fifteen metres in front of the back four on purpose, so
+            // including him put that gap into `max_x - min_x`
+            // permanently: this printed 17.5 m of "back-line depth
+            // spread" against a real-back-four reference of 3-8 m and
+            // could never have reached it, whatever the defenders did.
+            // Two rounds of shape work were measured against that number
+            // before it was checked. The back LINE is the back four.
+            if !pos.is_defender()
+                || pos.is_goalkeeper()
+                || matches!(pos, PlayerPositionType::DefensiveMidfielder)
+            {
+                continue;
+            }
+            // …and the man who has gone to the ball is not part of the
+            // shape. Somebody always leaves the line to engage — measured
+            // at 25% of the back line at the moment a shot is struck —
+            // and with four defenders that is one man permanently 15 m
+            // upfield, which puts 15 m into `max_x - min_x` on its own.
+            // The number could therefore never approach its own
+            // real-football reference no matter how the line behaved, and
+            // it did not move across two rounds of shape work for exactly
+            // that reason. What the shape constraint governs, and what
+            // this should report, is the spread of the defenders actually
+            // holding shape.
+            if matches!(
+                p.state,
+                PlayerState::Defender(
+                    DefenderState::Pressing
+                        | DefenderState::Tackling
+                        | DefenderState::TakeBall
+                        | DefenderState::Intercepting
+                )
+            ) {
+                continue;
+            }
+            xs[n] = p.position.x;
+            ys[n] = p.position.y;
+            n += 1;
+        }
+        if n >= 3 {
+            let (mut min_x, mut max_x) = (f32::MAX, f32::MIN);
+            for &x in &xs[..n] {
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+            }
+            // Insertion-sort the lateral positions so "adjacent pair" is
+            // meaningful rather than roster order.
+            for i in 1..n {
+                let v = ys[i];
+                let mut j = i;
+                while j > 0 && ys[j - 1] > v {
+                    ys[j] = ys[j - 1];
+                    j -= 1;
+                }
+                ys[j] = v;
+            }
+            let mut max_gap = 0.0f32;
+            for w in ys[..n].windows(2) {
+                max_gap = max_gap.max(w[1] - w[0]);
+            }
+            DefenceDiag::note_shape(max_x - min_x, max_gap);
+        }
+
+        // ── Is anybody meeting the attackers? ────────────────────────
+        let third = field_width / 3.0;
+        for a in field.players.iter() {
+            if a.team_id != attacking_team {
+                continue;
+            }
+            if a.tactical_position.current_position.is_goalkeeper() {
+                continue;
+            }
+            if (a.position.x - own_goal_x).abs() > third {
+                continue;
+            }
+            let mut nearest = f32::MAX;
+            for d in field.players.iter() {
+                if d.team_id == attacking_team
+                    || d.tactical_position.current_position.is_goalkeeper()
+                {
+                    continue;
+                }
+                nearest = nearest.min((d.position - a.position).magnitude());
+            }
+            if nearest.is_finite() {
+                DefenceDiag::note_attacker(nearest, nearest > MARKED_RADIUS);
+            }
+        }
+
+        // ── The marking duel itself ──────────────────────────────────
+        //
+        // The measure above is every defender against every attacker, and
+        // it is dominated by sheer density: the goal-side recovery rule
+        // puts bodies near attackers whether or not anybody is marking
+        // them, so it cannot tell you whether marking is being BEATEN.
+        // This one reads the assigned pairs only — the distance between a
+        // marker and the man he was actually given — which is the number
+        // the evasion work moves or does not.
+        let plan = context.defence_plan_for_team(
+            field
+                .players
+                .iter()
+                .find(|p| p.team_id != attacking_team)
+                .map(|p| p.team_id)
+                .unwrap_or(attacking_team),
+        );
+        if plan.active {
+            for d in field.players.iter() {
+                let Some(target) = plan.mark_of(d.id) else {
+                    continue;
+                };
+                if let Some(man) = field.players.iter().find(|p| p.id == target) {
+                    let pos = man.tactical_position.current_position;
+                    let line = if pos.is_forward() {
+                        2
+                    } else if pos.is_midfielder() {
+                        1
+                    } else {
+                        0
+                    };
+                    // Is the assigned marker in a state that actually
+                    // HONOURS the assignment? The plan hands out duties
+                    // to the whole unit, but only two states read them —
+                    // `Marking` for a defender and `Guarding` for a
+                    // midfielder — so a marker in any other state is
+                    // carrying a duty nothing acts on, and tuning the
+                    // marking distance reaches none of those ticks. Same
+                    // failure shape as the back line's shape code living
+                    // in `HoldingLine`.
+                    // 0 marking, 1 playing the ball (legitimate), 2
+                    // pressing/covering, 3 running/recovering, 4 idle.
+                    // Only bucket 4 — and most of 3 — is a duty nobody
+                    // is acting on.
+                    let bucket = match d.state {
+                        PlayerState::Defender(DefenderState::Marking)
+                        | PlayerState::Midfielder(MidfielderState::Guarding) => 0,
+                        PlayerState::Defender(
+                            DefenderState::Tackling
+                            | DefenderState::Intercepting
+                            | DefenderState::TakeBall
+                            | DefenderState::Clearing
+                            | DefenderState::Heading
+                            | DefenderState::Passing,
+                        )
+                        | PlayerState::Midfielder(
+                            MidfielderState::Tackling
+                            | MidfielderState::Intercepting
+                            | MidfielderState::TakeBall
+                            | MidfielderState::Heading
+                            | MidfielderState::Passing,
+                        ) => 1,
+                        PlayerState::Defender(
+                            DefenderState::Pressing | DefenderState::Covering,
+                        )
+                        | PlayerState::Midfielder(MidfielderState::Pressing) => 2,
+                        PlayerState::Defender(
+                            DefenderState::Running
+                            | DefenderState::Returning
+                            | DefenderState::TrackingBack,
+                        )
+                        | PlayerState::Midfielder(
+                            MidfielderState::Running | MidfielderState::Returning,
+                        ) => 3,
+                        _ => 4,
+                    };
+                    DefenceDiag::note_duel((d.position - man.position).magnitude(), line, bucket);
+
+                    // …and WHERE he is standing relative to the pass that
+                    // would reach his man. "Goal-side of him" and "in
+                    // front of him" are different things, and only the
+                    // second one stops the ball arriving. See
+                    // `mid_run_diag::MARKLANE_PERP_X100`.
+                    let ball = field.ball.position;
+                    let to_man = man.position - ball;
+                    let span = to_man.magnitude();
+                    if span > 1.0 {
+                        let dir = to_man / span;
+                        let rel = d.position - ball;
+                        let along = rel.dot(&dir);
+                        let perp = (rel - dir * along).magnitude();
+                        let voice = if d.team_id == context.field_home_team_id {
+                            context.home_skill_aggregates.keeper_voice
+                        } else {
+                            context.away_skill_aggregates.keeper_voice
+                        };
+                        // In the lane means between the two AND near the
+                        // line — a man level with either end is not in the
+                        // way of anything.
+                        let in_lane = along > 0.0 && along < span && perp < 12.0;
+                        crate::mid_run_diag::BoxPassDiag::note_mark_lane(perp, in_lane, voice);
+                    }
+                }
+            }
+        }
+    }
+
+    /// **What happens to the man who has the ball in our box.**
+    ///
+    /// The shape sampler above measures where defenders STAND. This one
+    /// measures what they DO about a carrier who is already among them —
+    /// the question behind "he runs around the penalty area surrounded by
+    /// defenders and nobody tries to take it off him".
+    ///
+    /// Every challenge in the engine, from every state and every role,
+    /// funnels through the same three gates before an attempt is rolled:
+    /// the per-player tackle cooldown (`can_attempt_tackle`), the duel
+    /// gate (`TackleEngagement::may_engage_carrier`), and the commitment
+    /// roll (`TackleDecision`). A defender stopped by any of them looks
+    /// identical from the stands and identical in the aggregate stats —
+    /// he is next to the carrier, doing nothing. Bucketing the pairs by
+    /// which gate stopped them is the only way to tell which one is
+    /// binding.
+    ///
+    /// Sampled every tick, because a challenge is a moment: a
+    /// quarter-second sampler would miss most of the `Tackling` ticks it
+    /// is looking for.
+    #[cfg(feature = "match-logs")]
+    pub(in crate::r#match::engine::engine) fn sample_duel_gates(
+        field: &MatchField,
+        context: &MatchContext,
+    ) {
+        use crate::r#match::common_states::TackleEngagement;
+        use crate::mid_run_diag::DuelDiag;
+
+        /// Close enough to be in the picture the report describes. 24u = 3 m.
+        const SURROUND_RADIUS: f32 = 24.0;
+
+        let Some(carrier) = field
+            .ball
+            .current_owner
+            .and_then(|id| field.players.iter().find(|p| p.id == id))
+        else {
+            return;
+        };
+        if carrier.tactical_position.current_position.is_goalkeeper() {
+            return;
+        }
+        let attacking_team = carrier.team_id;
+        let Some(defending) = field.players.iter().find(|p| p.team_id != attacking_team) else {
+            return;
+        };
+        let defending_team = defending.team_id;
+        let Some(defending_side) = defending.side else {
+            return;
+        };
+        let plan = context.defence_plan_for_team(defending_team);
+        let presser = plan.presser();
+        // The referee's own test — the ball inside the area the defending
+        // side is protecting. Same question `PenaltyRisk::applies` asks.
+        let in_box = context
+            .penalty_area(defending_side == PlayerSide::Left)
+            .contains(&field.ball.position);
+
+        let mut bodies = 0u64;
+        let mut contested = false;
+        // Nearest defender to the carrier, for the closing census below.
+        let mut nearest: Option<(f32, &MatchPlayer)> = None;
+        for d in field.players.iter() {
+            if d.team_id == attacking_team || d.tactical_position.current_position.is_goalkeeper() {
+                continue;
+            }
+            DuelDiag::note_cooldown(!d.can_attempt_tackle());
+            let gap = (d.position - carrier.position).magnitude();
+            if nearest.is_none_or(|(best, _)| gap < best) {
+                nearest = Some((gap, d));
+            }
+            if gap <= SURROUND_RADIUS {
+                bodies += 1;
+            }
+            let challenging = matches!(
+                d.state,
+                PlayerState::Defender(DefenderState::Tackling)
+                    | PlayerState::Midfielder(MidfielderState::Tackling)
+                    | PlayerState::Forward(ForwardState::Tackling)
+            );
+            if challenging {
+                // An attempt is only ever rolled inside `CONTACT`. Where the
+                // rest of them are standing is the difference between a
+                // defence that declines its challenges and one that never
+                // reaches them.
+                DuelDiag::note_reach(if gap <= TackleEngagement::CONTACT {
+                    0
+                } else if gap <= TackleEngagement::COMMIT {
+                    1
+                } else if gap <= TackleEngagement::DISENGAGE {
+                    2
+                } else {
+                    3
+                });
+            }
+            if challenging && gap <= SURROUND_RADIUS {
+                contested = true;
+            }
+            if gap > TackleEngagement::COMMIT {
+                continue;
+            }
+            // Ordered as the gates are, so the first large bucket is the
+            // binding one.
+            let bucket = if challenging {
+                0
+            } else if !d.can_attempt_tackle() {
+                1
+            } else if presser.is_some_and(|p| p != d.id) {
+                2
+            } else {
+                3
+            };
+            DuelDiag::note_gate(bucket, in_box);
+        }
+        if in_box {
+            DuelDiag::note_box_carry(bodies, contested);
+        }
+
+        // ── IS HE ACTUALLY GETTING ANY CLOSER? ────────────────────────
+        //
+        // See the note on `mid_run_diag::CLOSE_SAMPLES`. Everything above
+        // buckets a defender by whether he is ALLOWED to challenge; this
+        // asks whether the man nearest the carrier is converging on him or
+        // merely travelling alongside, which is the difference the report
+        // is about and which no other counter here can see.
+        //
+        // Only sampled while the carrier is genuinely moving — a defender
+        // holding his ground against a man shielding the ball is
+        // jockeying, and counting that as a failure to close would bury
+        // the signal under correct defending.
+        let carrier_v = carrier.velocity;
+        let carrier_speed = carrier_v.magnitude();
+        if carrier_speed > 0.05 {
+            if let Some((gap, d)) = nearest {
+                if gap > 0.5 && gap <= 200.0 {
+                    let to_carrier = (carrier.position - d.position) / gap;
+                    // Closing rate: how fast the gap shrinks. The carrier's
+                    // own motion counts — running at a man who is running
+                    // away is not closing on him.
+                    let rate = (d.velocity - carrier_v).dot(&to_carrier);
+                    let d_speed = d.velocity.magnitude();
+                    let align = if d_speed > 0.01 {
+                        d.velocity.dot(&carrier_v) / (d_speed * carrier_speed)
+                    } else {
+                        0.0
+                    };
+                    let own_goal_x = if defending_side == PlayerSide::Left {
+                        0.0
+                    } else {
+                        context.field_size.width as f32
+                    };
+                    // ── GOAL-SIDE SHADOWING IS NOT THE DEFECT ─────────
+                    //
+                    // A defender jockeying a carrier who is running at
+                    // goal retreats in front of him: same heading, gap
+                    // held, closing rate ~0. That is textbook defending
+                    // and the naive "same heading and not closing" test
+                    // counts every second of it as a failure — which is
+                    // why the first cut of this census read a flat 50%
+                    // whatever was changed underneath it.
+                    //
+                    // What the report describes is the other one: a
+                    // defender LEVEL WITH or BEHIND the man, matching his
+                    // speed shoulder to shoulder, with the goal open past
+                    // him. So the parallel test is restricted to a
+                    // defender who is not goal-side — the ball is already
+                    // nearer his goal than he is.
+                    let goal_side =
+                        (d.position.x - own_goal_x).abs() < (carrier.position.x - own_goal_x).abs();
+                    let parallel = align > 0.5 && rate < carrier_speed * 0.10 && !goal_side;
+                    let gaining = rate > carrier_speed * 0.10;
+                    let deep = (carrier.position.x - own_goal_x).abs()
+                        < context.field_size.width as f32 / 3.0;
+                    let state = match d.state {
+                        PlayerState::Defender(DefenderState::Tackling)
+                        | PlayerState::Midfielder(MidfielderState::Tackling)
+                        | PlayerState::Forward(ForwardState::Tackling) => 0,
+                        PlayerState::Defender(DefenderState::Pressing)
+                        | PlayerState::Midfielder(MidfielderState::Pressing)
+                        | PlayerState::Forward(ForwardState::Pressing) => 1,
+                        PlayerState::Defender(DefenderState::Marking)
+                        | PlayerState::Midfielder(MidfielderState::Guarding) => 2,
+                        PlayerState::Defender(DefenderState::Covering) => 3,
+                        PlayerState::Defender(DefenderState::Running)
+                        | PlayerState::Midfielder(MidfielderState::Running)
+                        | PlayerState::Forward(ForwardState::Running) => 4,
+                        PlayerState::Defender(DefenderState::HoldingLine) => 5,
+                        PlayerState::Defender(DefenderState::TrackingBack) => 6,
+                        _ => 7,
+                    };
+                    DuelDiag::note_closing(rate, align, gap, deep, parallel, gaining, state);
+                }
+            }
+        }
+    }
+
+    /// IS HE RUNNING AT THE BALL, OR JUST ALONGSIDE IT?
+    ///
+    /// The sibling of the closing census in
+    /// [`sample_duel_gates`](Self::sample_duel_gates), for the half of
+    /// the game that one cannot see. It samples only while the ball is
+    /// LOOSE — which is exactly when it bails out, because a `TakeBall`
+    /// state exists only while nobody owns the ball.
+    ///
+    /// See `mid_run_diag::CHASE_SAMPLES` for what `lead` means and why it
+    /// is the quantity that separates an interception from a stern chase.
+    #[cfg(feature = "match-logs")]
+    pub(in crate::r#match::engine::engine) fn sample_loose_chase(field: &MatchField) {
+        use crate::mid_run_diag::ChaseDiag;
+
+        if field.ball.current_owner.is_some() {
+            return;
+        }
+        let ball_v = Vector3::new(field.ball.velocity.x, field.ball.velocity.y, 0.0);
+        let ball_speed = ball_v.magnitude();
+        // A ball that is barely moving cannot be run alongside, and the
+        // lead of a stationary target is undefined. 0.05 u/tick is
+        // 6 cm/s — a ball at rest in everything but the last decimal.
+        if ball_speed < 0.05 {
+            return;
+        }
+        let ball_dir = ball_v / ball_speed;
+        let ball_pos = Vector3::new(field.ball.position.x, field.ball.position.y, 0.0);
+        let pass_target_team = (field.ball.flags.in_flight_state > 0)
+            .then_some(field.ball.pass_target_player_id)
+            .flatten()
+            .and_then(|id| field.players.iter().find(|p| p.id == id))
+            .map(|p| p.team_id);
+
+        for p in field.players.iter() {
+            let line = match p.state {
+                PlayerState::Defender(DefenderState::TakeBall) => 0,
+                PlayerState::Midfielder(MidfielderState::TakeBall) => 1,
+                PlayerState::Forward(ForwardState::TakeBall) => 2,
+                PlayerState::Goalkeeper(GoalkeeperState::TakeBall) => 3,
+                _ => continue,
+            };
+            let situation = match pass_target_team {
+                None => 0,
+                Some(team) if team == p.team_id => 1,
+                Some(_) => 2,
+            };
+            let flat = Vector3::new(p.position.x, p.position.y, 0.0);
+            let to_ball = ball_pos - flat;
+            let gap = to_ball.magnitude();
+            // Inside a stride the geometry is degenerate — the aim point
+            // and the ball are the same place whatever the model does.
+            if gap < 2.0 {
+                continue;
+            }
+            let to_ball_dir = to_ball / gap;
+
+            let p_v = Vector3::new(p.velocity.x, p.velocity.y, 0.0);
+            let p_speed = p_v.magnitude();
+            // Standing still is not a chase; it is a different defect and
+            // averaging it in would mute this one.
+            if p_speed < 0.02 {
+                continue;
+            }
+            let p_dir = p_v / p_speed;
+
+            let rate = (p_v - ball_v).dot(&to_ball_dir);
+            let align = p_dir.dot(&ball_dir);
+            // Cross-track aim: strip the part of his heading that points
+            // AT the ball, and ask how much of what is left runs with the
+            // ball's travel. Zero is a man pointed at where the ball is.
+            let lead = (p_dir - to_ball_dir * p_dir.dot(&to_ball_dir)).dot(&ball_dir);
+
+            ChaseDiag::note(rate, lead, align, gap, ball_speed, line, situation);
+        }
+    }
+
+    /// WHAT DOES HE DO ABOUT A BALL DROPPING INTO HIS OWN BOX?
+    ///
+    /// The third of the closing censuses, for the situation neither of
+    /// the other two can see: a delivery into the defending side's own
+    /// penalty area, nobody in possession. See
+    /// `mid_run_diag::BOXBALL_SAMPLES` for the report this answers and
+    /// why `DuelDiag` and `ChaseDiag` are both blind to it.
+    ///
+    /// Sampled against the ball's LANDING position, because that is the
+    /// point anyone contesting a delivery is actually running to, and a
+    /// cross measured against its apex says nothing about who wins it.
+    #[cfg(feature = "match-logs")]
+    pub(in crate::r#match::engine::engine) fn sample_box_delivery(
+        field: &MatchField,
+        context: &MatchContext,
+    ) {
+        use crate::mid_run_diag::BoxBallDiag;
+
+        // Only a ball nobody has. A carried ball is the closing census's
+        // business and a held one is out of play.
+        if field.ball.current_owner.is_some() {
+            return;
+        }
+        // Where it can be played, not where it is: a ball in the air is
+        // contested at the drop.
+        let meet = field.ball.cached_landing_position;
+        // Whose box is it in? Both are tested because a loose ball
+        // belongs to whichever area contains it, and a match has two.
+        let defending_side = if context.penalty_area(true).contains(&meet) {
+            PlayerSide::Left
+        } else if context.penalty_area(false).contains(&meet) {
+            PlayerSide::Right
+        } else {
+            return;
+        };
+        let own_goal = Vector3::new(
+            if defending_side == PlayerSide::Left {
+                0.0
+            } else {
+                context.field_size.width as f32
+            },
+            context.field_size.height as f32 / 2.0,
+            0.0,
+        );
+
+        let mut nearest_def: Option<(f32, &MatchPlayer)> = None;
+        let mut nearest_att = f32::MAX;
+        for p in field.players.iter() {
+            if p.tactical_position.current_position.is_goalkeeper() {
+                continue;
+            }
+            let gap = (p.position - meet).magnitude();
+            if p.side == Some(defending_side) {
+                if nearest_def.is_none_or(|(best, _)| gap < best) {
+                    nearest_def = Some((gap, p));
+                }
+            } else if gap < nearest_att {
+                nearest_att = gap;
+            }
+        }
+        let Some((gap, d)) = nearest_def else {
+            return;
+        };
+
+        let speed = d.velocity.magnitude();
+        // A man standing still is not running anywhere — counting him as
+        // neither would bury both signals in the same bucket.
+        if speed < 0.02 || gap < 0.5 {
+            return;
+        }
+        let heading = d.velocity / speed;
+        let to_ball = ((meet - d.position) / gap).dot(&heading);
+        let to_goal = (own_goal - d.position)
+            .try_normalize(0.01)
+            .map(|u| u.dot(&heading))
+            .unwrap_or(0.0);
+
+        let state = match d.state {
+            PlayerState::Defender(DefenderState::TakeBall) => 0,
+            PlayerState::Defender(DefenderState::Marking) => 1,
+            PlayerState::Defender(DefenderState::Running) => 2,
+            PlayerState::Defender(DefenderState::Standing) => 3,
+            PlayerState::Defender(DefenderState::HoldingLine) => 4,
+            PlayerState::Defender(DefenderState::Covering) => 5,
+            PlayerState::Defender(DefenderState::Intercepting)
+            | PlayerState::Defender(DefenderState::Heading)
+            | PlayerState::Defender(DefenderState::Clearing)
+            | PlayerState::Defender(DefenderState::Tackling) => 6,
+            _ => 7,
+        };
+        BoxBallDiag::note(
+            to_ball,
+            to_goal,
+            gap,
+            to_goal > to_ball,
+            to_ball > 0.5,
+            gap < nearest_att,
+            state,
+        );
+    }
+
+    /// **What happens to a pass played inside our own penalty area.**
+    ///
+    /// [`Self::sample_box_delivery`] measures a LOOSE ball dropping into
+    /// the area and [`Self::sample_duel_gates`] measures the man CARRYING
+    /// it. Neither can see the population the report is about: the ball
+    /// in flight from one attacker to another, ten metres from goal, with
+    /// five defenders standing in the same box.
+    ///
+    /// Sampled every tick of such a flight. See
+    /// `mid_run_diag::BOXPASS_SAMPLES` for what the two numbers mean and
+    /// why the LANE distance is the one that decides it.
+    #[cfg(feature = "match-logs")]
+    pub(in crate::r#match::engine::engine) fn sample_box_pass(
+        field: &MatchField,
+        context: &MatchContext,
+    ) {
+        use crate::mid_run_diag::BoxPassDiag;
+
+        /// The radius `Ball::try_intercept` scores inside, quoted so the
+        /// census reports the model's own reach rather than a guess.
+        const INTERCEPT_RADIUS: f32 = 5.5;
+        /// 2 m and 4 m in game units (1u = 12.5 cm).
+        const WITHIN_2M: f32 = 16.0;
+        const WITHIN_4M: f32 = 32.0;
+        /// The lane half-width the PASSER's own `has_clear_pass` uses.
+        const LANE_HALF_WIDTH: f32 = 12.0;
+
+        let ball = &field.ball;
+        // A ball in flight that nobody owns, and not a shot — shots are
+        // `try_block_shot`'s population and have their own census.
+        if ball.current_owner.is_some()
+            || ball.flags.in_flight_state == 0
+            || ball.cached_shot_target.is_some()
+        {
+            return;
+        }
+        // Struck by an attacker, so the "defending side" is well defined.
+        let Some(passer) = ball
+            .previous_owner
+            .and_then(|id| field.players.iter().find(|p| p.id == id))
+        else {
+            return;
+        };
+        // Inside whose area is it? Both are tested — a match has two.
+        let in_left = context.penalty_area(true).contains(&ball.position);
+        let in_right = context.penalty_area(false).contains(&ball.position);
+        if !in_left && !in_right {
+            return;
+        }
+        let defending_side = if in_left {
+            PlayerSide::Left
+        } else {
+            PlayerSide::Right
+        };
+        // …and it has to be THEIR pass. A defender playing out of his own
+        // box is not the reported situation.
+        if passer.side == Some(defending_side) {
+            return;
+        }
+
+        // The line the ball is actually travelling along.
+        let travel = Vector3::new(ball.velocity.x, ball.velocity.y, 0.0);
+        let Some(dir) = travel.try_normalize(1.0e-4) else {
+            return;
+        };
+
+        let mut best: Option<(f32, f32, &MatchPlayer)> = None;
+        let mut bodies = 0u32;
+        for p in field.players.iter() {
+            if p.side != Some(defending_side)
+                || p.tactical_position.current_position.is_goalkeeper()
+            {
+                continue;
+            }
+            if context.penalty_area(in_left).contains(&p.position) {
+                bodies += 1;
+            }
+            let to_me = Vector3::new(
+                p.position.x - ball.position.x,
+                p.position.y - ball.position.y,
+                0.0,
+            );
+            let gap = to_me.magnitude();
+            // Perpendicular offset from the flight line, unsigned — a man
+            // the ball has already gone past is as far off it as one it
+            // has yet to reach, and the ahead/behind split is the `gap`
+            // column's business.
+            let lane = (to_me - dir * to_me.dot(&dir)).magnitude();
+            if best.is_none_or(|(best_gap, _, _)| gap < best_gap) {
+                best = Some((gap, lane, p));
+            }
+        }
+        let Some((gap, lane, d)) = best else {
+            return;
+        };
+
+        let state = match d.state {
+            PlayerState::Defender(DefenderState::Marking)
+            | PlayerState::Midfielder(MidfielderState::Guarding) => 0,
+            PlayerState::Defender(DefenderState::Standing)
+            | PlayerState::Midfielder(MidfielderState::Standing) => 1,
+            PlayerState::Defender(DefenderState::HoldingLine) => 2,
+            PlayerState::Defender(DefenderState::Covering) => 3,
+            PlayerState::Defender(DefenderState::Pressing)
+            | PlayerState::Midfielder(MidfielderState::Pressing) => 4,
+            PlayerState::Defender(DefenderState::Running)
+            | PlayerState::Midfielder(MidfielderState::Running) => 5,
+            PlayerState::Defender(
+                DefenderState::Intercepting
+                | DefenderState::Tackling
+                | DefenderState::Heading
+                | DefenderState::Clearing
+                | DefenderState::TakeBall,
+            )
+            | PlayerState::Midfielder(
+                MidfielderState::Intercepting
+                | MidfielderState::Tackling
+                | MidfielderState::Heading
+                | MidfielderState::TakeBall,
+            ) => 6,
+            _ => 7,
+        };
+
+        BoxPassDiag::note(
+            gap,
+            lane,
+            ball.position.z,
+            bodies,
+            gap < WITHIN_2M,
+            gap < WITHIN_4M,
+            gap < INTERCEPT_RADIUS,
+            lane < LANE_HALF_WIDTH,
+            state,
+        );
+        // …and the same lane distance banded by the voice behind this
+        // back line, which is the only read-out `KeeperVoice::front_foot`
+        // has. See `mid_run_diag::BOXPASS_LANE_BY_VOICE`.
+        let aggregates = if d.team_id == context.field_home_team_id {
+            &context.home_skill_aggregates
+        } else {
+            &context.away_skill_aggregates
+        };
+        BoxPassDiag::note_voice(lane, aggregates.keeper_voice);
+    }
+}
+
+/// **One attacking possession that reached the defending side's penalty
+/// area**, from the box touch to whatever ends it.
+///
+/// The symptom this whole pass exists for is an attacking side keeping
+/// the ball in and around the area for an unreasonable length of time,
+/// and no counter in the engine could see it: tackles, interceptions and
+/// clearances are all per-EVENT, and a defence can produce plenty of
+/// events while the ball never leaves. An episode is the exposure those
+/// rates have to be read against.
+///
+/// Per-MATCH state, held on [`MatchContext`], because matches run in
+/// parallel; only the finished episode is folded into the global
+/// histogram.
+#[derive(Default, Clone, Copy)]
+pub struct BoxEpisode {
+    /// Tick the episode opened. Zero means none is live.
+    start: u64,
+    /// The side keeping the ball.
+    team: u32,
+    /// Last tick the ball was inside the area, so a pass out and back is
+    /// one episode rather than two.
+    last_in_box: u64,
+    /// Attacking touches after the first — passes completed in and
+    /// around the area.
+    passes: u32,
+    /// Tick of the first defensive challenge, zero until there is one.
+    first_challenge: u64,
+    /// Who had it last, to notice a change of touch.
+    last_owner: u32,
+}
+
+/// How an episode ended, in the order the census reports them.
+pub struct BoxEpisodeEnd;
+
+impl BoxEpisodeEnd {
+    pub const REGAIN: usize = 0;
+    pub const SHOT: usize = 1;
+    pub const CLEARED: usize = 2;
+}
+
+impl<const W: usize, const H: usize> FootballEngine<W, H> {
+    /// How long the ball may sit outside the area before the episode is
+    /// over — one second, so a pass out to the edge and back in is still
+    /// the same spell of pressure.
+    #[cfg(feature = "match-logs")]
+    const BOX_EPISODE_GRACE: u64 = 100;
+
+    /// Track the live box-possession episode and book it when it ends.
+    #[cfg(feature = "match-logs")]
+    pub(in crate::r#match::engine::engine) fn sample_box_episode(
+        field: &MatchField,
+        context: &mut MatchContext,
+    ) {
+        use crate::mid_run_diag::BoxEpisodeDiag;
+
+        let tick = context.current_tick();
+        let owner = field
+            .ball
+            .current_owner
+            .and_then(|id| field.players.iter().find(|p| p.id == id));
+
+        // Whose area is the ball in? The referee's test, so this is the
+        // same geometry the restart award uses.
+        let in_left_box = context.penalty_area(true).contains(&field.ball.position);
+        let in_right_box = context.penalty_area(false).contains(&field.ball.position);
+
+        let live = context.box_episode.start != 0;
+        if !live {
+            // An episode opens on an attacking touch inside the box the
+            // toucher is attacking.
+            let Some(carrier) = owner else { return };
+            let Some(side) = carrier.side else { return };
+            let attacking_their_box = match side {
+                PlayerSide::Left => in_right_box,
+                PlayerSide::Right => in_left_box,
+            };
+            if !attacking_their_box {
+                return;
+            }
+            context.box_episode = BoxEpisode {
+                start: tick,
+                team: carrier.team_id,
+                last_in_box: tick,
+                passes: 0,
+                first_challenge: 0,
+                last_owner: carrier.id,
+            };
+            return;
+        }
+
+        let episode = &mut context.box_episode;
+        if in_left_box || in_right_box {
+            episode.last_in_box = tick;
+        }
+
+        // A defensive challenge, whether or not it wins anything.
+        if episode.first_challenge == 0
+            && field.players.iter().any(|p| {
+                p.team_id != episode.team
+                    && matches!(
+                        p.state,
+                        PlayerState::Defender(DefenderState::Tackling)
+                            | PlayerState::Midfielder(MidfielderState::Tackling)
+                            | PlayerState::Forward(ForwardState::Tackling)
+                    )
+            })
+        {
+            episode.first_challenge = tick;
+        }
+
+        let ending = match owner {
+            Some(p) if p.team_id != episode.team => Some(BoxEpisodeEnd::REGAIN),
+            Some(p) => {
+                if p.id != episode.last_owner {
+                    episode.passes += 1;
+                    episode.last_owner = p.id;
+                }
+                None
+            }
+            None => None,
+        };
+        let ending = ending
+            .or_else(|| {
+                field
+                    .ball
+                    .cached_shot_target
+                    .is_some()
+                    .then_some(BoxEpisodeEnd::SHOT)
+            })
+            .or_else(|| {
+                (tick.saturating_sub(episode.last_in_box) > Self::BOX_EPISODE_GRACE)
+                    .then_some(BoxEpisodeEnd::CLEARED)
+            });
+
+        let Some(ending) = ending else { return };
+        let duration = tick.saturating_sub(episode.start);
+        let to_challenge = (episode.first_challenge != 0)
+            .then(|| episode.first_challenge.saturating_sub(episode.start));
+        BoxEpisodeDiag::note(duration, episode.passes, to_challenge, ending);
+        context.box_episode = BoxEpisode::default();
+    }
+}
