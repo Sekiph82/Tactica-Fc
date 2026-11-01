@@ -73,6 +73,10 @@
         </div>
         <section class="fm-panel" style="margin:8px 18px 14px;padding:14px" id="fm-training-camp"
                  data-plan-failed="{{ i18n.t("mgr_camp_plan_failed") }}"
+                 data-active-error="{{ i18n.t("mgr_camp_active_error") }}"
+                 data-cooldown-error="{{ i18n.t("mgr_camp_cooldown_error") }}"
+                 data-window-error="{{ i18n.t("mgr_camp_window_error") }}"
+                 data-funds-error="{{ i18n.t("mgr_camp_funds_error") }}"
                  data-planning="{{ i18n.t("mgr_camp_planning") }}">
             <strong>{{ i18n.t("mgr_training_camp") }}</strong>
             {% if managed_camp_status == "planned" || managed_camp_status == "running" %}
@@ -168,7 +172,16 @@
                             method: 'POST', headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ destination: destination })
                         });
-                        if (!response.ok) throw new Error('camp plan rejected: ' + response.status);
+                        if (!response.ok) {
+                            var message = response.status === 409 ? panel.dataset.activeError
+                                : response.status === 429 ? panel.dataset.cooldownError
+                                : response.status === 422 ? panel.dataset.windowError
+                                : response.status === 402 ? panel.dataset.fundsError
+                                : panel.dataset.planFailed;
+                            campStatus.textContent = message;
+                            campPlanButton.disabled = false;
+                            return;
+                        }
                         window.location.reload();
                     } catch (error) {
                         campStatus.textContent = panel.dataset.planFailed;

@@ -153,25 +153,27 @@ pub async fn manager_plan_training_camp_action(
     let mut guard = data.write().await;
     let Some(sim) = guard.as_mut() else { return StatusCode::SERVICE_UNAVAILABLE; };
     let sim = Arc::make_mut(sim);
-    let Some(cost) = training_camp_cost(sim, team_id, &body.destination) else { return StatusCode::BAD_REQUEST; };
-    let Some(start_date) = next_training_camp_window(sim, team_id) else { return StatusCode::CONFLICT; };
     let Some(team) = sim.team(team_id) else { return StatusCode::NOT_FOUND; };
     let Some(club) = sim.club(team.club_id) else { return StatusCode::NOT_FOUND; };
-    if club.finance.balance.balance < cost { return StatusCode::PAYMENT_REQUIRED; }
     let today = sim.date.date();
     if let Some(previous_snapshot) = state.manager_career_store.load_snapshot(team_id) {
         if let Some(previous) = previous_snapshot.training_camp {
-        if previous.status == "planned" || previous.status == "running" { return StatusCode::CONFLICT; }
-        if previous.status == "completed" {
-            let previous_date = previous_snapshot.training_camp_reports.last()
-                .and_then(|report| report.date.parse::<NaiveDate>().ok())
-                .or_else(|| previous.start_date.parse::<NaiveDate>().ok());
-            if previous_date.is_some_and(|date| (today - date).num_days() < 90) {
+            if previous.status == "planned" || previous.status == "running" {
                 return StatusCode::CONFLICT;
             }
-        }
+            if previous.status == "completed" {
+                let previous_date = previous_snapshot.training_camp_reports.last()
+                    .and_then(|report| report.date.parse::<NaiveDate>().ok())
+                    .or_else(|| previous.start_date.parse::<NaiveDate>().ok());
+                if previous_date.is_some_and(|date| (today - date).num_days() < 90) {
+                    return StatusCode::TOO_MANY_REQUESTS;
+                }
+            }
         }
     }
+    let Some(start_date) = next_training_camp_window(sim, team_id) else { return StatusCode::UNPROCESSABLE_ENTITY; };
+    let Some(cost) = training_camp_cost(sim, team_id, &body.destination) else { return StatusCode::BAD_REQUEST; };
+    if club.finance.balance.balance < cost { return StatusCode::PAYMENT_REQUIRED; }
     if let Err(error) = state.manager_career_store.update_snapshot(team_id, |snapshot| {
         snapshot.training_camp = Some(super::ManagerTrainingCamp {
             destination: body.destination.clone(),
