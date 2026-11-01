@@ -130,7 +130,7 @@ This file is the single source of truth for milestone status. Mark work complete
 - [ ] Apply the design system while modernising the main menu, career setup, dashboard, squad, player, tactics, transfers, fixtures, and results.
 - [x] Add Turkish as the default interface locale and preserve English and Danish.
 - [ ] Move user-visible strings into the existing localisation architecture.
-- [ ] Verify the core manager workflows use real shared game state.
+- [x] Verify the core manager workflows use real shared game state. Isolated fresh-server acceptance confirmed persisted manager takeover, tactic/style and player/team training readback, transfer listing, exact positional lineup selection in a managed match, live instructions/substitution applied by the engine, and the resulting replay route; owner-visible browser acceptance is tracked separately under TFC-M04.
 
 ## TFC-M08: Career integration and saves — PARTIAL
 
