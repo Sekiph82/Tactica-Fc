@@ -1,4 +1,6 @@
 {
+  "manager_mark_news_read": "Tüm sayıları okundu olarak işaretle",
+  "manager_mark_news_read_failed": "Okundu işaretlenemedi. Tekrar deneyin.",
   "newspaper_edition": "Sayı",
   "newspaper_results": "Sonuçlar",
   "newspaper_in_brief": "Kısaca",

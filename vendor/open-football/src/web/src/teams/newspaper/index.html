@@ -7,6 +7,28 @@
 
 {% block content %}
 <div class="fm-page np-desk">
+    {% if is_managed && unread_newspaper_count > 0 %}
+    <div style="display:flex;justify-content:flex-end;padding:0 0 12px">
+        <button type="button" class="fm-button" id="fm-manager-mark-news-read" data-failed="{{ news.t("manager_mark_news_read_failed") }}">{{ news.t("manager_mark_news_read") }}</button>
+    </div>
+    <script>
+    (function() {
+        var button = document.getElementById('fm-manager-mark-news-read');
+        if (!button) return;
+        button.addEventListener('click', async function() {
+            button.disabled = true;
+            try {
+                var response = await fetch('/api/manager/news/read', { method: 'POST' });
+                if (!response.ok) throw new Error('request failed');
+                window.location.reload();
+            } catch (_) {
+                button.disabled = false;
+                button.textContent = button.dataset.failed || 'Could not mark as read';
+            }
+        });
+    })();
+    </script>
+    {% endif %}
     {% if issues.is_empty() %}
     <div class="np-empty">
         <div class="np-empty-rule"></div>

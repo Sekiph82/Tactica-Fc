@@ -61,6 +61,7 @@ pub struct TeamScheduleTemplate {
     pub show_academy_tab: bool,
     /// Printed items waiting on the newspaper tab, for the tabbar badge.
     pub newspaper_count: usize,
+    pub unread_newspaper_count: usize,
     pub season_base: String,
     pub seasons: Option<SeasonStep>,
     pub items: Vec<TeamScheduleItem>,
@@ -333,6 +334,18 @@ pub async fn team_schedule_get_action(
         Vec::new()
     };
 
+    let unread_newspaper_count = if managed_team_id == Some(team.id) {
+        let latest_issue = team.newsroom.latest().map(|issue| issue.number).unwrap_or(0);
+        let last_read_issue = state
+            .manager_career_store
+            .load_snapshot(team.id)
+            .map(|snapshot| snapshot.last_read_newspaper_issue)
+            .unwrap_or(0);
+        latest_issue.saturating_sub(last_read_issue) as usize
+    } else {
+        0
+    };
+
     Ok(TeamScheduleTemplate {
         css_version: CSS_VERSION,
         match_viewer_version: MATCH_VIEWER_VERSION,
@@ -374,7 +387,12 @@ pub async fn team_schedule_get_action(
         show_finances_tab: team.team_type.is_own_team(),
         show_academy_tab: team.team_type == core::TeamType::Main
             || team.team_type == core::TeamType::U18,
-        newspaper_count: NewspaperCounter::count(simulator_data, team),
+        newspaper_count: if managed_team_id == Some(team.id) {
+            unread_newspaper_count
+        } else {
+            NewspaperCounter::count(simulator_data, team)
+        },
+        unread_newspaper_count,
         season_base: current_path,
         seasons,
         items,

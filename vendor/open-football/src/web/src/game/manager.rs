@@ -216,6 +216,34 @@ pub async fn set_tactics_action(
     StatusCode::OK
 }
 
+/// Mark every currently printed issue of the managed club's paper as read.
+/// The edition number is resolved from the authoritative world here rather
+/// than trusted from the browser.
+pub async fn manager_mark_news_read_action(State(state): State<GameAppData>) -> StatusCode {
+    let Some(team_id) = managed_team_id(&state).await else {
+        return StatusCode::FORBIDDEN;
+    };
+    let latest_issue = {
+        let guard = state.data.read().await;
+        let Some(data) = guard.as_ref() else {
+            return StatusCode::SERVICE_UNAVAILABLE;
+        };
+        let Some(team) = data.team(team_id) else {
+            return StatusCode::NOT_FOUND;
+        };
+        team.newsroom.latest().map(|issue| issue.number)
+    };
+    let Some(latest_issue) = latest_issue else {
+        return StatusCode::NO_CONTENT;
+    };
+    match state.manager_career_store.update_snapshot(team_id, |snapshot| {
+        snapshot.last_read_newspaper_issue = snapshot.last_read_newspaper_issue.max(latest_issue);
+    }) {
+        Ok(_) => StatusCode::NO_CONTENT,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
 /// Keep the manager's chosen XI when the formation changes, moving players
 /// into the new shape's most familiar positions. Any picks that cannot be
 /// matched by a playable position are retained in the remaining slots, so a

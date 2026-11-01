@@ -10,7 +10,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 4;
 const FILE_NAME: &str = "manager-career.jsonl";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -43,6 +43,9 @@ pub struct ManagerCareerSnapshot {
     pub player_training: HashMap<u32, String>,
     #[serde(default)]
     pub listed_player_ids: Vec<u32>,
+    /// Highest club-newspaper edition the manager has explicitly read.
+    #[serde(default)]
+    pub last_read_newspaper_issue: u32,
 }
 
 #[derive(Debug, Clone)]

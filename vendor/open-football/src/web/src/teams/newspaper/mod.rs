@@ -56,6 +56,8 @@ pub struct TeamNewspaperTemplate {
     pub show_academy_tab: bool,
     /// Printed items waiting on the newspaper tab, for the tabbar badge.
     pub newspaper_count: usize,
+    pub is_managed: bool,
+    pub unread_newspaper_count: usize,
     /// Newest edition first. Empty until the club's first press run.
     pub issues: Vec<IssueView>,
 }
@@ -343,6 +345,18 @@ pub async fn team_newspaper_action(
     let issues = press
         .map(|paper| PressDesk::typeset(simulator_data, paper, &i18n, &news))
         .unwrap_or_default();
+    let managed_team_id = *state.manager_team_id.read().await;
+    let is_managed = managed_team_id == Some(team.id);
+    let latest_issue_number = press
+        .and_then(|paper| paper.newsroom.latest())
+        .map(|issue| issue.number)
+        .unwrap_or(0);
+    let last_read_issue = state
+        .manager_career_store
+        .load_snapshot(team.id)
+        .map(|snapshot| snapshot.last_read_newspaper_issue)
+        .unwrap_or(0);
+    let unread_newspaper_count = latest_issue_number.saturating_sub(last_read_issue) as usize;
 
     let (neighbor_teams, country_leagues) =
         NewspaperPage::menu_sources(team.club_id, simulator_data, &i18n)?;
@@ -394,7 +408,13 @@ pub async fn team_newspaper_action(
         active_tab: "newspaper",
         show_finances_tab: team.team_type.is_own_team(),
         show_academy_tab: team.team_type == TeamType::Main || team.team_type == TeamType::U18,
-        newspaper_count: NewspaperCounter::count(simulator_data, team),
+        newspaper_count: if is_managed {
+            unread_newspaper_count
+        } else {
+            NewspaperCounter::count(simulator_data, team)
+        },
+        is_managed,
+        unread_newspaper_count,
         issues,
     })
 }
@@ -2326,6 +2346,8 @@ mod render_tests {
                 show_finances_tab: true,
                 show_academy_tab: true,
                 newspaper_count: issues.len(),
+                is_managed: false,
+                unread_newspaper_count: 0,
                 issues,
             }
         }
