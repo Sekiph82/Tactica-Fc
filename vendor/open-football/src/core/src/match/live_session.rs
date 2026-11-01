@@ -11,7 +11,10 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static NEXT_LIVE_SESSION_ID: AtomicU64 = AtomicU64::new(0);
-const LIVE_FRAME_HISTORY_LIMIT: usize = 512;
+// Live frames are sampled every 500ms of match time. Keep a full regulation
+// match plus stoppage-time headroom so a temporarily backgrounded/throttled
+// manager tab can resume without silently losing the movement stream.
+const LIVE_FRAME_HISTORY_LIMIT: usize = 16_384;
 
 fn next_live_session_id() -> u64 {
     let timestamp_ms = SystemTime::now()
@@ -293,7 +296,7 @@ pub fn instruction_key(instruction: CoachInstruction) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{LiveMatchSession, LiveMatchStatus, LiveSubstitutionCommand};
+    use super::{LiveMatchFrame, LiveMatchSession, LiveMatchStatus, LiveSubstitutionCommand};
     use crate::r#match::engine::teamplay::coach::instruction::CoachInstruction;
     #[test]
     fn only_managed_fixture_is_claimed_and_instruction_is_queued() {
@@ -312,6 +315,40 @@ mod tests {
         let session = LiveMatchSession::new(17);
         session.finish();
         assert_eq!(session.view().status, LiveMatchStatus::NoMatch);
+    }
+
+    #[test]
+    fn delayed_poll_can_recover_every_frame_from_a_full_regulation_match() {
+        const REGULATION_FRAMES: usize = 90 * 60 * 2;
+        let session = LiveMatchSession::new(17);
+
+        for index in 0..REGULATION_FRAMES {
+            session.publish(LiveMatchFrame {
+                sequence: 0,
+                home_team_id: 17,
+                away_team_id: 22,
+                elapsed_ms: index as u64 * 500,
+                minute: (index / 120) as u32,
+                home_score: 0,
+                away_score: 0,
+                ball_x: 0.5,
+                ball_y: 0.5,
+                ball_z: 0.0,
+                instruction: "normal".to_string(),
+                events: Vec::new(),
+                goals: Vec::new(),
+                players: Vec::new(),
+                substitutes: Vec::new(),
+            });
+        }
+
+        let recovered = session.view_after_frames(0, 0);
+        assert_eq!(recovered.frames.len(), REGULATION_FRAMES);
+        assert_eq!(recovered.frames.first().map(|frame| frame.sequence), Some(1));
+        assert_eq!(
+            recovered.frames.last().map(|frame| frame.sequence),
+            Some(REGULATION_FRAMES as u64)
+        );
     }
 
     #[test]
