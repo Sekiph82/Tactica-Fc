@@ -378,7 +378,7 @@ pub async fn team_newspaper_action(
             .flat_map(|country| country.transfer_market.negotiations.values())
             .filter(|negotiation| {
                 negotiation.selling_club_id == team.club_id
-                    && negotiation.manager_seller_decision.is_none()
+                    && negotiation.manager_decision.is_none()
                     && matches!(negotiation.phase, core::transfers::deal::negotiation::NegotiationPhase::ClubNegotiation { .. })
                     && matches!(negotiation.status, core::transfers::deal::negotiation::NegotiationStatus::Pending | core::transfers::deal::negotiation::NegotiationStatus::Countered)
             })

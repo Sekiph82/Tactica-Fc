@@ -327,7 +327,7 @@ impl NegotiationPass {
                         .transfer_market
                         .negotiations
                         .get_mut(&neg_id)
-                        .and_then(|negotiation| negotiation.manager_seller_decision.take());
+                        .and_then(|negotiation| negotiation.manager_decision.take());
                     match manager_decision {
                         Some(true) => {
                             let auction = Self::auction_state(country, neg_id, neg_data.player_id);

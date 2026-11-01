@@ -75,7 +75,7 @@ pub struct TransferSellerDecisionRequest {
     pub accept: bool,
 }
 
-fn queue_manager_seller_decision(
+fn queue_manager_decision(
     negotiation: &mut TransferNegotiation,
     accept: bool,
 ) -> Result<(), StatusCode> {
@@ -85,11 +85,25 @@ fn queue_manager_seller_decision(
     ) || !matches!(
         &negotiation.phase,
         NegotiationPhase::ClubNegotiation { .. }
-    ) || negotiation.manager_seller_decision.is_some()
+    ) || negotiation.manager_decision.is_some()
     {
         return Err(StatusCode::CONFLICT);
     }
-    negotiation.manager_seller_decision = Some(accept);
+    negotiation.manager_decision = Some(accept);
+    Ok(())
+}
+
+fn queue_manager_buyer_accept(negotiation: &mut TransferNegotiation) -> Result<(), StatusCode> {
+    if negotiation.status != NegotiationStatus::Countered
+        || !matches!(
+            &negotiation.phase,
+            NegotiationPhase::ClubNegotiation { .. }
+        )
+        || negotiation.manager_decision.is_some()
+    {
+        return Err(StatusCode::CONFLICT);
+    }
+    negotiation.manager_decision = Some(true);
     Ok(())
 }
 
@@ -974,9 +988,9 @@ pub async fn update_transfer_negotiation_action(
     StatusCode::ACCEPTED
 }
 
-/// Queue the managed seller's accept/reject decision for the next ordinary
-/// transfer-resolution tick. The engine still performs player terms and
-/// medical/finalisation after an accepted fee.
+/// Queue the managed side's decision for the next ordinary transfer tick.
+/// Sellers can accept/reject incoming fees; buyers can accept a seller's
+/// counter. The engine still performs player terms and medical/finalisation.
 pub async fn decide_incoming_transfer_offer_action(
     State(state): State<GameAppData>,
     Json(body): Json<TransferSellerDecisionRequest>,
@@ -1006,7 +1020,10 @@ pub async fn decide_incoming_transfer_offer_action(
                 .transfer_market
                 .negotiations
                 .get(&body.negotiation_id)
-                .is_some_and(|negotiation| negotiation.selling_club_id == managed_club_id)
+                .is_some_and(|negotiation| {
+                    negotiation.selling_club_id == managed_club_id
+                        || (body.accept && negotiation.buying_club_id == managed_club_id)
+                })
         })
     else {
         return StatusCode::NOT_FOUND;
@@ -1018,7 +1035,14 @@ pub async fn decide_incoming_transfer_offer_action(
     else {
         return StatusCode::NOT_FOUND;
     };
-    if queue_manager_seller_decision(negotiation, body.accept).is_err() {
+    let decision = if negotiation.selling_club_id == managed_club_id {
+        queue_manager_decision(negotiation, body.accept)
+    } else if negotiation.buying_club_id == managed_club_id && body.accept {
+        queue_manager_buyer_accept(negotiation)
+    } else {
+        Err(StatusCode::CONFLICT)
+    };
+    if decision.is_err() {
         return StatusCode::CONFLICT;
     }
     StatusCode::ACCEPTED
@@ -1027,7 +1051,7 @@ pub async fn decide_incoming_transfer_offer_action(
 #[cfg(test)]
 mod manager_offer_validation_tests {
     use super::{
-        TransferOfferRequest, queue_manager_seller_decision, validate_transfer_offer_request,
+        TransferOfferRequest, queue_manager_decision, validate_transfer_offer_request,
     };
     use axum::http::StatusCode;
     use chrono::NaiveDate;
@@ -1058,37 +1082,37 @@ mod manager_offer_validation_tests {
     fn manager_seller_accept_and_reject_decisions_are_queued_for_the_tick() {
         for accept in [true, false] {
             let mut negotiation = negotiation_in_club_talks();
-            assert_eq!(queue_manager_seller_decision(&mut negotiation, accept), Ok(()));
-            assert_eq!(negotiation.manager_seller_decision, Some(accept));
+            assert_eq!(queue_manager_decision(&mut negotiation, accept), Ok(()));
+            assert_eq!(negotiation.manager_decision, Some(accept));
         }
     }
 
     #[test]
-    fn manager_seller_decision_rejects_wrong_phase_final_status_and_duplicate() {
+    fn manager_decision_rejects_wrong_phase_final_status_and_duplicate() {
         let mut negotiation = negotiation_in_club_talks();
         negotiation.phase = NegotiationPhase::PersonalTerms {
             started: NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(),
             round: 1,
         };
         assert_eq!(
-            queue_manager_seller_decision(&mut negotiation, true),
+            queue_manager_decision(&mut negotiation, true),
             Err(StatusCode::CONFLICT)
         );
 
         let mut negotiation = negotiation_in_club_talks();
         negotiation.status = NegotiationStatus::Rejected;
         assert_eq!(
-            queue_manager_seller_decision(&mut negotiation, true),
+            queue_manager_decision(&mut negotiation, true),
             Err(StatusCode::CONFLICT)
         );
 
         let mut negotiation = negotiation_in_club_talks();
-        queue_manager_seller_decision(&mut negotiation, true).unwrap();
+        queue_manager_decision(&mut negotiation, true).unwrap();
         assert_eq!(
-            queue_manager_seller_decision(&mut negotiation, false),
+            queue_manager_decision(&mut negotiation, false),
             Err(StatusCode::CONFLICT)
         );
-        assert_eq!(negotiation.manager_seller_decision, Some(true));
+        assert_eq!(negotiation.manager_decision, Some(true));
     }
 
     fn request(loan_duration_months: Option<u8>, annual_wage: u32) -> TransferOfferRequest {

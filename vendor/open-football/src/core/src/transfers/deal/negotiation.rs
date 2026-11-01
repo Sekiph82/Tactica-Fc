@@ -123,9 +123,10 @@ pub struct TransferNegotiation {
     // Phased negotiation fields
     pub phase: NegotiationPhase,
     pub phase_expiry: NaiveDate,
-    /// Manager override waiting for the normal seller-resolution tick.
-    /// `Some(true)` accepts the current fee; `Some(false)` rejects it.
-    pub manager_seller_decision: Option<bool>,
+    /// Managed-club override waiting for the ordinary transfer-resolution
+    /// tick. `Some(true)` accepts the current fee/counter; `Some(false)`
+    /// rejects an incoming fee when the managed club is the seller.
+    pub manager_decision: Option<bool>,
     /// Annual wage the buying club has staged for the player. None until the
     /// pipeline fills it at negotiation start.
     pub offered_salary: Option<u32>,
@@ -309,7 +310,7 @@ impl TransferNegotiation {
                 started: created_date,
             },
             phase_expiry,
-            manager_seller_decision: None,
+            manager_decision: None,
             offered_salary: None,
             opening_salary: None,
             staged_reservation_wage: None,

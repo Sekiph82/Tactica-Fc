@@ -118,6 +118,7 @@ pub struct ManagerNegotiation {
     pub can_update_fee: bool,
     pub can_update_wage: bool,
     pub can_respond_as_seller: bool,
+    pub can_accept_counter: bool,
 }
 
 pub async fn team_transfers_action(
@@ -240,8 +241,8 @@ pub async fn team_transfers_action(
                     if !is_buyer_offer && !is_seller_offer {
                         continue;
                     }
-                    let status = match (is_seller_offer, negotiation.manager_seller_decision, &negotiation.status) {
-                        (true, Some(true), _) => i18n.t("mgr_transfer_accept_queued"),
+                    let status = match (is_seller_offer, negotiation.manager_decision, &negotiation.status) {
+                        (_, Some(true), _) => i18n.t("mgr_transfer_accept_queued"),
                         (true, Some(false), _) => i18n.t("mgr_transfer_reject_queued"),
                         (_, _, core::transfers::deal::negotiation::NegotiationStatus::Pending) => i18n.t("mgr_transfer_pending"),
                         (_, _, core::transfers::deal::negotiation::NegotiationStatus::Countered) => i18n.t("mgr_transfer_countered"),
@@ -295,7 +296,17 @@ pub async fn team_transfers_action(
                             &negotiation.status,
                             core::transfers::deal::negotiation::NegotiationStatus::Pending
                                 | core::transfers::deal::negotiation::NegotiationStatus::Countered
-                        ) && negotiation.manager_seller_decision.is_none(),
+                        ) && negotiation.manager_decision.is_none(),
+                        can_accept_counter: is_buyer_offer
+                            && matches!(
+                                &negotiation.phase,
+                                core::transfers::deal::negotiation::NegotiationPhase::ClubNegotiation { .. }
+                            )
+                            && matches!(
+                                &negotiation.status,
+                                core::transfers::deal::negotiation::NegotiationStatus::Countered
+                            )
+                            && negotiation.manager_decision.is_none(),
                     });
                 }
             }
