@@ -510,7 +510,7 @@ pub async fn team_transfers_action(
         show_finances_tab: team.team_type.is_own_team(),
         show_academy_tab: team.team_type == core::TeamType::Main
             || team.team_type == core::TeamType::U18,
-        newspaper_count: NewspaperCounter::count(simulator_data, team),
+        newspaper_count: NewspaperCounter::for_team_page(&state, simulator_data, team).await,
         items,
         incoming_transfers,
         outgoing_transfers,

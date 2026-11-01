@@ -380,7 +380,7 @@ pub async fn team_get_action(
         active_tab: "squad",
         show_finances_tab: team.team_type.is_own_team(),
         show_academy_tab: team.team_type == TeamType::Main || team.team_type == TeamType::U18,
-        newspaper_count: NewspaperCounter::count(simulator_data, team),
+        newspaper_count: NewspaperCounter::for_team_page(&state, simulator_data, team).await,
         players,
     })
 }

@@ -267,7 +267,7 @@ pub async fn team_academy_action(
         active_tab: "academy",
         show_finances_tab: team.team_type.is_own_team(),
         show_academy_tab: true,
-        newspaper_count: NewspaperCounter::count(simulator_data, team),
+        newspaper_count: NewspaperCounter::for_team_page(&state, simulator_data, team).await,
         academy_level: club.academy.level(),
         academy_tier: AcademyTier::from_level(club.academy.level()).value(),
         pathway_reputation: club.academy.pathway_reputation,

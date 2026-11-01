@@ -241,7 +241,7 @@ pub async fn team_tactics_get_action(
         active_tab: "tactics",
         show_finances_tab: team.team_type.is_own_team(),
         show_academy_tab: team.team_type == TeamType::Main || team.team_type == TeamType::U18,
-        newspaper_count: NewspaperCounter::count(simulator_data, team),
+        newspaper_count: NewspaperCounter::for_team_page(&state, simulator_data, team).await,
         formation_name,
         formation_players,
         lineup_slots,

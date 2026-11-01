@@ -451,6 +451,24 @@ impl NewspaperCounter {
             .map(|paper| paper.newsroom.issues.len())
             .unwrap_or(0)
     }
+
+    /// The managed club's tab badge is an unread count; every other team's
+    /// page keeps the public archive-count behaviour.
+    pub async fn for_team_page(state: &GameAppData, data: &SimulatorData, team: &Team) -> usize {
+        if *state.manager_team_id.read().await != Some(team.id) {
+            return Self::count(data, team);
+        }
+        let latest = PressTeam::covering(data, team)
+            .and_then(|paper| paper.newsroom.latest())
+            .map(|issue| issue.number)
+            .unwrap_or(0);
+        let last_read = state
+            .manager_career_store
+            .load_snapshot(team.id)
+            .map(|snapshot| snapshot.last_read_newspaper_issue)
+            .unwrap_or(0);
+        latest.saturating_sub(last_read) as usize
+    }
 }
 
 /// Turns a side's stored editions into pages a reader can look at:
