@@ -103,6 +103,7 @@ export function OpenFootballPitch({
       viewer.MatchViewer.setHostTime(0);
 
       let previousSnapshotTime = 0;
+      let previousHostTime = 0;
       let previousBallTime = 0;
       const previousPlayerTimes = new Map<number, number>();
       const previousPlayerPositions = new Map<number, { team: number; x: number; y: number; moment: number }>();
@@ -186,8 +187,12 @@ export function OpenFootballPitch({
           const liveStates = attitudeTimeline.apply(states);
           if (ball.length || Object.keys(players).length || goals.length || events.length || Object.keys(liveStates).length) {
             viewer.MatchViewer.pushRecording(JSON.stringify({ ball, players, goals, events, states: liveStates }));
-            const latestSnapshot = snapshots[snapshots.length - 1];
-            if (latestSnapshot) viewer.MatchViewer.setHostTime(openFootballTimestamp(latestSnapshot.moment, setup.totalMoments));
+            // Use the newest accepted snapshot, not the raw batch tail. Delayed
+            // or reordered polls must never move the viewer's playback ceiling back.
+            if (previousSnapshotTime > previousHostTime) {
+              viewer.MatchViewer.setHostTime(previousSnapshotTime);
+              previousHostTime = previousSnapshotTime;
+            }
           }
         },
         setPlaying(value) { viewer.MatchViewer.setPlaying(value); },
