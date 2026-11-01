@@ -24,8 +24,11 @@ export function formationLayout(
       const dx = x - bx0, dy = y - by0, d = Math.hypot(dx, dy), max = 9;
       if (d > max) { x = bx0 + (dx / d) * max; y = by0 + (dy / d) * max; }
     }
-    x += (hash01(s.moment, p.id, 5) - 0.5) * 1.2;
-    y += (hash01(s.moment, p.id, 6) - 0.5) * 1.2;
+    // Keep a tiny player-specific offset for readable spacing, but never
+    // re-roll it per engine moment: time-varying jitter made stationary
+    // players visibly twitch while the viewer interpolated between frames.
+    x += (hash01(p.id, p.team, 5) - 0.5) * 1.2;
+    y += (hash01(p.id, p.team, 6) - 0.5) * 1.2;
     pos.set(p.id, [clamp(x, 1, 99), clamp(y, 2, 98)]);
   }
 

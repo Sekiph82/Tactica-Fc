@@ -72,6 +72,16 @@ describe('matchmotor', () => {
     }
   });
 
+  it('keeps idle player layout points stable across engine moments to avoid visual jitter', () => {
+    const sim = new MatchSim(team(clubs[0]), team(clubs[1]), { commentary: false }, new Rng(17));
+    const snapshot = sim.pitch();
+    const first = formationLayout({ ...snapshot, moment: 1 });
+    const later = formationLayout({ ...snapshot, moment: 400 });
+
+    expect([...later.pos.entries()]).toEqual([...first.pos.entries()]);
+    expect(later.ball).toEqual(first.ball);
+  });
+
   it('back-pressures the live simulation when a visual action is waiting to be shown', () => {
     expect(hasVisualQueueCapacity(0)).toBe(true);
     expect(hasVisualQueueCapacity(1)).toBe(false);
