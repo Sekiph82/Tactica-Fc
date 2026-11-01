@@ -438,7 +438,7 @@ export class MatchSim {
     this.keeperBallPoint = this.opts.recordVisualEvents ? this.visualPositions(zone, T.idx, keeper.p.id).ball : null;
   }
 
-  private visualAction(kind: MatchVisualAction['kind'], team: number, actor: SP, fromZone: number, toZone: number, outcome: string, target?: SP | null, to?: [number, number], ballFrom?: [number, number]): MatchVisualAction | undefined {
+  private visualAction(kind: MatchVisualAction['kind'], team: number, actor: SP, fromZone: number, toZone: number, outcome: string, target?: SP | null, to?: [number, number], ballFrom?: [number, number], deferRecording = false): MatchVisualAction | undefined {
     if (!this.opts.recordVisualEvents) return undefined;
     const point = (zone: number): [number, number] => [zoneX(Math.floor(zone / ZL)), zoneY(zone % ZL)];
     const fromPoss = kind === 'turnover' || kind === 'deflection' || kind === 'looseBall' ? 1 - team
@@ -470,7 +470,7 @@ export class MatchSim {
       ballTo: to ?? after.ball ?? (eventTarget ? playerPoint(after, eventTarget.p.id) : undefined) ?? point(toZone),
       outcome,
     };
-    this.visualTimeline.push(action);
+    if (!deferRecording) this.visualTimeline.push(action);
     return action;
   }
 
@@ -742,9 +742,8 @@ export class MatchSim {
       this.rate(s, trb > rb ? 0.025 : 0.008);
       this.zone = tz;
       const cutbackShooter = cutback ? this.pick(T.zAtt[tz], (x) => Math.sqrt(this.finQ(x)), s) : null;
-      const passAction = this.visualAction('pass', T.idx, s, fromZone, tz, 'complete', cutbackShooter);
+      const passAction = this.visualAction('pass', T.idx, s, fromZone, tz, 'complete', cutbackShooter, undefined, undefined, !cutback);
       if (!cutback && passAction) {
-        this.visualTimeline.pop();
         this.pendingVisualPass = passAction;
       }
       this.lastPasser = s;
