@@ -15,7 +15,7 @@ import { Bar, ClubLink, Crest, Panel, Pct, PlayerLink, posStr, Rating, Tabs } fr
 import { useGame, useNav } from '../core';
 import { commentaryText } from '../commentary';
 import { Head } from './common';
-import { Pitch2D, cornerFrames, highlightFrames, incidentFrames, lastDitchFrames, offsideFrames, shootoutFrames, shootoutIdle, type ShootoutTally, type Snap } from '../Pitch2D';
+import { Pitch2D, cornerFrames, highlightFrames, incidentFrames, lastDitchFrames, offsideFrames, shootoutFrames, type Snap } from '../Pitch2D';
 import { LeagueTable, LeagueTables } from './Competitions';
 import { leagueRows } from '../../game/competitions';
 import { TacticEditor } from './Tactics';
@@ -85,7 +85,7 @@ export function MatchScreen({ id }: { id: number }) {
   // online: udeholdet i en kamp mod en anden manager følger kampen live
   if (!f.result && g.pendingFixture === id && g.humans && f.away === g.userClub && isHumanClub(f.home) && !isBotClub(f.home) && session()) return <FollowMatch id={id} />;
   if (phase === 'pre') return <PreMatch id={id} onPlay={() => setPhase('live')} onQuick={() => { const rep = quickReport(); if (rep) { act({ t: 'matchResult', fixture: f.id, rep }); nav({ name: 'report', id: f.id }); } }} />;
-  return <LiveMatch id={id} />;
+  return <LiveMatch id={id} onViewerRetry={() => setPhase('pre')} />;
 }
 
 function PreMatch({ id, onPlay, onQuick }: { id: number; onPlay: () => void; onQuick: () => void }) {
@@ -359,7 +359,7 @@ function startH2hBackground(id: number) {
   }, 250);
 }
 
-function LiveMatch({ id }: { id: number }) {
+function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => void }) {
   const g = useGame()!;
   const { nav } = useNav();
   const f = g.fixtures[id];
@@ -590,7 +590,7 @@ function LiveMatch({ id }: { id: number }) {
       // Do not start the shared kickoff clock until the match presentation is
       // ready. Otherwise a slow WASM load can advance the authoritative match
       // before the viewer has displayed its opening frame.
-      if (!viewerReady && !viewerFailed) { force((x) => x + 1); return; }
+      if (!viewerReady) { force((x) => x + 1); return; }
       if (s.phase === 'wait' && s.awayReady) { s.phase = 'countdown'; s.startAt = now + 4000; }
       if (s.phase === 'countdown' && now >= s.startAt) s.phase = 'play';
       if (s.phase === 'half' && (now >= s.halfEnd || (s.awayTalked && talkDone(id, 'half')))) { s.phase = 'play'; setTab(L.prevTab ?? 'commentary'); }
@@ -608,7 +608,7 @@ function LiveMatch({ id }: { id: number }) {
 
   useEffect(() => {
     if (h2h) return; // fast tempo – styres ovenfor
-    if (paused || report || hl || (!viewerReady && !viewerFailed)) return;
+    if (paused || report || hl || !viewerReady) return;
     const useViewer = !!viewerBridge && viewerReady && !viewerFailed;
     const ms = useViewer
       ? Math.max(30, Math.round(505_340 / sim.totalMoments / speed))
@@ -688,10 +688,8 @@ function LiveMatch({ id }: { id: number }) {
   // straffesparkskonkurrencen: sparket, der afspilles, tæller først, når bolden er sparket
   const soKicks = sim.shootout ? sim.shootout.kicks.slice(0, sim.shootout.kicks.length - (hl?.label === 'hl.k.shootout' && hl.i < hl.frames.length - 1 ? 1 : 0)) : null;
   const soScore = soKicks ? [0, 1].map((tm) => soKicks.filter((k) => k.t === tm && k.outcome === 'goal').length) : null;
-  const soTally: ShootoutTally | undefined = soKicks ? { names: [home, away], kicks: [soKicks.filter((k) => k.t === 0).map((k) => k.outcome), soKicks.filter((k) => k.t === 1).map((k) => k.outcome)] } : undefined;
   const minuteLabel = minute + (soScore ? ` (${t('fix.pens')}\u00a0${soScore[0]}\u2011${soScore[1]})` : '');
-  const viewMinute = visualFrame ? `${visualFrame.action.minute}'` : minute;
-  const viewMinuteLabel = viewMinute + (soScore ? ` (${t('fix.pens')}\u00a0${soScore[0]}\u2011${soScore[1]})` : '');
+  const viewMinuteLabel = (visualFrame ? `${visualFrame.action.minute}'` : minute) + (soScore ? ` (${t('fix.pens')}\u00a0${soScore[0]}\u2011${soScore[1]})` : '');
   const colors = teamColors(f.home, f.away, me);
   // et mål vises først på resultattavlen, når højdepunktet når frem til målet
   const spoil = hl && hl.outcome === 'goal' && hl.label !== 'hl.k.shootout' && hl.i < hl.frames.length - 1 ? hl.team : -1;
@@ -777,18 +775,13 @@ function LiveMatch({ id }: { id: number }) {
             <OpenFootballPitch id={id} fixture={f} game={g} sim={sim} speed={openFootballPlaybackSpeed(speed, h2h ? { halfMinutes: g.options.h2hHalfMinutes ?? 3, homeSpeed: hs.homeSpeed, awaySpeed: hs.awaySpeed } : undefined)} playing={!paused && !report && viewerReady && !viewerFailed && (!h2h || hs.phase === 'play')}
               onBridge={(bridge) => { L.viewer = bridge ?? undefined; setViewerBridge(bridge); }} onReady={setViewerReady}
               onFailure={() => { L.viewer = undefined; setViewerBridge(null); setViewerReady(false); setViewerFailed(true); }} />
-            {(!viewerReady || viewerFailed) && <>
-              {hl ? (
-              <Pitch2D weather={weatherFor(f)} snap={hl.frames[hl.i]} me={me} colors={colors} minute={minute} stepMs={frameMs * 0.9}
-                banner={hl.texts[hl.i] ?? ''} bannerCls={(hl.i === hl.frames.length - 1 && hl.outcome === 'goal') || hl.flashes?.[hl.i] === t('hl.goal') ? 'goal' : ''}
-                flash={hl.flashes ? hl.flashes[hl.i] : hl.i === hl.frames.length - 1 && hl.outcome !== 'none' ? t(`hl.${hl.outcome}`) : undefined} shootout={soTally} />
-            ) : (
-              // mellem højdepunkterne: holdene i ro i deres formation
-              <Pitch2D weather={weatherFor(f)} snap={sim.shootout ? shootoutIdle(sim.pitch(), sim.shootout.kicks.length % 2) : { ...(visualFrame?.snap ?? sim.pitch()), shot: null }} me={me} colors={colors} minute={viewMinute} stepMs={Math.max(120, Math.round(600 / Math.sqrt(speed)))} action={visualFrame?.action}
-                banner={L.lines.at(-1)?.text ?? ''} bannerCls={L.lines.at(-1)?.cls ?? ''} shootout={soTally} />
-              )}
-              {hl && <div className="p2d-replay">{t(hl.label ?? ('corner' in hl.frames[0] ? 'hl.corner' : 'hl.chance'))}</div>}
-            </>}
+            {!viewerReady && <div className="match-viewer-status" role="status" aria-live="polite">
+              <div className="match-viewer-status-card">
+                <strong>{viewerFailed ? t('match.viewerFailed') : t('match.viewerLoading')}</strong>
+                <span>{viewerFailed ? t('match.viewerRetryHint') : t('match.viewerKickoffWait')}</span>
+                {viewerFailed && <button className="primary" onClick={onViewerRetry}>{t('match.viewerRetry')}</button>}
+              </div>
+            </div>}
           </div>
           <div className="match-actionbar">
             <strong>{L.lines.at(-1)?.text ?? g.clubs[f.home]?.name}</strong>
