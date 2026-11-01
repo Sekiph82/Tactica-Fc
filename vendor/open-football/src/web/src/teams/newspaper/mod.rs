@@ -377,10 +377,25 @@ pub async fn team_newspaper_action(
             .flat_map(|continent| &continent.countries)
             .flat_map(|country| country.transfer_market.negotiations.values())
             .filter(|negotiation| {
-                negotiation.selling_club_id == team.club_id
+                let is_club_negotiation = matches!(
+                    negotiation.phase,
+                    core::transfers::deal::negotiation::NegotiationPhase::ClubNegotiation { .. }
+                );
+                let can_accept_or_reject_incoming =
+                    negotiation.selling_club_id == team.club_id
+                        && matches!(
+                            negotiation.status,
+                            core::transfers::deal::negotiation::NegotiationStatus::Pending
+                                | core::transfers::deal::negotiation::NegotiationStatus::Countered
+                        );
+                let can_accept_counter = negotiation.buying_club_id == team.club_id
+                    && matches!(
+                        negotiation.status,
+                        core::transfers::deal::negotiation::NegotiationStatus::Countered
+                    );
+                is_club_negotiation
                     && negotiation.manager_decision.is_none()
-                    && matches!(negotiation.phase, core::transfers::deal::negotiation::NegotiationPhase::ClubNegotiation { .. })
-                    && matches!(negotiation.status, core::transfers::deal::negotiation::NegotiationStatus::Pending | core::transfers::deal::negotiation::NegotiationStatus::Countered)
+                    && (can_accept_or_reject_incoming || can_accept_counter)
             })
             .count()
     } else { 0 };
