@@ -1,36 +1,39 @@
 # TACTICA FC: Menajer kariyerine başlama
 
-## Kulüp seç ve kontrolü al
+## Oyunu aç
 
-1. Oyunu `http://localhost:5184/tr` adresinde aç.
-2. Ülke ve lig sayfalarından yönetmek istediğin kulübün **A takımı** sayfasına git.
-3. **Menajer kariyeri** panelinde **Bu takımı yönet** seçeneğine bas. Seçim başarılı olunca aynı panelde yönettiğin takım görünür.
-4. Ana sayfaya dönünce açılış ekranının üst kısmındaki kariyer panelinden kadro/antrenman, taktik/ilk 11, fikstür/maç tekrarı ve transfer sayfalarına doğrudan gidebilirsin.
+Proje klasöründeki PowerShell'de çalıştır:
 
-## Güncel kodu çalıştır
+```powershell
+npm run dev
+```
 
-Kaynak kod değiştikten sonra eski sunucu aynı PowerShell penceresinde çalışıyorsa
-önce o pencerede `Ctrl+C` ile durdur, ardından proje klasöründe `npm run dev`
-komutunu yeniden çalıştır. Başlatıcı 5184 portu doluysa süreci ve PID'yi bildirir;
-hiçbir süreci kendiliğinden kapatmaz. Tarayıcıyı otomatik açmaz; adresi kendin aç.
+Sonra `http://127.0.0.1:5184/tactica-fc/` adresini aç. Port doluysa çalışan eski TACTICA penceresinde `Ctrl+C` ile durdurup yeniden başlat. TACTICA web kariyeri Open Football sunucusunu başlatmayı gerektirmez.
 
-## İlk 11 ve taktik
+## Kariyer oluştur ve takımını seç
 
-- Takım panelindeki **Taktikler ve diziliş** bağlantısından dizilişi ve oyun tarzını seç; baskı şiddeti ve savunma çizgisi ayarlarını da 0–10 arasında düzenle. Değerler otomatik kaydedilir ve maç motorunun oyuncu baskısı/konumlandırma kararlarına uygulanır.
-- Aynı sayfada 11 pozisyonun her biri için oyuncu ata. Her seçim otomatik kaydedilir ve sonraki resmi maçta o pozisyonda başlar; boş bıraktığın yerleri motor tamamlar.
-- Kadro sayfasındaki ilk 11'e sabitle düğmeleri, pozisyon atamasından bağımsız tercihlerini de kaydeder. Dizilişi değiştirince seçili pozisyonlar yeni düzene eşlenir.
-- Takım sayfasındaki **Takım antrenmanı** alanından takım odağını seç. Oyuncu bazlı antrenman planları **Antrenman** sekmesindedir.
+1. Açılış ekranında **Yeni oyun** seç.
+2. İstersen varsayılan modern veritabanını kullan. **CM 01/02** veritabanı seçeneği, kendi oyun kurulumundan kullanıcı tarafından sağlanan veriyi içe aktarmak içindir; ISO veya patch çalıştırılmaz.
+3. Menajer adını yaz, oynanacak ülkeleri işaretle ve lig seçimlerini yap.
+4. Lig ve kulüp listesinden yönetmek istediğin A takımını seçip kariyeri başlat.
+5. Kaydedilmiş kariyere dönmek için açılış ekranındaki **Oyunu yükle** bölümünü kullan. Oyun içinden de **Oyunu kaydet** ile kaydedebilir veya açılış ekranındaki **Kayıt dosyasını içe aktar** seçeneğini kullanabilirsin.
+
+## Kadro, taktik ve antrenman
+
+- **Kadro** ekranında oyuncuları, kondisyonu ve gelişimi incele; ilk 11 tercihlerini düzenle.
+- **Taktikler** ekranında dizilişi, oyuncu/pozisyon atamalarını, oyun tarzını ve takım talimatlarını belirle. Maç sırasında taktik düzenleyicisiyle değişiklik yapabilirsin.
+- **Antrenman** ekranında takım haftalık odağını, antrenörlerin çalışma alanlarını ve oyuncuların bireysel gelişim planlarını seç. Bu tercihler kariyerin antrenman ilerlemesine uygulanır.
 
 ## Transfer
 
-**Transferler** sekmesinden takım oyuncusunu transfer listesine koy veya listeden çıkar. Başka bir kulübün satışa/borçla kiralamaya açtığı oyuncuya transfer veya 3, 6, 12 aylık kiralama teklifi verebilirsin. Teklif ve gelen teklif yanıtları, oyunun normal günlük transfer çözümlemesinde ilerler.
+**Transferler** ekranında oyuncu ara, transfer/kiralama tekliflerini yönet ve kulübündeki oyuncuları transfer listesine koy veya listeden çıkar. Teklifler bütçe, sözleşme ve transfer dönemi kurallarına göre kariyer günleri ilerledikçe çözülür; gelen yanıtlar gelen kutusunda görünür.
 
-## Maçı oynat ve tekrarını izle
+## Maçı baştan sona izle
 
-1. **Fikstür ve maçları izle** bağlantısını aç.
-2. Maç öncesi diziliş, oyun tarzı, baskı şiddeti ve savunma çizgisini ayarla; **Taktiği kaydet** veya ilerleme düğmesine bas. İlerlerken bekleyen taktik değişiklikleri otomatik kaydedilir.
-3. **Bir gün ilerle** ile bir gün işle veya **Sonraki maça ilerle** ile sıradaki fikstür tarihine git.
-4. İlerleme sırasında fikstür sayfasındaki **Canlı maç kumandası** bölümünde seçtiğin takımın maçını ve sahadaki oyuncuları izle. Takım talimatı gönder; oyuncu değişikliğinde sahadaki oyuncuyu ve maçın gerçek yedek listesinden girecek oyuncuyu seç. Değişiklik, top durmuş ve kurallar izin vermiş olduğunda maç motorunca uygulanır.
-5. Sonuç ve kayıt hazır olunca skorun yanındaki **Maçı izle →** bağlantısıyla Open Football maç görüntüleyicisini aç.
+1. Üstteki **Sonraki maç** veya **Devam et** düğmesiyle kendi takımının sıradaki maç gününe gel.
+2. Maç gününde fikstürden kendi maçını açıp **Maçı başlat** seç. Maç, TACTICA'nın TypeScript motorunda başlama vuruşundan itibaren oynanır; gol öncesi simülasyon atlanmaz.
+3. Sahadaki pozisyon akışı gömülü Open Football görüntüleyicisinde gösterilir. TACTICA motorunun ürettiği oyuncu/top konumları ve aksiyonlar görüntüleyiciye gönderilir. Skor ve maç sonucunu TACTICA belirler.
+4. Hız ve duraklatma kontrollerini kullan. **Taktikler** ve **Oyuncu değişiklikleri** alanlarından maç sırasında karar ver; kabul edilen değişiklikler gerçek maç simülasyonuna uygulanır.
+5. Maç bitince raporu incele. Sonucu fikstürden tekrar açabilirsin.
 
-Günlük dünya, transfer ve antrenman işlemleri tüm ülkelerde ilerler; maç motoru yalnızca seçtiğin simülasyon liglerinin fikstürlerini oynatır. Menajer fikstüründeki gün ilerletme, yönettiğin takımın ligini, yerel kupasını ve katıldığı kıta müsabakalarını kapsar. Canlı tempolu talimatlar koç kararına bağlanır. Elle oyuncu değişikliği gerçek maç sahası ve yedek kulübesi üzerinden, durmuş top, oyuncu değişikliği hakkı ve pencere kurallarıyla yürütülür; sonuçta aynı motorun değişiklik ve tekrar kayıt yolu kullanılır. Maç tamamlanınca skorun yanındaki bağlantı kaydedilmiş maçı Open Football görüntüleyicisinde açar. Kariyer seçimi sunucu yeniden başlatıldığında korunur; tam dünya takvimi ve sonuçları hâlâ sunucu belleğindedir ve geliştirme listesinde açıktır.
+Maç sonucunu görüntüleyici üretmez; aynı maç motoru maç raporunu, skor tablosunu ve tekrar verisini oluşturur. Görüntü akışındaki aksiyonlar deterministik simülasyon olaylarına bağlıdır.
