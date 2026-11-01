@@ -14,6 +14,7 @@ export interface OpenFootballBridge {
   setPlaying(playing: boolean): void;
   setSpeed(speed: number): void;
   setDuration(durationMs: number): void;
+  setHostTime(timeMs: number): void;
 }
 
 type ViewerModule = {
@@ -24,6 +25,7 @@ type ViewerModule = {
     setPlaying: (playing: boolean) => void;
     setSpeed: (speed: number) => void;
     setDuration: (durationMs: number) => void;
+    setHostTime: (timeMs: number) => void;
   };
 };
 
@@ -70,6 +72,7 @@ export function OpenFootballPitch({
       const initial = makeInitialRecording(setup.initialSnapshot);
       const config = makeConfig(initial, setup, `#tactica-of-${id}`);
       viewer.MatchViewer.start(JSON.stringify(config));
+      viewer.MatchViewer.setHostTime(0);
 
       let previousSnapshotTime = 0;
       let previousBallTime = 0;
@@ -125,11 +128,14 @@ export function OpenFootballPitch({
           const liveStates = attitudeTimeline.apply(states);
           if (ball.length || Object.keys(players).length || goals.length || events.length || Object.keys(liveStates).length) {
             viewer.MatchViewer.pushRecording(JSON.stringify({ ball, players, goals, events, states: liveStates }));
+            const latestSnapshot = snapshots[snapshots.length - 1];
+            if (latestSnapshot) viewer.MatchViewer.setHostTime(openFootballTimestamp(latestSnapshot.moment, setup.totalMoments));
           }
         },
         setPlaying(value) { viewer.MatchViewer.setPlaying(value); },
         setSpeed(value) { viewer.MatchViewer.setSpeed(value); },
         setDuration(value) { viewer.MatchViewer.setDuration(value); },
+        setHostTime(value) { viewer.MatchViewer.setHostTime(value); },
       };
       bridgeRef.current = bridge;
       bridge.setSpeed(speed);
