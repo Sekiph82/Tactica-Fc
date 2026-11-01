@@ -82,6 +82,29 @@ describe('matchmotor', () => {
     expect(later.ball).toEqual(first.ball);
   });
 
+  it('streams persistent player centers with bounded movement and leaves the match result unchanged', () => {
+    const sim = new MatchSim(team(clubs[0]), team(clubs[1]), { commentary: false }, new Rng(8128));
+    let previous = new Map(sim.pitch().players.map((player) => [player.id, [player.x!, player.y!] as [number, number]]));
+    let checked = 0;
+    while (checked < 80 && sim.step()) {
+      const snapshot = sim.pitch();
+      const layout = formationLayout(snapshot);
+      for (const player of snapshot.players) {
+        const current = [player.x!, player.y!] as [number, number];
+        expect(layout.pos.get(player.id)).toEqual(current);
+        const before = previous.get(player.id);
+        if (before) {
+          const movement = Math.hypot(current[0] - before[0], current[1] - before[1]);
+          const frameScale = 240 / sim.totalMoments;
+          expect(movement).toBeLessThanOrEqual((player.gk ? 5.5 : 10.5) * frameScale + 1e-9);
+        }
+        previous.set(player.id, current);
+      }
+      checked++;
+    }
+    expect(checked).toBe(80);
+  });
+
   it('back-pressures the live simulation when a visual action is waiting to be shown', () => {
     expect(hasVisualQueueCapacity(0)).toBe(true);
     expect(hasVisualQueueCapacity(1)).toBe(false);
@@ -93,12 +116,15 @@ describe('matchmotor', () => {
   it('records pass endpoints at deterministic historical player positions', () => {
     const sim = new MatchSim(team(clubs[0]), team(clubs[1]), { commentary: false, recordVisualEvents: true }, new Rng(90210));
     let pass = undefined as (typeof sim.visualTimeline)[number] | undefined;
-    while (!pass && sim.step()) pass = sim.visualTimeline.find((a) => a.kind === 'pass' && a.outcome === 'complete' && a.target);
+    let before = sim.pitch();
+    while (!pass && sim.step()) {
+      pass = sim.visualTimeline.find((a) => a.kind === 'pass' && a.outcome === 'complete' && a.target);
+      if (!pass) before = sim.pitch();
+    }
     expect(pass).toBeDefined();
     const action = pass!;
-    const snap = sim.pitch();
-    const from = formationLayout({ ...snap, zone: action.fromZone, poss: action.fromPoss, holder: action.actor, moment: action.moment });
-    const to = formationLayout({ ...snap, zone: action.toZone, poss: action.toPoss, holder: action.target!, moment: action.moment });
+    const from = formationLayout({ ...before, zone: action.fromZone, poss: action.fromPoss, holder: action.actor, moment: action.moment });
+    const to = formationLayout({ ...before, zone: action.toZone, poss: action.toPoss, holder: action.target!, moment: action.moment });
     expect(action.from).toEqual(playerPoint(from, action.actor));
     expect(action.to).toEqual(playerPoint(to, action.target!));
     expect(action.ballFrom).toEqual(from.ball);

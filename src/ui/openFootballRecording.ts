@@ -15,54 +15,6 @@ export interface OpenFootballActionRecording {
   states: Record<number, [number, string][]>;
 }
 
-export type OpenFootballPlayerPositions = Map<number, Map<number, [number, number]>>;
-
-/**
- * Resolve the players whose action-time destination is explicitly recorded by
- * the match engine. Formation snapshots still position the whole team; these
- * endpoints keep the receiver, runner, or tackler on the engine-selected point
- * for the same timestamp as the ball action.
- */
-export function toOpenFootballPlayerPositions(
-  actions: readonly MatchVisualAction[],
-  totalMoments: number,
-): OpenFootballPlayerPositions {
-  const positions: OpenFootballPlayerPositions = new Map();
-  const set = (moment: number, playerId: number | undefined, point: [number, number]) => {
-    if (playerId === undefined) return;
-    const atMoment = positions.get(moment) ?? new Map<number, [number, number]>();
-    atMoment.set(playerId, point);
-    positions.set(moment, atMoment);
-  };
-
-  for (const action of actions) {
-    const moment = Math.max(0, Math.min(totalMoments, action.moment));
-    switch (action.kind) {
-      case 'pass':
-      case 'longBall':
-      case 'throughBall':
-      case 'cross':
-      case 'rebound':
-      case 'keeper':
-        // For these actions, the engine's `to` field is the selected target's
-        // center (shot goal/ball coordinates are intentionally excluded).
-        if (action.target !== undefined) set(moment, action.target, action.to);
-        break;
-      case 'dribble':
-      case 'tackle':
-        // A completed carry or tackle records the acting player's resolved
-        // post-action center. The next formation sample then continues from it.
-        set(moment, action.actor, action.to);
-        break;
-      default:
-        // Shots and loose-ball contacts can end at ball/goal coordinates; the
-        // ordinary formation snapshot remains authoritative for player centers.
-        break;
-    }
-  }
-  return positions;
-}
-
 /**
  * The viewer appends live state tracks and cannot remove an already queued
  * transition. Reassert the latest attitude at any earlier pending reset so a

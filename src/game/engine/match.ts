@@ -130,6 +130,8 @@ export class MatchSim {
   zone = 7; // midten
   /** Til 2D-visningen: spilleren med bolden (påvirker ikke kampen) */
   holder = 0;
+  /** Stable visual-only player centers, advanced once per engine moment. */
+  private playerCenters = new Map<number, [number, number]>();
   private breakaway: SP | null = null;
   /** hvordan gennembruddet opstod (kontra / gennembrudsaflevering) – vises i 2D */
   private breakawayOrigin = '';
@@ -179,6 +181,7 @@ export class MatchSim {
     const tempo = (this.teams[0].ti.tempo + this.teams[1].ti.tempo) / 2;
     this.totalMoments = Math.round(240 * (1 + 0.07 * (tempo - 1)));
     this.poss = r.chance(0.5) ? 0 : 1;
+    this.updateVisualPositions(true);
     if (opts.weather && opts.weather !== 'clear' && opts.weather !== 'cloudy') this.line(`weather-${opts.weather}`);
     this.line('kickoff', this.teams[this.poss].on[10]);
   }
@@ -354,14 +357,48 @@ export class MatchSim {
     this.commentary.push({ m: this.minute, k, a: a ? name(a.p) : undefined, b: b ? name(b.p) : undefined, t: a ? a.team : undefined, hi });
   }
 
+  private pitchPlayers(includeCenters = false) {
+    return this.teams.flatMap((t) => t.on.filter((sp) => !sp.off).map((sp) => {
+      const center = includeCenters ? this.playerCenters.get(sp.p.id) : undefined;
+      return {
+        id: sp.p.id, team: t.idx, num: sp.slot + 1, gk: t.tactic.slots[sp.slot]?.pos === 'GK',
+        ax: sp.ax, ay: sp.ay, dx: sp.dx, dy: sp.dy, name: sp.p.last,
+        ...(center ? { x: center[0], y: center[1] } : {}),
+      };
+    }));
+  }
+
+  /** Deterministic visual movement; capped per engine frame and independent of match RNG. */
+  private updateVisualPositions(initial = false) {
+    const players = this.pitchPlayers();
+    const targets = formationLayout({
+      zone: this.zone, poss: this.poss, holder: this.holder, moment: this.moment, players,
+    }).pos;
+    const active = new Set<number>();
+    for (const p of players) {
+      active.add(p.id);
+      const target = targets.get(p.id);
+      if (!target) continue;
+      const current = this.playerCenters.get(p.id);
+      if (!current || initial) {
+        this.playerCenters.set(p.id, target);
+        continue;
+      }
+      const dx = target[0] - current[0], dy = target[1] - current[1];
+      const distance = Math.hypot(dx, dy);
+      const frameScale = 240 / Math.max(1, this.totalMoments);
+      const maxStep = (p.gk ? 5.5 : 10.5) * frameScale;
+      const scale = distance > maxStep ? maxStep / distance : 1;
+      this.playerCenters.set(p.id, [current[0] + dx * scale, current[1] + dy * scale]);
+    }
+    for (const id of this.playerCenters.keys()) if (!active.has(id)) this.playerCenters.delete(id);
+  }
+
   /** Build the same deterministic open-play layout the renderer uses, without consuming simulation RNG. */
   private visualPositions(zone: number, poss: number, holder: number) {
     return formationLayout({
       zone, poss, holder, moment: this.moment,
-      players: this.teams.flatMap((t) => t.on.filter((sp) => !sp.off).map((sp) => ({
-        id: sp.p.id, team: t.idx, num: sp.slot + 1, gk: t.tactic.slots[sp.slot]?.pos === 'GK',
-        ax: sp.ax, ay: sp.ay, dx: sp.dx, dy: sp.dy, name: sp.p.last,
-      }))),
+      players: this.pitchPlayers(true),
     });
   }
 
@@ -467,6 +504,7 @@ export class MatchSim {
     this.tickFatigue();
     if (i % 12 === 0) this.aiManage();
     this.play();
+    this.updateVisualPositions();
     this.moment++;
     // momentum pr. 5 minutter
     const bucket = Math.floor((minute - 1) / 5);
@@ -1375,10 +1413,7 @@ export class MatchSim {
       holder: this.holder,
       moment: this.moment,
       shot: last && last.m === this.minute && this.lastShotMoment === this.moment - 1 ? { team: last.t, outcome: last.post ? 'post' : last.outcome, zone: last.zone } : null,
-      players: this.teams.flatMap((t) => t.on.filter((sp) => !sp.off).map((sp) => ({
-        id: sp.p.id, team: t.idx, num: sp.slot + 1, gk: t.tactic.slots[sp.slot]?.pos === 'GK',
-        ax: sp.ax, ay: sp.ay, dx: sp.dx, dy: sp.dy, name: sp.p.last,
-      }))),
+      players: this.pitchPlayers(true),
     };
   }
 

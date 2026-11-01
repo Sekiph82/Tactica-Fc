@@ -11,7 +11,13 @@ export function formationLayout(
 ): { pos: Map<number, [number, number]>; ball: [number, number]; holder?: MatchPitchPlayer } {
   const [zx, zy] = zonePoint(s.zone);
   const pos = new Map<number, [number, number]>();
+  const fixed = new Set<number>();
   for (const p of s.players) {
+    if (Number.isFinite(p.x) && Number.isFinite(p.y)) {
+      pos.set(p.id, [clamp(p.x!, 1, 99), clamp(p.y!, 2, 98)]);
+      fixed.add(p.id);
+      continue;
+    }
     const prog = p.team === 0 ? zx / 100 : 1 - zx / 100;
     const attacking = p.team === s.poss;
     const f = attacking ? 0.25 + 0.6 * prog : 0.1 * prog;
@@ -46,8 +52,9 @@ export function formationLayout(
   let ball: [number, number] = [zx, zy];
   if (holder) {
     const [hx, hy] = pos.get(holder.id)!;
-    const nx = clamp(hx + (zx - hx) * 0.5, 1, 99), ny = clamp(hy + (zy - hy) * 0.5, 2, 98);
-    pos.set(holder.id, [nx, ny]);
+    const nx = fixed.has(holder.id) ? hx : clamp(hx + (zx - hx) * 0.5, 1, 99);
+    const ny = fixed.has(holder.id) ? hy : clamp(hy + (zy - hy) * 0.5, 2, 98);
+    if (!fixed.has(holder.id)) pos.set(holder.id, [nx, ny]);
     const dir = holder.team === 0 ? 1 : -1;
     ball = [clamp(nx + dir * 1.4, 1, 99), ny + 0.6];
     let nearest: { id: number; d: number } | null = null;
@@ -59,7 +66,7 @@ export function formationLayout(
     }
     if (nearest) {
       const [x, y] = pos.get(nearest.id)!;
-      pos.set(nearest.id, [x + (nx + dir * 3 - x) * 0.55, y + (ny - y) * 0.55]);
+      if (!fixed.has(nearest.id)) pos.set(nearest.id, [x + (nx + dir * 3 - x) * 0.55, y + (ny - y) * 0.55]);
     }
   }
 
@@ -71,8 +78,8 @@ export function formationLayout(
         const dx = b[0] - a[0], dy = (b[1] - a[1]) * 0.68, d = Math.hypot(dx, dy);
         if (d > 0 && d < gap) {
           const push = (gap - d) / 2 / d;
-          if (ids[i] !== holder?.id) pos.set(ids[i], [a[0] - dx * push, a[1] - (dy / 0.68) * push]);
-          if (ids[j] !== holder?.id) pos.set(ids[j], [b[0] + dx * push, b[1] + (dy / 0.68) * push]);
+          if (!fixed.has(ids[i]) && ids[i] !== holder?.id) pos.set(ids[i], [a[0] - dx * push, a[1] - (dy / 0.68) * push]);
+          if (!fixed.has(ids[j]) && ids[j] !== holder?.id) pos.set(ids[j], [b[0] + dx * push, b[1] + (dy / 0.68) * push]);
         }
       }
     }

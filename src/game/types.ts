@@ -699,6 +699,9 @@ export interface MatchPitchPlayer {
   dx: number;
   dy: number;
   name: string;
+  /** Optional deterministic in-match center, in 0–100 pitch space. */
+  x?: number;
+  y?: number;
 }
 
 /** Read-only rendering snapshot; the UI consumes it without importing simulation internals. */
