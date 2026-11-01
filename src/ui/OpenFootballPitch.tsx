@@ -58,26 +58,33 @@ export function OpenFootballPitch({
 
   useEffect(() => {
     let cancelled = false;
-    let settled = false;
+    let ready = false;
+    let failureReported = false;
+    let timedOut = false;
+    let viewerStarted = false;
     let readyTimeout: number | undefined;
     let bridge: OpenFootballBridge | null = null;
     const attitudeTimeline = new OpenFootballStateTimeline();
     const progress = (event: Event) => {
-      if ((event as CustomEvent<{ phase?: string }>).detail?.phase !== 'ready' || cancelled || settled) return;
-      settled = true;
+      if ((event as CustomEvent<{ phase?: string }>).detail?.phase !== 'ready' || cancelled || ready) return;
+      ready = true;
       if (readyTimeout !== undefined) window.clearTimeout(readyTimeout);
       setReady(true);
       onReady(true);
     };
     const fail = (error: unknown) => {
-      if (cancelled || settled) return;
-      settled = true;
+      if (cancelled || ready || failureReported) return;
+      failureReported = true;
       if (readyTimeout !== undefined) window.clearTimeout(readyTimeout);
       console.error('Open Football viewer failed to become ready', error);
       onFailure();
     };
     document.addEventListener('match-viewer-progress', progress);
     readyTimeout = window.setTimeout(() => {
+      // Do not start Bevy after its caller has already been told startup timed
+      // out. If Bevy has started, keep listening: a slow device can still
+      // finish later and recover the waiting match without a second app.
+      timedOut = !viewerStarted;
       fail(new Error(`Viewer startup exceeded ${VIEWER_READY_TIMEOUT_MS} ms`));
     }, VIEWER_READY_TIMEOUT_MS);
     const start = async () => {
@@ -85,12 +92,13 @@ export function OpenFootballPitch({
       const viewer = await import(/* @vite-ignore */ `${base}match_viewer.js`) as ViewerModule;
       const wasmUrl = new URL(`${base}match_viewer_bg.wasm`, document.baseURI);
       await viewer.default(wasmUrl);
-      if (cancelled || settled || !canvas.current) return;
+      if (cancelled || timedOut || !canvas.current) return;
 
       const initial = makeInitialRecording(setup.initialSnapshot);
       const config = makeConfig(initial, setup, `#tactica-of-${id}`);
       config.renderer = await preferredRenderer();
-      if (cancelled || settled || !canvas.current) return;
+      if (cancelled || timedOut || !canvas.current) return;
+      viewerStarted = true;
       viewer.MatchViewer.start(JSON.stringify(config));
       viewer.MatchViewer.setHostTime(0);
 

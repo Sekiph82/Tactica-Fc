@@ -1239,7 +1239,7 @@ export const en: Record<string, string> = {
 
   'match.played': 'Match already played', 'match.preview': 'Preview', 'match.yourXI': 'Your starting XI', 'match.quick': 'Simulate result',
   'match.kickoff': 'Kick off ▶', 'match.notToday': 'This match is not today.', 'match.ft': 'Full time', 'match.resume': 'Resume', 'match.pause': 'Pause',
-  'match.viewerLoading': 'Preparing the match view…', 'match.viewerKickoffWait': 'Kick-off waits until the viewer is ready.', 'match.viewerFailed': 'The match viewer could not start.', 'match.viewerRetryHint': 'The match clock has not advanced. Return to the preview and retry the viewer.', 'match.viewerRetry': 'Back to match preview',
+  'match.viewerLoading': 'Preparing the match view…', 'match.viewerKickoffWait': 'Kick-off waits until the viewer is ready.', 'match.viewerFailed': 'The match viewer is not ready yet.', 'match.viewerRetryHint': 'The match clock has not advanced. If the viewer finishes loading late, the match will continue here; otherwise return to the preview.', 'match.viewerRetry': 'Back to match preview',
   'match.toEnd': 'Skip to end', 'match.continue': 'Continue ›', 'match.commentary': 'Commentary', 'match.stats': 'Statistics', 'match.myTeam': 'My team',
   'match.camera.focus': 'Focus on ball', 'match.camera.full': 'Full pitch',
   'match.subsLeft': '{n} subs left', 'match.vidiprinter': 'Other matches', 'match.noOther': 'No other matches today', 'match.rating': 'Rating',
