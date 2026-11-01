@@ -896,6 +896,14 @@ pub async fn make_transfer_offer_action(
     let Some(seller_country) = sim.country_mut(seller_country_id) else {
         return StatusCode::NOT_FOUND;
     };
+    let previous_listing_statuses = seller_country
+        .transfer_market
+        .listings
+        .iter()
+        .enumerate()
+        .filter(|(_, listing)| listing.player_id == body.player_id)
+        .map(|(index, listing)| (index, listing.status.clone()))
+        .collect::<Vec<_>>();
     let Some(negotiation_id) = seller_country.transfer_market.start_negotiation(
         body.player_id,
         buyer_club_id,
@@ -924,7 +932,21 @@ pub async fn make_transfer_offer_action(
             negotiation.open_salary_at(body.annual_wage);
         }
     }
-    persist_manager_world(&state, sim)
+    let status = persist_manager_world(&state, sim);
+    if status != StatusCode::ACCEPTED {
+        if let Some(country) = sim.country_mut(seller_country_id) {
+            country
+                .transfer_market
+                .negotiations
+                .remove(&negotiation_id);
+            for (index, previous_status) in previous_listing_statuses {
+                if let Some(listing) = country.transfer_market.listings.get_mut(index) {
+                    listing.status = previous_status;
+                }
+            }
+        }
+    }
+    status
 }
 
 /// Let the manager respond to the engine's current negotiation stage.
