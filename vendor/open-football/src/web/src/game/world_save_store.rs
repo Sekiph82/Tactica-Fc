@@ -11,11 +11,11 @@ use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
 use serde_wincode::SerdeCompat;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use wincode::config::{Configuration, Deserialize as WincodeDeserialize};
+use wincode::config::{Configuration, DeserializeOwned as WincodeDeserializeOwned};
 use wincode::int_encoding::{LittleEndian, VarInt};
 use wincode::io::std_write::WriteAdapter;
 use wincode::len::BincodeLen;
@@ -26,9 +26,6 @@ const FILE_SUFFIX: &str = ".wincode.gz";
 const RETAIN_SNAPSHOTS: usize = 2;
 const MAX_WORLD_SAVE_BYTES: usize = 1_073_741_824;
 type SaveCodec = Configuration<true, MAX_WORLD_SAVE_BYTES, BincodeLen, LittleEndian, VarInt, u32>;
-const SAVE_CODEC: SaveCodec = Configuration::default()
-    .with_varint_encoding()
-    .with_preallocation_size_limit::<MAX_WORLD_SAVE_BYTES>();
 
 #[derive(Serialize)]
 struct WorldSaveRef<'a> {
@@ -85,13 +82,16 @@ impl WorldSaveStore {
         for path in candidates.into_iter().rev() {
             let decoded = File::open(&path).and_then(|file| {
                 let mut decoder = GzDecoder::new(BufReader::new(file));
-                let mut bytes = Vec::new();
-                decoder.read_to_end(&mut bytes)?;
-                <SerdeCompat<WorldSaveEnvelope> as WincodeDeserialize<'_, SaveCodec>>::deserialize(
-                    &bytes,
-                    SAVE_CODEC,
+                let envelope = <SerdeCompat<WorldSaveEnvelope> as WincodeDeserializeOwned<
+                    SaveCodec,
+                >>::deserialize_from(
+                    wincode::io::std_read::ReadAdapter::new(&mut decoder)
                 )
-                .map_err(io::Error::other)
+                .map_err(io::Error::other)?;
+                // Consume the gzip trailer so its checksum is validated, as
+                // it was when the decoded stream was first read into a Vec.
+                io::copy(&mut decoder, &mut io::sink())?;
+                Ok(envelope)
             });
             let Ok(envelope) = decoded else {
                 log::warn!("ignoring unreadable career world save: {}", path.display());
