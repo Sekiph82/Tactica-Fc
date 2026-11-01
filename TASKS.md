@@ -157,6 +157,8 @@ This file is the single source of truth for milestone status. Mark work complete
 
 ## TFC-M08: Career integration and saves — PARTIAL
 
+- [x] Make the assigned weekly training schedule affect daily condition recovery: rest recovers faster and high-load fitness training recovers more slowly; update Turkish, English, and Danish guidance. `npm exec tsc -- --noEmit` passed. Match-play balance and owner-visible career acceptance remain part of final QA.
+
 - [x] Existing game includes modern 2025/26 data, competitions, transfers, player development, finances, and IndexedDB-backed save/import/export code.
 - [x] Audit and implement versioned local/exported save snapshots with legacy-read support and atomic payload-plus-metadata records.
 - [x] Add compatibility coverage for legacy unwrapped saves, current versioned saves, malformed payloads, and unsupported future versions.

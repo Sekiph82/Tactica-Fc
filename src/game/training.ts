@@ -29,6 +29,13 @@ export const SCHEDULES: Schedule[] = [
 
 const SCHEDULE_MAP = new Map(SCHEDULES.map((s) => [s.key, s]));
 
+/** Daily recovery responds to the assigned training load: rest helps recovery, while a heavy load slows it. */
+export function conditionRecovery(p: Player): number {
+  const schedule = SCHEDULE_MAP.get(p.training) ?? SCHEDULES[0];
+  const loadFactor = 1.18 - schedule.load * 0.18;
+  return (4 + p.attrs[A.naturalFitness] / 4) * loadFactor;
+}
+
 export interface CoachingInfo {
   /** samlet træningskvalitet 0-1 */
   quality: number;

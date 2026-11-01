@@ -20,7 +20,7 @@ import { addNews, fixturesOn, gs, squad } from './state';
 import { counterPlan, type CounterPlan } from './aitactics';
 import { autoSelect, available, lineupComplete, newTactic, slotValue, validateTactic } from './tactics';
 import type { Fixture, MatchReport, NewsItem, Player, Tactic } from './types';
-import { monthlyDevelopment, monthlyTrainingReport, monthlyValues, weeklyDevelopment } from './training';
+import { conditionRecovery, monthlyDevelopment, monthlyTrainingReport, monthlyValues, weeklyDevelopment } from './training';
 import { aiLoanOptions, aiPursuits, aiBidsForListed, aiBosman, aiFillSquads, aiReleaseClauses, aiRenewals, aiTransferTick, contractReminders, processOffers, refreshShortlists, resolveAuctions, resolveSignings, weeklyTransferDigest, windowNews } from './transfers';
 import { afterAppearance } from './clauses';
 import { knowledgeAfterMatch, scoutDaily } from './scouting';
@@ -324,7 +324,7 @@ function newDay() {
         asOwner(p.club, () => addNews({ cat: 'injury', key: 'news.recovered', params: { player: pname(p) }, link: { kind: 'player', id: p.id } }));
       }
     }
-    if (p.condition < 100) p.condition = Math.min(100, p.condition + 4 + p.attrs[29] / 4);
+    if (p.condition < 100) p.condition = Math.min(100, p.condition + conditionRecovery(p));
     if (p.morale !== 13) p.morale += (13 - p.morale) * 0.02;
   }
   if (g.humans) { resolveAuctions(); resolveSignings(); resolveStaffBids(); }

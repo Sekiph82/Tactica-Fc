@@ -594,7 +594,7 @@ export const tr: Record<string, string> = {
   'train.f.sortPos': 'Sırala: mevki', 'train.f.sortName': 'Sırala: ad',
   'train.f.sortAge': 'Sırala: en genç önce', 'train.f.sortDev': 'Sırala: gelişim',
   'train.f.sortCond': 'Sırala: kondisyonu en düşük önce',
-  'train.explain': 'Genç oyuncular potansiyellerine doğru gelişir. İyi antrenörler, tesisler, forma süresi, kararlılık ve profesyonellik büyük fark yaratır. Antrenman odağı en çok hangi özelliklerin gelişeceğini belirler. 30 yaş üstündeki oyuncular fiziksel olarak geriler.',
+  'train.explain': 'Genç oyuncular potansiyellerine doğru gelişir. İyi antrenörler, tesisler, forma süresi, kararlılık ve profesyonellik büyük fark yaratır. Antrenman odağı en çok hangi özelliklerin gelişeceğini belirler; dinlenme kondisyon toparlanmasını artırırken ağır yük yavaşlatır. 30 yaş üstündeki oyuncular fiziksel olarak geriler.',
   'train.schedules': 'Programlar', 'train.restDesc': 'Dinlenme – kondisyonu yeniler',
   'train.general': 'Genel', 'train.goalkeeping': 'Kalecilik', 'train.defending': 'Savunma',
   'train.ballcontrol': 'Top kontrolü', 'train.attacking': 'Hücum', 'train.shooting': 'Şut',
