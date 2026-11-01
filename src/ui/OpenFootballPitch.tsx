@@ -117,13 +117,17 @@ export function OpenFootballPitch({
           // A step may resolve a pass and shot (or a cross and header) before
           // producing its single final snapshot. Spread those action paths
           // through that step so the viewer receives each real contact in order.
-          const actionWindows = actionMomentWindows(actions);
+          const orderedActions = actions
+            .map((action, index) => ({ action, index }))
+            .sort((left, right) => left.action.moment - right.action.moment || left.index - right.index)
+            .map(({ action }) => action);
+          const actionWindows = actionMomentWindows(orderedActions);
           const actionMoments = actionWindows.map((window) => window.event);
-          const actionEnds = new Set(actions.map((action) => action.moment + 1));
+          const actionEnds = new Set(orderedActions.map((action) => action.moment + 1));
           const ballSamples: { moment: number; point: [number, number] }[] = [];
           const playerSamples: { id: number; moment: number; point: [number, number] }[] = [];
           const movementStates: Record<number, [number, string][]> = {};
-          for (const [index, action] of actions.entries()) {
+          for (const [index, action] of orderedActions.entries()) {
             const window = actionWindows[index];
             const startMoment = window.start + 0.001;
             if (action.ballFrom) ballSamples.push({ moment: startMoment, point: point(action.ballFrom) });
@@ -180,7 +184,7 @@ export function OpenFootballPitch({
             ball.push([time, sample.point[0], sample.point[1], 0]);
             previousBallTime = time;
           }
-          const { events, states } = toOpenFootballRecordingEvents(actions, setup.totalMoments, actionMoments);
+          const { events, states } = toOpenFootballRecordingEvents(orderedActions, setup.totalMoments, actionMoments);
           for (const [playerId, entries] of Object.entries(movementStates)) {
             states[Number(playerId)] = [...entries, ...(states[Number(playerId)] ?? [])];
           }
