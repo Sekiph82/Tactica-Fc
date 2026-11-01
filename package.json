@@ -13,7 +13,7 @@
     "desktop:dev": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-tactica-desktop.ps1",
     "desktop:build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-tactica-desktop.ps1",
     "android:engine": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-tactica-android.ps1",
-    "android:sync": "cap sync android",
+    "android:sync": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-tactica-android.ps1",
     "android:apk": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-tactica-android.ps1 -BuildApk"
   },
   "dependencies": {

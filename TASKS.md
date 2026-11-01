@@ -148,7 +148,7 @@ This file is the single source of truth for milestone status. Mark work complete
 
 ## TFC-M09: Windows release — IN PROGRESS
 
-- [x] Select Electron 45.2.1 and configure a Windows NSIS package with the supplied Black Metal ICO, loopback-only Open Football server, single-instance guard, restrictive navigation, disabled renderer Node access, context isolation, and sandboxing.
+- [x] Select Electron 45.2.1 and configure a Windows NSIS package with the supplied Black Metal ICO, a local TACTICA React app host, single-instance guard, restrictive navigation, disabled renderer Node access, context isolation, and sandboxing. The earlier full Open Football server package is historical and superseded by the viewer-only integration direction.
 - [x] Redirect the Electron source launcher from the full Open Football server to the TACTICA React/TypeScript app served from its own stable loopback origin; package the embedded WASM viewer without the Open Football game executable. The isolated unpacked Windows package was built and its ASAR audited for the TACTICA shell, viewer WASM, and absence of `open_football.exe`; launching the package and validating career saves remain open.
 - [x] Keep legacy Open Football Cargo desktop builds in a separate target directory so they do not replace the executable used by its local server. The current TACTICA React desktop build does not invoke Cargo and keeps its IndexedDB origin stable; migration of legacy Rust-server saves is not yet verified.
 - [x] Build the x64 NSIS installer `release/TACTICA FC Setup 0.11.0.exe`; inspect the unpacked app and confirm its `app.asar`, Open Football executable, ICO, and Open Football Apache 2.0 license are present. Electron and Chromium license notices are included by the packager. Installer SHA-256: `4A841369948F2EF00E2EFE6FB14B2CCA39662A0B8D24484D4A7F6A41D624F0A8` (rebuilt after pinning the transitive Zod security fix on 2026-11-01).
@@ -158,12 +158,11 @@ This file is the single source of truth for milestone status. Mark work complete
 
 ## TFC-M10: Android release — IN PROGRESS
 
-- [x] Confirm the local Android build toolchain and device: Android SDK platform 36, NDK 28.1, Java 21 for the Android Gradle build, and a connected Samsung SM-A105G running Android 11 / `armeabi-v7a`. The device reports 1.78 GB total RAM, so full-world runtime fit still needs measurement before claiming support.
-- [x] Install the Rust `armv7-linux-androideabi` standard-library target and cross-check the actual `open_football` package using the local NDK clang/linker in an isolated `target/android-armv7` directory. `cargo check --target armv7-linux-androideabi -p open_football --profile fast -j 2` completed successfully in 7m18s; existing unused-import/dead-code warnings remain.
-- [x] Add the Capacitor Android host and native JNI bridge that starts the actual Rust server locally, keeps career data in app-private storage, and opens the bundled viewer through loopback. The ARMv7 bridge was built and its JNI export/ELF architecture inspected.
-- [x] Configure Capacitor Android, a branded offline engine-start screen, and supplied TACTICA FC launcher/splash artwork.
-- [x] Build the debug APK at `android/app/build/outputs/apk/debug/app-debug.apk`; rebuilt against the current engine on 2026-11-01 after adding named live-player frames (SHA-256 `A0ADBE2137C527C03AE59F78089A1611DCC43557082F6617747855FFACA13142`). This confirms packaging/build only, not runtime support. The attached phone's limited RAM means full-world runtime fit still needs measurement.
-- [ ] Verify Android startup, game flow, match viewing, and saves on a suitable device where facilities permit.
+- [x] Confirm the local Android toolchain and available device: Android SDK platform 36, NDK 28.1, Java 21, and a Samsung SM-A105G running Android 11 / `armeabi-v7a` with 1.78 GB RAM. This is environment inventory only; device runtime is not accepted.
+- [x] Preserve the prior Rust/JNI Android engine, generated Capacitor assets, and debug APK under ignored `target/codex-android-engine-transition-backup/` before switching the Android host to the TACTICA React/TypeScript app. The old Rust cross-build/JNI work is historical and no longer describes the Android runtime architecture.
+- [x] Point Capacitor at `dist/tactica-manager`, remove Rust server startup from `MainActivity`, and make `android:sync` build the shared React app before Capacitor sync. The Android packaging script backs up previous artifacts and removes only the duplicate `.js.gz` / `.wasm.gz` viewer copies from generated web assets because Android's asset merger rejects those sibling names.
+- [x] Build `android/app/build/outputs/apk/debug/app-debug.apk` from the TACTICA React app on 2026-11-01. ZIP inspection confirms the packaged React shell and Open Football viewer WASM are present, while `libtactica_android_engine.so` is absent. SHA-256: `CD26FFDAAAF5DB2CB5F7013CC9AA466FFABA986E274ACDA9EA4071DC29450D27`. This proves build/package contents only, not runtime support.
+- [ ] Verify Android startup, CM-style career, TACTICA match simulation/viewer playback, and saves on a suitable device. The available low-memory phone has not been used for runtime acceptance.
 - [ ] Document signing prerequisites for any AAB release.
 
 ## TFC-M11: iOS preparation and release — NOT STARTED
@@ -271,7 +270,8 @@ This file is the single source of truth for milestone status. Mark work complete
 - `npm run dev`, `npm run build`, and `npm test` now target the React/TypeScript TACTICA app. `npm run open-football` and `npm run open-football:test` preserve explicit access to the upstream application and tests during transition.
 - The Electron source launcher now serves `dist/tactica-manager/` on a stable loopback origin; the isolated package embeds the OF WASM viewer and its license but omits the OF game executable. Vite serves the TACTICA app on an ephemeral test port and returns 200 for its shell, React entry, viewer JavaScript, and viewer WASM. The package ASAR contains the TACTICA UI and viewer and has no `open_football.exe`.
 - `npm test` passes all 89 tests across 13 files after aligning the pitch fixture with its stadium-image goals and fixing a dropped defender control/deflection frame. `npm run build` passes; the existing ineffective dynamic-import and large-bundle warnings remain.
-- Runtime acceptance on an owner-visible desktop is not performed. The owner's existing `open_football.exe` PID 58100 was left running; it may still occupy port 5184. Android remains on its previous Rust-backed path and is the next platform migration.
+- The current boundary is explicit: TACTICA's React/TypeScript career and deterministic match simulation remain authoritative; the existing Open Football WASM viewer is embedded as a renderer receiving TACTICA match state/events through `src/ui/OpenFootballPitch.tsx`. Do not run the Open Football game/server as the product runtime or let viewer timing determine match outcomes. Keep only viewer assets/protocol code and required license notices.
+- Runtime acceptance on an owner-visible desktop is not performed. The owner's existing `open_football.exe` PID 58100 was left running; it may still occupy port 5184. Android now packages the shared TACTICA React app with that viewer; device runtime remains unverified.
 
 ### TACTICA FC manager-career controls — IN PROGRESS
 
