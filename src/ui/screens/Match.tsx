@@ -70,7 +70,7 @@ export function statColors(home: number, away: number, me: number): [string, str
   return me === 0 ? [own, pick] : [pick, own];
 }
 
-let live: { fixture: number; sim: MatchSim; viewerSetup: OpenFootballSetup; lines: { text: string; cls: string; m: number; k?: string }[]; consumed: number; visualQueue: MatchVisualFrame[]; visualSeen: number; viewerEventsSeen?: number; viewer?: OpenFootballBridge; halfShown?: boolean; shotsSeen?: number; cornersSeen?: number; h2hInit?: boolean; evSeen?: number; h2h?: H2hState; ldSeen?: number; prevTab?: string; finishFrameSent?: boolean; finishPresentationReady?: boolean; finishPresentationTimer?: ReturnType<typeof setTimeout>; extraTimeDurationSent?: boolean; shootoutPresentationStarted?: boolean; shootoutKicksSeen?: number } | null = null;
+let live: { fixture: number; sim: MatchSim; viewerSetup: OpenFootballSetup; lines: { text: string; cls: string; m: number; k?: string }[]; consumed: number; visualQueue: MatchVisualFrame[]; visualSeen: number; viewerEventsSeen?: number; viewer?: OpenFootballBridge; viewerPrimed?: boolean; halfShown?: boolean; shotsSeen?: number; cornersSeen?: number; h2hInit?: boolean; evSeen?: number; h2h?: H2hState; ldSeen?: number; prevTab?: string; finishFrameSent?: boolean; finishPresentationReady?: boolean; finishPresentationTimer?: ReturnType<typeof setTimeout>; extraTimeDurationSent?: boolean; shootoutPresentationStarted?: boolean; shootoutKicksSeen?: number } | null = null;
 
 /** Stage and play one engine-resolved shootout kick on its own viewer beat. */
 function shootoutPresentation(base: MatchPitchSnapshot, kick: ShootoutKick | undefined, moment: number) {
@@ -446,6 +446,7 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
   const [report, setReport] = useState<MatchReport | null>(() => L.finishPresentationReady ? sim.report() : null);
   const [viewerBridge, setViewerBridge] = useState<OpenFootballBridge | null>(null);
   const [viewerReady, setViewerReady] = useState(false);
+  const [viewerPrimed, setViewerPrimed] = useState(() => !!L.viewerPrimed);
   const [viewerFailed, setViewerFailed] = useState(false);
   const [visualFrame, setVisualFrame] = useState<MatchVisualFrame | undefined>(() => L.visualQueue.shift());
   // flashes/bump/reveal: pr. billede – stor tekst, midlertidig ændring af stillingen (jubel før et annulleret mål) og hvor mange nye kommentarlinjer der vises
@@ -680,6 +681,17 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
     force((x) => x + 1);
   };
 
+  // Give the viewer one authoritative future sample before kickoff. It can
+  // interpolate the opening movement instead of holding the first frame
+  // until the next 2-second simulation beat arrives.
+  useEffect(() => {
+    if (h2h || !viewerReady || !viewerBridge || paused || report || viewerPrimed) return;
+    if (L.viewerPrimed) { setViewerPrimed(true); return; }
+    L.viewerPrimed = true;
+    advance(1, false);
+    setViewerPrimed(true);
+  }, [h2h, viewerReady, viewerBridge, paused, report, viewerPrimed, L]);
+
   // pausen: stop og giv holdet en peptalk – bagefter tilbage til den visning, man kom fra
   const maybeHalftime = () => {
     if (sim.half === 2 && !L.halfShown && !talkDone(id, 'half') && !sim.finished) {
@@ -890,7 +902,7 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
       )}
       <div className="match2d">
           <div className="match-stage">
-            <OpenFootballPitch id={id} setup={L.viewerSetup} speed={openFootballPlaybackSpeed(speed, h2h ? { halfMinutes: g.options.h2hHalfMinutes ?? 3, homeSpeed: hs.homeSpeed, awaySpeed: hs.awaySpeed } : undefined)} playing={!paused && !report && viewerReady && !viewerFailed && (!h2h || hs.phase === 'play')}
+            <OpenFootballPitch id={id} setup={L.viewerSetup} speed={openFootballPlaybackSpeed(speed, h2h ? { halfMinutes: g.options.h2hHalfMinutes ?? 3, homeSpeed: hs.homeSpeed, awaySpeed: hs.awaySpeed } : undefined)} playing={!paused && !report && viewerReady && !viewerFailed && (h2h || viewerPrimed) && (!h2h || hs.phase === 'play')}
               onBridge={(bridge) => { L.viewer = bridge ?? undefined; setViewerBridge(bridge); }} onReady={setViewerReady}
               onFailure={() => { L.viewer = undefined; setViewerBridge(null); setViewerReady(false); setViewerFailed(true); }} />
             {!viewerReady && <div className="match-viewer-status" role="status" aria-live="polite">
