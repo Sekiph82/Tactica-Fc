@@ -9,7 +9,7 @@ const KEY = 'cm-theme';
 const VARS = ['--accent', '--accent-ink', '--accent2', '--tint1', '--tint2', '--nav-bg', '--nav-fg', '--nav-muted', '--nav-hover', '--nav-active', '--top-bg', '--top-fg', '--top-muted', '--top-chip'];
 
 export function getTheme(): Theme {
-  // New installations start with the navy TACTICA FC theme; explicit saved preferences remain unchanged.
+  // New installations start with the Black Metal TACTICA FC theme; explicit saved preferences remain unchanged.
   try { const v = localStorage.getItem(KEY); return v === 'dark' || v === 'light' || v === 'clubDark' || v === 'gold' || v === 'retro' || v === 'club' ? v : 'dark'; } catch { return 'dark'; }
 }
 
