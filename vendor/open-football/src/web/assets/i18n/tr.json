@@ -2240,6 +2240,8 @@
   "mgr_team_focus_aria": "Takım antrenman odağı",
   "mgr_training_saving": "Kaydediliyor…",
   "mgr_team_focus_saved": "Takım antrenman odağı kaydedildi.",
+  "mgr_player_focus_saved": "Oyuncu antrenman odağı kaydedildi.",
+  "mgr_player_training_save_failed": "Oyuncunun antrenman odağı kaydedilemedi. Önceki ayar geri yüklendi.",
   "mgr_training_save_failed": "Antrenman odağı kaydedilemedi.",
   "mgr_lineup_limit": "İlk 11'e en fazla 11 oyuncu sabitleyebilirsin.",
   "mgr_player_unavailable": "Sakat, cezalı veya hazır olmayan oyuncu sabitlenemez.",

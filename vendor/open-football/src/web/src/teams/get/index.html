@@ -11,6 +11,7 @@
         <span id="fm-manager-messages" hidden
               data-saving="{{ i18n.t("mgr_training_saving") }}"
               data-team-focus-saved="{{ i18n.t("mgr_team_focus_saved") }}"
+              data-player-focus-saved="{{ i18n.t("mgr_player_focus_saved") }}"
               data-training-save-failed="{{ i18n.t("mgr_training_save_failed") }}"
               data-lineup-limit="{{ i18n.t("mgr_lineup_limit") }}"
               data-player-unavailable="{{ i18n.t("mgr_player_unavailable") }}"
@@ -18,7 +19,7 @@
         <span id="fm-manager-lineup-status" role="status" aria-live="polite"></span>
         <label style="display:flex;gap:8px;align-items:center;margin:10px 0">
             <strong>{{ i18n.t("mgr_team_training") }}</strong>
-            <select id="fm-manager-team-training" aria-label="{{ i18n.t("mgr_team_focus_aria") }}">
+            <select id="fm-manager-team-training" data-saved-value="{{ manager_training_focus }}" aria-label="{{ i18n.t("mgr_team_focus_aria") }}">
                 <option value="balanced"{% if manager_training_focus == "balanced" %} selected{% endif %}>{{ i18n.t("mgr_style_balanced") }}</option>
                 <option value="fitness"{% if manager_training_focus == "fitness" %} selected{% endif %}>{{ i18n.t("mgr_training_fitness") }}</option>
                 <option value="technical"{% if manager_training_focus == "technical" %} selected{% endif %}>{{ i18n.t("technical") }}</option>
@@ -132,7 +133,7 @@
                     <td class="fm-manager-actions">
                         {% if !player.is_loaned_out && !player.is_loan %}
                         <label class="fm-visually-hidden" for="fm-training-{{ player.id }}">{{ i18n.t("mgr_training_focus") }}: {{ player.last_name }}</label>
-                        <select class="fm-manager-training" id="fm-training-{{ player.id }}" data-player-id="{{ player.id }}" aria-label="{{ i18n.t("mgr_training_focus") }}: {{ player.last_name }}">
+                        <select class="fm-manager-training" id="fm-training-{{ player.id }}" data-player-id="{{ player.id }}" data-saved-value="{{ player.training_focus }}" aria-label="{{ i18n.t("mgr_training_focus") }}: {{ player.last_name }}">
                             <option value="none"{% if player.training_focus == "none" %} selected{% endif %}>{{ i18n.t("mgr_training_none") }}</option>
                             <option value="fitness"{% if player.training_focus == "fitness" %} selected{% endif %}>{{ i18n.t("mgr_training_fitness") }}</option>
                             <option value="mental"{% if player.training_focus == "mental" %} selected{% endif %}>{{ i18n.t("mgr_training_mental") }}</option>
@@ -153,6 +154,7 @@
                             {% endif %}
                             {% if player.in_recovery %}<option value="injury_recovery"{% if player.training_focus == "injury_recovery" %} selected{% endif %}>{{ i18n.t("mgr_training_injury_recovery") }}</option>{% endif %}
                         </select>
+                        <span class="fm-manager-training-status fm-muted" data-player-id="{{ player.id }}" role="status" aria-live="polite" style="display:block;min-height:1.25em;font-size:11px"></span>
                         <button type="button" class="fm-manager-selection" data-player-id="{{ player.id }}">{% if player.is_force_match_selection %}{{ i18n.t("mgr_unpin_starter") }}{% else %}{{ i18n.t("mgr_pin_starter") }}{% endif %}</button>
                         <button type="button" class="fm-manager-transfer" data-player-id="{{ player.id }}">{% if player.transfer_listed %}{{ i18n.t("mgr_remove_from_list") }}{% else %}{{ i18n.t("mgr_add_to_list") }}{% endif %}</button>
                         {% else %}<span>—</span>{% endif %}
@@ -210,13 +212,22 @@
     }
     document.querySelectorAll('.fm-manager-training').forEach(function(select) {
         select.addEventListener('change', function() {
+            var status = document.querySelector('.fm-manager-training-status[data-player-id="' + select.getAttribute('data-player-id') + '"]');
+            var messages = document.getElementById('fm-manager-messages').dataset;
+            var requestedValue = select.value;
             select.disabled = true;
+            if (status) status.textContent = messages.saving;
             fetch('/api/manager/training/' + select.getAttribute('data-player-id'), {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ focus: select.value })
+                body: JSON.stringify({ focus: requestedValue })
             }).then(function(response) {
                 if (!response.ok) { throw new Error('http ' + response.status); }
-            }).catch(function() { select.value = 'none'; }).finally(function() { select.disabled = false; });
+                select.dataset.savedValue = requestedValue;
+                if (status) status.textContent = messages.playerFocusSaved;
+            }).catch(function() {
+                select.value = select.dataset.savedValue || 'none';
+                if (status) status.textContent = messages.playerTrainingSaveFailed;
+            }).finally(function() { select.disabled = false; });
         });
     });
     var teamTraining = document.getElementById('fm-manager-team-training');
@@ -225,14 +236,17 @@
             teamTraining.disabled = true;
             var status = document.getElementById('fm-manager-team-training-status');
             var messages = document.getElementById('fm-manager-messages').dataset;
+            var requestedValue = teamTraining.value;
             if (status) status.textContent = messages.saving;
             fetch('/api/manager/training-focus', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ focus: teamTraining.value })
+                body: JSON.stringify({ focus: requestedValue })
             }).then(function(response) {
                 if (!response.ok) throw new Error('http ' + response.status);
+                teamTraining.dataset.savedValue = requestedValue;
                 if (status) status.textContent = messages.teamFocusSaved;
             }).catch(function() {
+                teamTraining.value = teamTraining.dataset.savedValue || 'balanced';
                 if (status) status.textContent = messages.trainingSaveFailed;
             }).finally(function() { teamTraining.disabled = false; });
         });

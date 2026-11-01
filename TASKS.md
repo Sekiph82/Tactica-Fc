@@ -157,6 +157,7 @@ This file is the single source of truth for milestone status. Mark work complete
 - [x] Add Turkish as the default interface locale and preserve English and Danish.
 - [ ] Move user-visible strings into the existing localisation architecture.
 - [x] Verify the core manager workflows use real shared game state. Isolated fresh-server acceptance confirmed persisted manager takeover, tactic/style and player/team training readback, transfer listing, exact positional lineup selection in a managed match, live instructions/substitution applied by the engine, and the resulting replay route; owner-visible browser acceptance is tracked separately under TFC-M04.
+- [x] Keep player and team training controls synchronized with saved manager state: show localized save/success/failure feedback, retain the last acknowledged focus, and restore it after a failed request instead of displaying an unsaved setting. `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2` passes; browser interaction remains unverified.
 
 ## TFC-M08: Career integration and saves — PARTIAL
 

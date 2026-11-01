@@ -2240,6 +2240,8 @@
   "mgr_team_focus_aria": "Team training focus",
   "mgr_training_saving": "Saving…",
   "mgr_team_focus_saved": "Team training focus saved.",
+  "mgr_player_focus_saved": "Player training focus saved.",
+  "mgr_player_training_save_failed": "Could not save this player's training focus. The previous setting was restored.",
   "mgr_training_save_failed": "Could not save the training focus.",
   "mgr_lineup_limit": "You can pin up to 11 players to the starting XI.",
   "mgr_player_unavailable": "An injured, suspended, or unavailable player cannot be pinned.",
