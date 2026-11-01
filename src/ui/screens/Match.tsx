@@ -586,6 +586,10 @@ function LiveMatch({ id }: { id: number }) {
     const h = setInterval(() => {
       const s = H.current;
       const now = Date.now();
+      // Do not start the shared kickoff clock until the match presentation is
+      // ready. Otherwise a slow WASM load can advance the authoritative match
+      // before the viewer has displayed its opening frame.
+      if (!viewerReady && !viewerFailed) { force((x) => x + 1); return; }
       if (s.phase === 'wait' && s.awayReady) { s.phase = 'countdown'; s.startAt = now + 4000; }
       if (s.phase === 'countdown' && now >= s.startAt) s.phase = 'play';
       if (s.phase === 'half' && (now >= s.halfEnd || (s.awayTalked && talkDone(id, 'half')))) { s.phase = 'play'; setTab(L.prevTab ?? 'commentary'); }
@@ -599,7 +603,7 @@ function LiveMatch({ id }: { id: number }) {
       if (target > sim.moment) advRef.current(target - sim.moment, false);
     }, 250);
     return () => clearInterval(h);
-  }, [h2h, report]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [h2h, report, viewerReady, viewerFailed]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (h2h) return; // fast tempo – styres ovenfor

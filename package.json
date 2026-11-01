@@ -5,7 +5,7 @@
   "type": "module",
   "main": "desktop/main.cjs",
   "scripts": {
-    "dev": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-tactica-fc.ps1",
+    "dev": "vite --host 127.0.0.1 --port 5184 --strictPort",
     "build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-tactica-fc.ps1",
     "test": "cargo test --manifest-path vendor/open-football/Cargo.toml -p core -j 2",
     "open-football": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-tactica-fc.ps1",
