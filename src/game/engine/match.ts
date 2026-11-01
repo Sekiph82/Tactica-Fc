@@ -1120,7 +1120,10 @@ export class MatchSim {
     const previousVisual = this.visualTimeline.at(-1);
     const alreadyPresented = !!winner && previousVisual?.moment === this.moment && previousVisual.toPoss === O.idx
       && (previousVisual.actor === winner.p.id || previousVisual.target === winner.p.id);
-    if (winner && !alreadyPresented) this.visualAction(deflection?.kind ?? 'turnover', O.idx, winner, this.zone, this.zone, deflection?.outcome ?? 'won', undefined, undefined, deflection?.ball);
+    // A blocked shot/cross already names the defender as its target, but that
+    // contact alone does not show whether they controlled or deflected the
+    // ball. Keep the resolved follow-up action in the visual timeline.
+    if (winner && (deflection || !alreadyPresented)) this.visualAction(deflection?.kind ?? 'turnover', O.idx, winner, this.zone, this.zone, deflection?.outcome ?? 'won', undefined, undefined, deflection?.ball);
     if (winner) {
       this.looseBall = null;
       if (O.tactic.slots[winner.slot]?.pos === 'GK') {

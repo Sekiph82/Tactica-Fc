@@ -5,6 +5,9 @@ import { VitePWA } from 'vite-plugin-pwa'
 // Vercel serves at the root; GitHub Pages sets the repository path in its workflow.
 export default defineConfig({
   base: process.env.BASE_PATH ?? (process.env.VERCEL ? '/' : '/tactica-fc/'),
+  // This repository also contains upstream Rust/HTML templates and Android
+  // test pages. Keep Vite's dependency scan scoped to the actual React app.
+  optimizeDeps: { entries: ['index.html'] },
   plugins: [
     react(),
     VitePWA({

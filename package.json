@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5184 --strictPort",
     "build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-tactica-fc.ps1",
-    "test": "cargo test --manifest-path vendor/open-football/Cargo.toml -p core -j 2",
+    "test": "vitest run",
+    "open-football:test": "cargo test --manifest-path vendor/open-football/Cargo.toml -p core -j 2",
     "open-football": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-tactica-fc.ps1",
     "desktop:dev": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-tactica-desktop.ps1",
     "desktop:build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-tactica-desktop.ps1",
@@ -56,15 +57,12 @@
     },
     "files": [
       "desktop/**/*",
+      "dist/tactica-manager/**/*",
       "package.json",
       "LICENSE",
       "README.md"
     ],
     "extraResources": [
-      {
-        "from": "vendor/open-football/target/desktop/fast/open_football.exe",
-        "to": "open_football.exe"
-      },
       {
         "from": "public/tactica-brand/Tactica_FC_Black_Metal.ico",
         "to": "TACTICA_FC.ico"

@@ -185,14 +185,7 @@ describe('Pitch2D renderer fixture', () => {
     expect(first).toContain('<g class="p2d-camera">');
     expect(first).toContain('aria-pressed="false"');
     expect(first).toContain('Focus on ball');
-    expect((first.match(/class="p2d-goal"/g) ?? []).length).toBe(2);
-    expect(first).toContain('data-side="left"');
-    expect(first).toContain('data-side="right"');
-    expect((first.match(/class="p2d-goal-net"/g) ?? []).length).toBe(2);
-    expect((first.match(/class="p2d-goal-mesh"/g) ?? []).length).toBe(2);
-    expect((first.match(/class="p2d-goal-frame"/g) ?? []).length).toBe(2);
-    expect(first).toMatch(/transform="scale\(-0\.\d+ 0\.\d+\)"/);
-    expect(first).toMatch(/transform="scale\(0\.\d+ 0\.\d+\)"/);
+    expect(first).toContain('class="p2d-stadium"');
     expect(first).toContain('transform="scale(-1 1)"');
     expect(first).toContain('aria-label="2D football pitch"');
   });

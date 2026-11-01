@@ -1,11 +1,9 @@
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$manifest = Join-Path $projectRoot 'vendor\open-football\Cargo.toml'
 
-$env:OPEN_FOOTBALL_SKIP_MATCH_VIEWER = '1'
 Push-Location $projectRoot
 try {
-    cargo build --manifest-path $manifest --profile fast -j 2
+    npm exec vite -- build --base=/ --outDir dist/tactica-manager --emptyOutDir
     exit $LASTEXITCODE
 }
 finally {
