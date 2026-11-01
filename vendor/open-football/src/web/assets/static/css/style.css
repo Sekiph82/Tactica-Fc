@@ -15674,3 +15674,76 @@ input:focus, select:focus, textarea:focus, .form-control:focus { border-color: v
     .fm-header-actions .tactica-back-button { padding: 0 9px; }
     .fm-header-actions .tactica-back-button span { display: none; }
 }
+
+/* Managed matchday panel uses the same Black Metal tokens as the TACTICA shell. */
+.fm-page .fm-panel.tactica-live-match {
+    margin: 0 18px 16px !important;
+    padding: 14px !important;
+    border: 1px solid var(--tactica-border) !important;
+    border-top: 2px solid var(--tactica-red) !important;
+    border-radius: var(--radius-card) !important;
+    background: linear-gradient(145deg, #1c1e23, #111216 78%) !important;
+    box-shadow: var(--shadow-card);
+}
+.tactica-live-match-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: center;
+    margin-top: 8px;
+}
+.tactica-live-match-canvas {
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--tactica-border);
+    border-radius: var(--radius-control);
+    background: var(--tactica-black);
+}
+.tactica-live-match-canvas canvas {
+    display: block;
+    width: 100%;
+    height: min(55vw, 520px);
+    min-height: 320px;
+    touch-action: none;
+}
+.tactica-live-match-score {
+    min-width: 170px;
+    padding: 14px 10px;
+    border: 1px solid var(--tactica-border);
+    border-radius: var(--radius-control);
+    background: linear-gradient(145deg, #22252b, #111318);
+    color: var(--tactica-silver);
+    text-align: center;
+}
+.tactica-live-clock { color: #ff6870; font-size: 24px; font-weight: 800; }
+.tactica-live-score { margin-top: 3px; color: #f0f0f1; font-size: 20px; font-weight: 800; }
+.tactica-live-status { margin-top: 5px; color: var(--tactica-muted); }
+.tactica-live-commentary {
+    margin-top: 10px;
+    padding: 8px 12px;
+    border: 1px solid var(--tactica-border);
+    border-radius: var(--radius-control);
+    background: rgba(8,9,12,.62);
+}
+.tactica-live-commentary > strong { color: #f0f0f1; }
+.tactica-live-commentary-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+    margin: 6px 0 0;
+    padding-left: 20px;
+    color: var(--tactica-silver);
+}
+.fm-page .fm-manager-advance {
+    border-color: #f0525b;
+    background: linear-gradient(135deg, #e32832, #a70e19);
+    color: #fff;
+    font-weight: 800;
+}
+.fm-page .fm-manager-advance:hover { background: linear-gradient(135deg, #f0525b, #bd1420); }
+@media (max-width: 760px) {
+    .tactica-live-match-layout { grid-template-columns: minmax(0, 1fr); }
+    .tactica-live-match-score { display: grid; grid-template-columns: auto auto 1fr; gap: 12px; align-items: center; min-width: 0; }
+    .tactica-live-clock, .tactica-live-score { margin: 0; }
+    .tactica-live-match-canvas canvas { height: min(74vw, 480px); min-height: 260px; }
+}
