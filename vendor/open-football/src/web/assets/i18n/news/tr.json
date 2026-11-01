@@ -1,4 +1,6 @@
 {
+  "manager_transfer_decisions_pending": "Gelen teklifler kararınızı bekliyor.",
+  "manager_open_transfer_decisions": "Teklifleri incele",
   "manager_mark_news_read": "Tüm sayıları okundu olarak işaretle",
   "manager_mark_news_read_failed": "Okundu işaretlenemedi. Tekrar deneyin.",
   "manager_follow_league": "Bu ligi takip et",

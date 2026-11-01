@@ -1,4 +1,6 @@
 {
+  "manager_transfer_decisions_pending": "Incoming offers need your decision.",
+  "manager_open_transfer_decisions": "Review offers",
   "manager_mark_news_read": "Mark all editions as read",
   "manager_mark_news_read_failed": "Could not mark editions as read. Try again.",
   "manager_follow_league": "Follow this league",

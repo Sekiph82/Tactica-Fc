@@ -18,9 +18,9 @@
             {% endfor %}
         </div>
         {% endif %}
-        {% if unread_newspaper_count > 0 %}
+        {% if is_managed %}
         <div style="padding:10px 18px 0">
-            <a class="fm-button" href="/{{ lang }}/teams/{{ team_slug }}/newspaper">{{ i18n.t("news") }} · {{ unread_newspaper_count }}</a>
+            <a class="fm-button" href="/{{ lang }}/teams/{{ team_slug }}/newspaper">{{ manager_inbox_label }}{% if manager_unread_total > 0 %} · {{ manager_unread_total }}{% endif %}</a>
         </div>
         {% endif %}
         {% if !manager_match_reports.is_empty() %}

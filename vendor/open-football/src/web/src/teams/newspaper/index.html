@@ -7,7 +7,7 @@
 
 {% block content %}
 <div class="fm-page np-desk">
-    {% if is_managed && unread_newspaper_count > 0 %}
+    {% if is_managed && manager_unread_total > 0 %}
     <div style="display:flex;justify-content:flex-end;padding:0 0 12px">
         <button type="button" class="fm-button" id="fm-manager-mark-news-read" data-failed="{{ news.t("manager_mark_news_read_failed") }}">{{ news.t("manager_mark_news_read") }}</button>
     </div>
@@ -47,5 +47,42 @@
     {% endfor %}
 
     {% endif %}
+    {% if is_managed && pending_transfer_decisions > 0 %}
+    <section class="fm-panel" style="margin:18px 0;padding:16px">
+        <strong>{{ i18n.t("transfers") }} · {{ pending_transfer_decisions }}</strong>
+        <p>{{ news.t("manager_transfer_decisions_pending") }}</p>
+        <a class="fm-button" href="/{{ lang }}/teams/{{ team_slug }}/transfers">{{ news.t("manager_open_transfer_decisions") }}</a>
+    </section>
+    {% endif %}
+
+    {% if is_managed && !manager_match_reports.is_empty() %}
+    <section class="fm-panel" style="margin:18px 0">
+        <div class="fm-panel-head"><h3>{{ news.t("newspaper_results") }}{% if unread_manager_match_reports > 0 %} · {{ unread_manager_match_reports }}{% endif %}</h3></div>
+        <ul style="list-style:none;padding:12px 18px;display:grid;gap:8px;margin:0">
+            {% for report in manager_match_reports %}
+            <li><a href="/{{ lang }}/match/{{ report.match_id }}">{{ report.date }} · {{ report.score }} vs {{ report.opponent }}</a></li>
+            {% endfor %}
+        </ul>
+    </section>
+    {% endif %}
+
+    {% if is_managed && !followed_league_issues.is_empty() %}
+    <div class="np-archive-rule"><span>{{ i18n.t("news") }} · {{ followed_league_issues.len() }}</span></div>
+    {% for paper in followed_league_issues %}
+    <section class="fm-panel" style="margin:18px 0">
+        <div class="fm-panel-head">
+            <h3><a href="{{ paper.url }}/newspaper">{{ paper.name }}</a>{% if paper.unread_count > 0 %} · {{ paper.unread_count }}{% endif %}</h3>
+        </div>
+        {% if paper.issues.is_empty() %}
+        <div class="np-empty"><p class="np-empty-body">{{ news.t("newspaper_no_league_issues") }}</p></div>
+        {% else %}
+        {% for issue in paper.issues %}
+        {% include "teams/newspaper/_sheet.html" %}
+        {% endfor %}
+        {% endif %}
+    </section>
+    {% endfor %}
+    {% endif %}
+
 </div>
 {% endblock %}

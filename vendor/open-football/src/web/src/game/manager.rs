@@ -216,14 +216,13 @@ pub async fn set_tactics_action(
     StatusCode::OK
 }
 
-/// Mark every currently printed issue of the managed club's paper as read.
-/// The edition number is resolved from the authoritative world here rather
-/// than trusted from the browser.
+/// Mark current club and followed-league editions plus stored match reports
+/// as read. The edition numbers are resolved from the authoritative world.
 pub async fn manager_mark_news_read_action(State(state): State<GameAppData>) -> StatusCode {
     let Some(team_id) = managed_team_id(&state).await else {
         return StatusCode::FORBIDDEN;
     };
-    let latest_issue = {
+    let (latest_issue, followed_issue_numbers) = {
         let guard = state.data.read().await;
         let Some(data) = guard.as_ref() else {
             return StatusCode::SERVICE_UNAVAILABLE;
@@ -231,13 +230,20 @@ pub async fn manager_mark_news_read_action(State(state): State<GameAppData>) -> 
         let Some(team) = data.team(team_id) else {
             return StatusCode::NOT_FOUND;
         };
-        team.newsroom.latest().map(|issue| issue.number)
-    };
-    let Some(latest_issue) = latest_issue else {
-        return StatusCode::NO_CONTENT;
+        let snapshot = state.manager_career_store.load_snapshot(team_id).unwrap_or_default();
+        let followed = snapshot.followed_league_ids.iter().filter_map(|league_id| {
+            let issue = data.league(*league_id)?.newsroom.latest().map(|issue| issue.number).unwrap_or(0);
+            Some((*league_id, issue))
+        }).collect::<Vec<_>>();
+        (team.newsroom.latest().map(|issue| issue.number).unwrap_or(0), followed)
     };
     match state.manager_career_store.update_snapshot(team_id, |snapshot| {
         snapshot.last_read_newspaper_issue = snapshot.last_read_newspaper_issue.max(latest_issue);
+        for (league_id, issue_number) in followed_issue_numbers {
+            let last_read = snapshot.last_read_league_issues.entry(league_id).or_default();
+            *last_read = (*last_read).max(issue_number);
+        }
+        snapshot.last_read_match_reports = snapshot.match_reports.len();
     }) {
         Ok(_) => StatusCode::NO_CONTENT,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,

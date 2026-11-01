@@ -1,4 +1,6 @@
 {
+  "manager_transfer_decisions_pending": "届いたオファーへの返答が必要です。",
+  "manager_open_transfer_decisions": "オファーを確認",
   "newspaper_edition": "第",
   "newspaper_results": "結果",
   "newspaper_in_brief": "短信",

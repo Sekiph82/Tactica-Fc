@@ -181,10 +181,10 @@ impl LeagueNewspaperCounter {
 /// say that a club page does not is who `{club}` is: on this page every
 /// story belongs to a different club, so the credit is resolved per
 /// story rather than per edition — see [`PaperFor`].
-struct LeaguePress;
+pub(crate) struct LeaguePress;
 
 impl LeaguePress {
-    fn typeset(
+    pub(crate) fn typeset(
         data: &SimulatorData,
         league: &League,
         masthead: &str,

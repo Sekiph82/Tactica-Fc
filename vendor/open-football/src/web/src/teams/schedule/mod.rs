@@ -62,7 +62,8 @@ pub struct TeamScheduleTemplate {
     pub show_academy_tab: bool,
     /// Printed items waiting on the newspaper tab, for the tabbar badge.
     pub newspaper_count: usize,
-    pub unread_newspaper_count: usize,
+    pub manager_unread_total: usize,
+    pub manager_inbox_label: &'static str,
     pub followed_league_news: Vec<FollowedLeagueNewsView>,
     pub manager_match_reports: Vec<ManagerMatchReportView>,
     pub unread_manager_match_reports: usize,
@@ -383,6 +384,9 @@ pub async fn team_schedule_get_action(
         })
         .collect();
     followed_league_news.sort_by(|a, b| a.name.cmp(&b.name));
+    let manager_unread_total = unread_newspaper_count
+        + followed_league_news.iter().map(|paper| paper.unread_count).sum::<usize>()
+        + manager_snapshot.as_ref().map_or(0, |snapshot| snapshot.match_reports.len().saturating_sub(snapshot.last_read_match_reports));
     let unread_manager_match_reports = manager_snapshot.as_ref().map_or(0, |snapshot| {
         snapshot.match_reports.len().saturating_sub(snapshot.last_read_match_reports)
     });
@@ -443,7 +447,8 @@ pub async fn team_schedule_get_action(
         } else {
             NewspaperCounter::count(simulator_data, team)
         },
-        unread_newspaper_count,
+        manager_unread_total,
+        manager_inbox_label: if route_params.lang.starts_with("tr") { "Menajer gelen kutusu" } else { "Manager inbox" },
         followed_league_news,
         manager_match_reports,
         unread_manager_match_reports,
