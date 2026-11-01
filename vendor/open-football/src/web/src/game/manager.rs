@@ -12,8 +12,62 @@ use core::{
     IndividualTrainingPlan, MatchTacticType, Person, RoleFamiliarity, SkillType, TacticalStyle,
     Tactics, TrainingFocus,
 };
+use core::continent::{
+    CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, COPA_LIBERTADORES_ID, EUROPA_LEAGUE_ID,
+};
+use core::SimulatorData;
 use serde::Deserialize;
 use std::sync::Arc;
+
+/// Competitions that the managed first team can play. Shared by the schedule
+/// page and the global day processor so a manager's own fixtures cannot be
+/// skipped merely because the user has not followed that league for simulation.
+pub fn managed_competition_ids(simulator_data: &SimulatorData, team_id: u32) -> Vec<u32> {
+    let Some(team) = simulator_data
+        .team(team_id)
+        .filter(|team| team.team_type == core::TeamType::Main)
+    else {
+        return Vec::new();
+    };
+
+    let mut competition_ids = Vec::new();
+    if let Some(league_id) = team.league_id {
+        competition_ids.push(league_id);
+    }
+    if let Some(country) = simulator_data.country_by_club(team.club_id) {
+        if let Some(cup) = country.domestic_cup.as_ref() {
+            competition_ids.push(cup.league.id);
+        }
+        for playoff in &country.playoffs {
+            if team
+                .league_id
+                .is_some_and(|league_id| playoff.group_league_ids.contains(&league_id))
+            {
+                competition_ids.push(playoff.league.id);
+            }
+        }
+    }
+
+    for (competition, _, _, _, _, result) in
+        simulator_data.continental_matches_for_club(team.club_id)
+    {
+        if result.is_some() {
+            continue;
+        }
+        let id = match competition {
+            "champions_league" => CHAMPIONS_LEAGUE_ID,
+            "europa_league" => EUROPA_LEAGUE_ID,
+            "conference_league" => CONFERENCE_LEAGUE_ID,
+            "copa_libertadores" => COPA_LIBERTADORES_ID,
+            _ => continue,
+        };
+        competition_ids.push(id);
+    }
+
+    competition_ids.sort_unstable();
+    competition_ids.dedup();
+    competition_ids
+}
 
 #[derive(Deserialize)]
 pub struct TacticRequest {

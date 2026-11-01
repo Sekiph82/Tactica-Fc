@@ -13,9 +13,6 @@ use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
 use chrono::{NaiveDate, NaiveDateTime};
 use core::league::season::{LeagueSeason, Season};
-use core::continent::{
-    CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, COPA_LIBERTADORES_ID, EUROPA_LEAGUE_ID,
-};
 use core::{SimulatorData, TacticalStyle};
 use serde::Deserialize;
 
@@ -190,23 +187,8 @@ pub async fn team_schedule_get_action(
 
     // Manager day advances play the competitions the managed club can enter,
     // while the daily transfer/training/economic passes still process all countries.
-    let mut managed_competition_ids = Vec::new();
-    if let Some(league_id) = team.league_id {
-        managed_competition_ids.push(league_id);
-    }
-    if let Some(country) = simulator_data.country_by_club(team.club_id) {
-        if let Some(cup) = country.domestic_cup.as_ref() {
-            managed_competition_ids.push(cup.league.id);
-        }
-        for playoff in &country.playoffs {
-            if team
-                .league_id
-                .is_some_and(|league_id| playoff.group_league_ids.contains(&league_id))
-            {
-                managed_competition_ids.push(playoff.league.id);
-            }
-        }
-    }
+    let managed_competition_ids =
+        crate::game::managed_competition_ids(simulator_data, team.id);
 
     // The domestic cup and the playoffs are stored apart from `leagues`, but
     // for listing a team's fixtures they are all just competitions.
@@ -264,14 +246,12 @@ pub async fn team_schedule_get_action(
         if match_result.is_some() {
             continue;
         }
-        let competition_id = match comp_key {
-            "champions_league" => CHAMPIONS_LEAGUE_ID,
-            "europa_league" => EUROPA_LEAGUE_ID,
-            "conference_league" => CONFERENCE_LEAGUE_ID,
-            "copa_libertadores" => COPA_LIBERTADORES_ID,
-            _ => continue,
-        };
-        managed_competition_ids.push(competition_id);
+        if !matches!(
+            comp_key,
+            "champions_league" | "europa_league" | "conference_league" | "copa_libertadores"
+        ) {
+            continue;
+        }
         let is_home = home_club_id == team.club_id;
         let opponent_club_id = if is_home { away_club_id } else { home_club_id };
 
@@ -316,8 +296,6 @@ pub async fn team_schedule_get_action(
         .find(|item| item.result.is_none())
         .map(|item| item.opponent_name.clone())
         .unwrap_or_default();
-    managed_competition_ids.sort_unstable();
-    managed_competition_ids.dedup();
     let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
     let current_path = format!("/{}/teams/{}/schedule", route_params.lang, team.slug);
     let menu_params = views::MenuParams {

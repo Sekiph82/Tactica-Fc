@@ -1,7 +1,9 @@
 use crate::GameAppData;
 use crate::I18nManager;
 use crate::r#match::stores::MatchStore;
-use crate::game::{ManagerCareerStore, ManagerMatchReport, ManagerTrainingReport};
+use crate::game::{
+    managed_competition_ids, ManagerCareerStore, ManagerMatchReport, ManagerTrainingReport,
+};
 use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -67,7 +69,7 @@ pub async fn game_process_action(
     let Some(raw_league_ids) = query.league_ids else {
         return StatusCode::BAD_REQUEST;
     };
-    let selected_leagues: HashSet<u32> = raw_league_ids
+    let mut selected_leagues: HashSet<u32> = raw_league_ids
         .split(',')
         .filter(|part| !part.trim().is_empty())
         .filter_map(|part| part.trim().parse::<u32>().ok())
@@ -107,6 +109,9 @@ pub async fn game_process_action(
             .is_some_and(|simulator_data| manager_has_pending_transfer_decision(simulator_data, team_id))
     }) {
         return StatusCode::CONFLICT;
+    }
+    if let (Some(team_id), Some(simulator_data)) = (manager_team_id, data_guard.as_ref()) {
+        selected_leagues.extend(managed_competition_ids(simulator_data, team_id));
     }
     let mut player_names = HashMap::new();
     if manager_team_id.is_some() && let Some(simulator_data) = data_guard.as_ref() {
