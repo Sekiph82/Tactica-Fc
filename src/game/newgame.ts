@@ -37,6 +37,7 @@ export interface NewGameOptions {
   managerNation: number;
   clubId: number;
   activeNations: number[];
+  activeLeagues?: string[];
   lang: Lang;
   masking: boolean;
   seed: number;
@@ -70,6 +71,7 @@ export function createGame(world: WorldData, o: NewGameOptions): GameState {
     board: { confidence: 60, expectation: 'mid', expectedPos: 10, warnings: 0 },
     options: { masking: o.masking, autosave: true, matchSpeed: 650, fullCommentary: true, rules: world.source.startsWith('Championship Manager 01/02') ? 'classic' : 'modern' },
     activeNations: o.activeNations.slice(),
+    activeLeagues: o.activeLeagues?.slice() ?? world.leagues.filter((l) => o.activeNations.includes(l.nation)).map((l) => l.id),
     nations: world.nations,
     leagueOrder: world.leagues.map((l) => l.id),
     leagues: Object.fromEntries(world.leagues.map((l) => [l.id, { name: l.name, nation: l.nation, tier: l.tier }])),
@@ -222,6 +224,7 @@ export function createGame(world: WorldData, o: NewGameOptions): GameState {
 export function setupSeasonComps(season: number, prevTables: Record<string, number[]>, cupWinners: Record<number, number> = {}) {
   const g = gs();
   const active = new Set(g.activeNations);
+  const activeLeagues = g.activeLeagues ? new Set(g.activeLeagues) : undefined;
   const byLeague = new Map<string, number[]>();
   for (const c of Object.values(g.clubs)) {
     if (!byLeague.has(c.league)) byLeague.set(c.league, []);
@@ -229,11 +232,11 @@ export function setupSeasonComps(season: number, prevTables: Record<string, numb
   }
   const leaguesMeta = new Map(Object.entries(g.leagues).filter(([id]) => byLeague.has(id)));
   for (const [id, m] of leaguesMeta) {
-    if (!active.has(m.nation)) continue;
+    if (!active.has(m.nation) || (activeLeagues && !activeLeagues.has(id))) continue;
     setupLeague(id, m.name, m.nation, m.tier, byLeague.get(id)!, season);
   }
   for (const nation of active) {
-    const leagues = [...leaguesMeta.entries()].filter(([, m]) => m.nation === nation).map(([id]) => id);
+    const leagues = [...leaguesMeta.entries()].filter(([id, m]) => m.nation === nation && (!activeLeagues || activeLeagues.has(id))).map(([id]) => id);
     const cupName = leagues.map((l) => LEAGUE_RULES[l]?.cup).find(Boolean);
     const clubs = leagues.flatMap((l) => byLeague.get(l) ?? []);
     if (clubs.length >= 8) setupCup(nation, cupName ?? `${g.nations[nation].name} Cup`, clubs, season);

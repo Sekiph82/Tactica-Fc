@@ -32,7 +32,7 @@ export interface RoomInfo {
   date: string;
   lastApplied: number;
   actionCount: number;
-  settings: { nations?: number[]; seed?: number; masking?: boolean; deadlineHours?: number; mode?: 'draft'; draft?: DraftSettings };
+  settings: { nations?: number[]; leagues?: string[]; seed?: number; masking?: boolean; deadlineHours?: number; mode?: 'draft'; draft?: DraftSettings };
   processing: string | null;
   lastTurn: string;
   players: { pid: string; name: string; club: number; ready: boolean; joined: string; auto?: boolean }[];
@@ -626,7 +626,7 @@ export function closeSession() {
 /** Opret et nyt online spil: værten opretter verden lokalt og uploader første version */
 export async function createOnlineGame(world: WorldData, o: NewGameOptions, bots?: { count: number; scope: BotScope }): Promise<OnlineSession> {
   const created = await post<{ code: string; pid: string; token: string }>('create', {
-    name: o.managerName, club: o.clubId, settings: { nations: o.activeNations, seed: o.seed, masking: o.masking, deadlineHours: o.deadlineHours ?? 0 },
+    name: o.managerName, club: o.clubId, settings: { nations: o.activeNations, leagues: o.activeLeagues, seed: o.seed, masking: o.masking, deadlineHours: o.deadlineHours ?? 0 },
   });
   const creds: Credentials = { code: created.code, pid: created.pid, token: created.token, name: o.managerName };
   createGame(world, o);

@@ -423,14 +423,16 @@ function playDay(): DayResult {
  */
 export function activateNation(nation: number) {
   const g = gs();
-  if (g.activeNations.includes(nation)) return;
-  g.activeNations.push(nation);
+  if (!g.activeNations.includes(nation)) g.activeNations.push(nation);
   const byLeague = new Map<string, number[]>();
   for (const c of Object.values(g.clubs)) if (c.nation === nation) (byLeague.get(c.league) ?? byLeague.set(c.league, []).get(c.league)!).push(c.id);
   const ids: string[] = [];
   for (const [id, clubs] of byLeague) {
     const m = g.leagues[id];
-    if (!m || g.comps[id] || clubs.length < 4) continue;
+    const isManagedLeague = Object.values(g.humans ?? []).some((human) => g.clubs[human.userClub]?.league === id)
+      || g.clubs[g.userClub]?.league === id;
+    if (!m || g.comps[id] || clubs.length < 4 || (g.activeLeagues && !g.activeLeagues.includes(id) && !isManagedLeague)) continue;
+    if (g.activeLeagues && !g.activeLeagues.includes(id)) g.activeLeagues.push(id);
     setupLeague(id, m.name, m.nation, m.tier, clubs, g.season);
     ids.push(id);
   }

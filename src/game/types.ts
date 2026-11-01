@@ -846,6 +846,8 @@ export interface GameState {
   board: BoardState;
   options: Options;
   activeNations: number[];
+  /** Competitions enabled at career creation; absent in older saves means all leagues in active nations. */
+  activeLeagues?: string[];
   nations: { name: string; code: string }[];
   leagueOrder: string[];
   leagues: Record<string, { name: string; nation: number; tier: number }>;

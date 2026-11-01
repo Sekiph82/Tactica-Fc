@@ -306,6 +306,7 @@ This file is the single source of truth for milestone status. Mark work complete
 - Runtime acceptance on an owner-visible desktop is not performed. The owner's existing `open_football.exe` PID 58100 was left running; it may still occupy port 5184. Android now packages the shared TACTICA React app with that viewer; device runtime remains unverified.
 
 ### TACTICA FC manager-career controls — IN PROGRESS
+- [x] Persist the new-career league selection and build competitions only for selected league IDs; selecting nations supplies the league choices, and the managed club league is included when a career moves outside the initial scope. The start screen shows the selected-league count; old saves without this field retain their prior all-leagues-in-active-nations behavior. Typecheck and production build pass; owner-visible setup acceptance remains open.
 
 - [x] Correct the 5184-port conflict message in the separate Open Football launcher to instruct rerunning `npm run open-football`, not the React app's `npm run dev`.
 - [x] Document the Turkish club-takeover, tactics/lineup, training, transfer, day-advance, and match-replay route in `docs/manager-career-guide.md` and link it from the Windows startup section in `README.md`.

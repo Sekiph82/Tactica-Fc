@@ -128,6 +128,7 @@ function NewGame({ challenge, onBack, setBusy, online }: { challenge?: string; o
   const ch = CHALLENGES.find((c) => c.id === challenge);
   const [name, setName] = useState('');
   const [active, setActive] = useState<Set<number>>(new Set());
+  const [selectedLeagues, setSelectedLeagues] = useState<Set<string>>(new Set());
   const [league, setLeague] = useState('');
   const [club, setClub] = useState<number>(ch?.club ?? 0);
   const [masking, setMasking] = useState(true);
@@ -148,6 +149,7 @@ function NewGame({ challenge, onBack, setBusy, online }: { challenge?: string; o
       const names = ch ? ch.nations : DEFAULT_NATIONS;
       const ids = names.map((n) => w.nations.findIndex((x) => x.name === n)).filter((i) => i >= 0);
       setActive(new Set(ids));
+      setSelectedLeagues(new Set(w.leagues.filter((l) => ids.includes(l.nation)).map((l) => l.id)));
       const first = w.leagues.find((l) => l.nation === ids[0]);
       if (first) setLeague(first.id);
     }).catch((e) => setErr(String(e)));
@@ -173,18 +175,19 @@ function NewGame({ challenge, onBack, setBusy, online }: { challenge?: string; o
     </Panel>
   );
   if (err) return <Panel title={t('start.new')}><div className="bad">{err}</div></Panel>;
-  if (needImport) return <div>{dbPicker}<CMImport onDone={(w) => { setNeedImport(false); setWorld(w); const ids = DEFAULT_NATIONS.map((n) => w.nations.findIndex((x) => x.name === n)).filter((i) => i >= 0); setActive(new Set(ids)); const f = w.leagues.find((l) => l.nation === ids[0]); if (f) setLeague(f.id); }} onBack={onBack} /></div>;
+  if (needImport) return <div>{dbPicker}<CMImport onDone={(w) => { setNeedImport(false); setWorld(w); const ids = DEFAULT_NATIONS.map((n) => w.nations.findIndex((x) => x.name === n)).filter((i) => i >= 0); setActive(new Set(ids)); setSelectedLeagues(new Set(w.leagues.filter((l) => ids.includes(l.nation)).map((l) => l.id))); const f = w.leagues.find((l) => l.nation === ids[0]); if (f) setLeague(f.id); }} onBack={onBack} /></div>;
   if (!world) return <div>{dbPicker}<Panel title={t('start.new')}><div className="muted">{t('start.loadingDb')}</div></Panel></div>;
 
-  const leagues = world.leagues.filter((l) => active.has(l.nation));
+  const leagues = world.leagues.filter((l) => active.has(l.nation) && selectedLeagues.has(l.id));
   const clubs = world.clubs.filter((c) => c[4] === league).sort((a, b) => a[2].localeCompare(b[2]));
   const clubNation = world.clubs.find((c) => c[0] === club)?.[3];
-  const canStart = name.trim().length > 0 && club > 0 && clubNation !== undefined && active.has(clubNation);
+  const clubLeague = world.clubs.find((c) => c[0] === club)?.[4] ?? '';
+  const canStart = name.trim().length > 0 && club > 0 && clubNation !== undefined && active.has(clubNation) && (ch !== undefined || selectedLeagues.has(clubLeague));
 
   const start = () => {
     setBusy(online ? t('mp.creating') : t('start.creating'));
     const opts = {
-      managerName: name.trim(), managerNation: clubNation ?? 0, clubId: club, activeNations: [...active],
+      managerName: name.trim(), managerNation: clubNation ?? 0, clubId: club, activeNations: [...active], activeLeagues: ch ? undefined : [...selectedLeagues],
       lang: getLang(), masking, seed, challenge,
     };
     setTimeout(async () => {
@@ -229,6 +232,13 @@ function NewGame({ challenge, onBack, setBusy, online }: { challenge?: string; o
                   const s = new Set(active);
                   if (s.has(n)) s.delete(n); else s.add(n);
                   setActive(s);
+                  const next = new Set(selectedLeagues);
+                  for (const l of world.leagues) if (l.nation === n) {
+                    if (s.has(n)) next.add(l.id); else next.delete(l.id);
+                  }
+                  setSelectedLeagues(next);
+                  setClub(0);
+                  if (!next.has(league)) setLeague([...next][0] ?? '');
                 }} />
                 <Flag name={world.nations[n].name} />{natName(world.nations[n].name)}
                 <span className="muted" style={{ marginLeft: 'auto' }}>{world.leagues.filter((l) => l.nation === n).length}</span>
@@ -236,6 +246,26 @@ function NewGame({ challenge, onBack, setBusy, online }: { challenge?: string; o
             ))}
           </div>
           <div className="muted" style={{ marginTop: 6 }}>{t('start.perfHint')}</div>
+        </Panel>
+      )}
+      {!ch && (
+        <Panel title={t('start.leagues')} right={<span className="muted">{t('start.leaguesSelected', { n: selectedLeagues.size })}</span>}>
+          <div className="grid-choices">
+            {world.leagues.filter((l) => active.has(l.nation)).map((l) => (
+              <label key={l.id} className={`choice ${selectedLeagues.has(l.id) ? 'on' : ''}`}>
+                <input type="checkbox" checked={selectedLeagues.has(l.id)} onChange={() => {
+                  const next = new Set(selectedLeagues);
+                  if (next.has(l.id)) next.delete(l.id); else next.add(l.id);
+                  setSelectedLeagues(next);
+                  if (league === l.id && !next.has(l.id)) setLeague([...next][0] ?? '');
+                  setClub(0);
+                }} />
+                <Flag name={world.nations[l.nation].name} />{l.name}
+                <span className="muted">{natName(world.nations[l.nation].name)}</span>
+              </label>
+            ))}
+          </div>
+          <div className="muted" style={{ marginTop: 6 }}>{t('start.leaguesHint')}</div>
         </Panel>
       )}
       {!ch && (
