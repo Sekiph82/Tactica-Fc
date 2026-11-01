@@ -1,7 +1,7 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::views::{MenuSection, SubTitleFlag};
+use crate::views::{MenuSection, SubTitleFlag, manager_career_menu};
 use crate::worker::WorkerStatus;
 use crate::{ApiError, ApiResult, GameAppData, I18n, LlmSettings};
 use askama::Template;
@@ -162,6 +162,21 @@ pub async fn country_list_action(
                 .map(|league| league.name.clone())
                 .unwrap_or_default(),
         });
+    let current_path = format!("/{}", route_params.lang);
+    let menu_sections = manager_career
+        .as_ref()
+        .map(|career| manager_career_menu(&i18n, &route_params.lang, &career.team_slug, &current_path))
+        .unwrap_or_default();
+    let sub_title = manager_career
+        .as_ref()
+        .map(|career| {
+            if career.league_name.is_empty() {
+                career.club_name.clone()
+            } else {
+                format!("{} · {}", career.club_name, career.league_name)
+            }
+        })
+        .unwrap_or_else(|| i18n.t("select_country_sub").to_string());
     let mut manager_teams = Vec::new();
     for continent in &simulator_data.continents {
         for country in &continent.countries {
@@ -223,12 +238,12 @@ pub async fn country_list_action(
         title: format!("TACTICA FC v{}", env!("CARGO_PKG_VERSION")),
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),
-        sub_title: i18n.t("select_country_sub").to_string(),
+        sub_title,
         sub_title_link: format!("/{}", route_params.lang),
         sub_title_flag: None,
         header_color: String::new(),
         foreground_color: String::new(),
-        menu_sections: vec![],
+        menu_sections,
         lang: route_params.lang,
         i18n,
         continents,

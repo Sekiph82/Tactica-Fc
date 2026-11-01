@@ -192,6 +192,61 @@ pub fn search_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSecti
     ]
 }
 
+/// Career-focused navigation shown after the manager has selected a club.
+/// Keep the startup country/league/club selector out of the active career menu.
+pub fn manager_career_menu(
+    i18n: &I18n,
+    lang: &str,
+    team_slug: &str,
+    current_path: &str,
+) -> Vec<MenuSection> {
+    let team_url = format!("/{}/teams/{}", lang, team_slug);
+    let tactics_url = format!("{}/tactics", team_url);
+    let schedule_url = format!("{}/schedule", team_url);
+    let transfers_url = format!("{}/transfers", team_url);
+    let item = |title: String, url: String, icon: &str| MenuSection::plain(vec![MenuItem {
+        active: current_path == url || current_path.starts_with(&format!("{}/", url)),
+        title,
+        url,
+        icon: icon.to_string(),
+    }]);
+
+    vec![
+        MenuSection::plain(vec![MenuItem {
+            title: i18n.t("home").to_string(),
+            url: format!("/{}", lang),
+            icon: "fa-home".to_string(),
+            active: current_path == format!("/{}", lang),
+        }]),
+        item(
+            i18n.t("tactica_manager_hub_team").to_string(),
+            team_url.clone(),
+            "fa-users",
+        ),
+        item(
+            i18n.t("tactica_manager_hub_tactics").to_string(),
+            tactics_url,
+            "fa-sliders",
+        ),
+        item(
+            i18n.t("tactica_manager_hub_schedule").to_string(),
+            schedule_url,
+            "fa-calendar",
+        ),
+        item(
+            i18n.t("tactica_manager_hub_transfers").to_string(),
+            transfers_url,
+            "fa-right-left",
+        ),
+        item(
+            i18n.t("news").to_string(),
+            format!("{}/newspaper", team_url),
+            "fa-newspaper",
+        ),
+        search_section(i18n, lang, current_path),
+    ]
+}
+
 fn about_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSection {
     let about_url = format!("/{}/about", lang);
     MenuSection::plain(vec![MenuItem {

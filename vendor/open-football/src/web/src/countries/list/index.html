@@ -19,6 +19,7 @@
         </nav>
     </section>
     {% endif %}
+    {% if manager_career.is_none() %}
     <section class="tactica-home-hero">
         <img class="tactica-home-hero-art" src="/static/images/tactica-fc-manager-hero.png" alt="{{ i18n.t("mgr_home_hero_alt") }}">
         <div class="tactica-home-hero-copy">
@@ -28,7 +29,6 @@
             <a class="tactica-hero-cta" href="#tactica-clubs">{{ i18n.t("tactica_home_cta") }} <i class="fa fa-arrow-down" aria-hidden="true"></i></a>
         </div>
     </section>
-    {% if manager_career.is_none() %}
     <section class="tactica-career-start">
         <div class="tactica-career-start-copy">
             <span class="tactica-eyebrow">{{ i18n.t("tactica_start_career_eyebrow") }}</span>
@@ -89,6 +89,7 @@
     })();
     </script>
     {% endif %}
+    {% if manager_career.is_none() %}
     <div class="fm-home-overview">
         <div class="fm-info-grid fm-info-grid-home">
             <div class="fm-info-tile fm-info-tile-machine">
@@ -404,5 +405,6 @@
         </div>
     </section>
     {% endfor %}
+    {% endif %}
 </div>
 {% endblock %}
