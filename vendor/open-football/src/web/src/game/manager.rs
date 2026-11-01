@@ -966,90 +966,104 @@ pub async fn update_transfer_negotiation_action(
             .unwrap_or_else(|| (club.finance.balance.balance.max(0) as f64) * 0.3)
     });
 
-    let Some(country) = sim
-        .continents
-        .iter_mut()
-        .flat_map(|continent| &mut continent.countries)
-        .find(|country| {
+    let (country_id, previous_negotiation) = {
+        let Some(country) = sim
+            .continents
+            .iter_mut()
+            .flat_map(|continent| &mut continent.countries)
+            .find(|country| {
+                country
+                    .transfer_market
+                    .negotiations
+                    .get(&body.negotiation_id)
+                    .is_some_and(|negotiation| negotiation.buying_club_id == buyer_club_id)
+            })
+        else {
+            return StatusCode::NOT_FOUND;
+        };
+        let country_id = country.id;
+        let Some(negotiation) = country
+            .transfer_market
+            .negotiations
+            .get_mut(&body.negotiation_id)
+        else {
+            return StatusCode::NOT_FOUND;
+        };
+        if !matches!(
+            &negotiation.status,
+            NegotiationStatus::Pending | NegotiationStatus::Countered
+        ) {
+            return StatusCode::CONFLICT;
+        }
+
+        let previous = negotiation.clone();
+        match &negotiation.phase {
+            NegotiationPhase::ClubNegotiation { round, .. } => {
+                if *round >= 3 {
+                    return StatusCode::CONFLICT;
+                }
+                let Some(fee) = body.fee else {
+                    return StatusCode::BAD_REQUEST;
+                };
+                if fee < negotiation.current_offer.base_fee.amount {
+                    return StatusCode::BAD_REQUEST;
+                }
+                if budget.is_some_and(|available| fee > available) {
+                    return StatusCode::PAYMENT_REQUIRED;
+                }
+                let mut offer = negotiation.current_offer.clone();
+                offer.base_fee.amount = fee;
+                offer.offered_date = date;
+                offer.contract_length_years = Some(body.contract_years);
+                let terms = offer
+                    .personal_terms
+                    .get_or_insert_with(PersonalTermsOffer::default);
+                terms.contract_years = Some(body.contract_years);
+                if let Some(wage) = body.annual_wage {
+                    terms.annual_wage = Some(wage);
+                }
+                negotiation.counter_offer(offer);
+                negotiation.advance_club_negotiation_round(date);
+            }
+            NegotiationPhase::PersonalTerms { round, .. } => {
+                if *round >= 2 {
+                    return StatusCode::CONFLICT;
+                }
+                if body.fee.is_some() {
+                    return StatusCode::BAD_REQUEST;
+                }
+                let Some(wage) = body.annual_wage else {
+                    return StatusCode::BAD_REQUEST;
+                };
+                if negotiation
+                    .offered_salary
+                    .is_some_and(|current| wage < current)
+                {
+                    return StatusCode::BAD_REQUEST;
+                }
+                negotiation.raise_offered_salary(wage);
+                negotiation.current_offer.contract_length_years = Some(body.contract_years);
+                let terms = negotiation
+                    .current_offer
+                    .personal_terms
+                    .get_or_insert_with(PersonalTermsOffer::default);
+                terms.contract_years = Some(body.contract_years);
+                negotiation.advance_personal_terms_round(date);
+            }
+            _ => return StatusCode::CONFLICT,
+        }
+        (country_id, previous)
+    };
+    let status = persist_manager_world(&state, sim);
+    if status != StatusCode::ACCEPTED {
+        if let Some(country) = sim.country_mut(country_id) {
             country
                 .transfer_market
                 .negotiations
-                .get(&body.negotiation_id)
-                .is_some_and(|negotiation| negotiation.buying_club_id == buyer_club_id)
-        })
-    else {
-        return StatusCode::NOT_FOUND;
-    };
-    let Some(negotiation) = country
-        .transfer_market
-        .negotiations
-        .get_mut(&body.negotiation_id)
-    else {
-        return StatusCode::NOT_FOUND;
-    };
-    if !matches!(
-        &negotiation.status,
-        NegotiationStatus::Pending | NegotiationStatus::Countered
-    ) {
-        return StatusCode::CONFLICT;
-    }
-
-    match &negotiation.phase {
-        NegotiationPhase::ClubNegotiation { round, .. } => {
-            if *round >= 3 {
-                return StatusCode::CONFLICT;
-            }
-            let Some(fee) = body.fee else {
-                return StatusCode::BAD_REQUEST;
-            };
-            if fee < negotiation.current_offer.base_fee.amount {
-                return StatusCode::BAD_REQUEST;
-            }
-            if budget.is_some_and(|available| fee > available) {
-                return StatusCode::PAYMENT_REQUIRED;
-            }
-            let mut offer = negotiation.current_offer.clone();
-            offer.base_fee.amount = fee;
-            offer.offered_date = date;
-            offer.contract_length_years = Some(body.contract_years);
-            let terms = offer
-                .personal_terms
-                .get_or_insert_with(PersonalTermsOffer::default);
-            terms.contract_years = Some(body.contract_years);
-            if let Some(wage) = body.annual_wage {
-                terms.annual_wage = Some(wage);
-            }
-            negotiation.counter_offer(offer);
-            negotiation.advance_club_negotiation_round(date);
+                .insert(body.negotiation_id, previous_negotiation);
         }
-        NegotiationPhase::PersonalTerms { round, .. } => {
-            if *round >= 2 {
-                return StatusCode::CONFLICT;
-            }
-            if body.fee.is_some() {
-                return StatusCode::BAD_REQUEST;
-            }
-            let Some(wage) = body.annual_wage else {
-                return StatusCode::BAD_REQUEST;
-            };
-            if negotiation
-                .offered_salary
-                .is_some_and(|current| wage < current)
-            {
-                return StatusCode::BAD_REQUEST;
-            }
-            negotiation.raise_offered_salary(wage);
-            negotiation.current_offer.contract_length_years = Some(body.contract_years);
-            let terms = negotiation
-                .current_offer
-                .personal_terms
-                .get_or_insert_with(PersonalTermsOffer::default);
-            terms.contract_years = Some(body.contract_years);
-            negotiation.advance_personal_terms_round(date);
-        }
-        _ => return StatusCode::CONFLICT,
     }
-    persist_manager_world(&state, sim)
+    status
 }
 
 /// Queue the managed side's decision for the next ordinary transfer tick.
@@ -1075,41 +1089,55 @@ pub async fn decide_incoming_transfer_offer_action(
         return StatusCode::FORBIDDEN;
     }
     let managed_club_id = managed_team.club_id;
-    let Some(country) = sim
-        .continents
-        .iter_mut()
-        .flat_map(|continent| &mut continent.countries)
-        .find(|country| {
+    let (country_id, previous_negotiation) = {
+        let Some(country) = sim
+            .continents
+            .iter_mut()
+            .flat_map(|continent| &mut continent.countries)
+            .find(|country| {
+                country
+                    .transfer_market
+                    .negotiations
+                    .get(&body.negotiation_id)
+                    .is_some_and(|negotiation| {
+                        negotiation.selling_club_id == managed_club_id
+                            || (body.accept && negotiation.buying_club_id == managed_club_id)
+                    })
+            })
+        else {
+            return StatusCode::NOT_FOUND;
+        };
+        let country_id = country.id;
+        let Some(negotiation) = country
+            .transfer_market
+            .negotiations
+            .get_mut(&body.negotiation_id)
+        else {
+            return StatusCode::NOT_FOUND;
+        };
+        let previous = negotiation.clone();
+        let decision = if negotiation.selling_club_id == managed_club_id {
+            queue_manager_decision(negotiation, body.accept)
+        } else if negotiation.buying_club_id == managed_club_id && body.accept {
+            queue_manager_buyer_accept(negotiation)
+        } else {
+            Err(StatusCode::CONFLICT)
+        };
+        if decision.is_err() {
+            return StatusCode::CONFLICT;
+        }
+        (country_id, previous)
+    };
+    let status = persist_manager_world(&state, sim);
+    if status != StatusCode::ACCEPTED {
+        if let Some(country) = sim.country_mut(country_id) {
             country
                 .transfer_market
                 .negotiations
-                .get(&body.negotiation_id)
-                .is_some_and(|negotiation| {
-                    negotiation.selling_club_id == managed_club_id
-                        || (body.accept && negotiation.buying_club_id == managed_club_id)
-                })
-        })
-    else {
-        return StatusCode::NOT_FOUND;
-    };
-    let Some(negotiation) = country
-        .transfer_market
-        .negotiations
-        .get_mut(&body.negotiation_id)
-    else {
-        return StatusCode::NOT_FOUND;
-    };
-    let decision = if negotiation.selling_club_id == managed_club_id {
-        queue_manager_decision(negotiation, body.accept)
-    } else if negotiation.buying_club_id == managed_club_id && body.accept {
-        queue_manager_buyer_accept(negotiation)
-    } else {
-        Err(StatusCode::CONFLICT)
-    };
-    if decision.is_err() {
-        return StatusCode::CONFLICT;
+                .insert(body.negotiation_id, previous_negotiation);
+        }
     }
-    persist_manager_world(&state, sim)
+    status
 }
 
 #[cfg(test)]
