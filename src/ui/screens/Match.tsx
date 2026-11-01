@@ -25,6 +25,7 @@ import { useHotkeys } from '../hotkeys';
 import { TeamTalk } from '../teamtalk';
 import { talkDone } from '../../game/teamtalk';
 import { OpenFootballPitch, type OpenFootballBridge } from '../OpenFootballPitch';
+import { makeOpenFootballSetup, type OpenFootballSetup } from '../openFootballSetup';
 import { openFootballPlaybackSpeed } from '../openFootballSpeed';
 
 // Den igangværende kamp overlever navigation mellem skærme
@@ -68,7 +69,7 @@ export function statColors(home: number, away: number, me: number): [string, str
   return me === 0 ? [own, pick] : [pick, own];
 }
 
-let live: { fixture: number; sim: MatchSim; lines: { text: string; cls: string; m: number; k?: string }[]; consumed: number; visualQueue: MatchVisualFrame[]; visualSeen: number; viewerEventsSeen?: number; viewer?: OpenFootballBridge; halfShown?: boolean; shotsSeen?: number; cornersSeen?: number; h2hInit?: boolean; evSeen?: number; h2h?: H2hState; ldSeen?: number; prevTab?: string } | null = null;
+let live: { fixture: number; sim: MatchSim; viewerSetup: OpenFootballSetup; lines: { text: string; cls: string; m: number; k?: string }[]; consumed: number; visualQueue: MatchVisualFrame[]; visualSeen: number; viewerEventsSeen?: number; viewer?: OpenFootballBridge; halfShown?: boolean; shotsSeen?: number; cornersSeen?: number; h2hInit?: boolean; evSeen?: number; h2h?: H2hState; ldSeen?: number; prevTab?: string } | null = null;
 
 export function MatchScreen({ id }: { id: number }) {
   const g = useGame()!;
@@ -367,7 +368,10 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
   useEffect(() => {
     document.querySelector<HTMLElement>('.main')?.scrollTo({ top: 0, behavior: 'instant' });
   }, [id]);
-  if (!live || live.fixture !== id) live = { fixture: id, sim: createLiveMatch(f), lines: [], consumed: 0, visualQueue: [], visualSeen: 0 };
+  if (!live || live.fixture !== id) {
+    const sim = createLiveMatch(f);
+    live = { fixture: id, sim, viewerSetup: makeOpenFootballSetup(g, f, sim), lines: [], consumed: 0, visualQueue: [], visualSeen: 0 };
+  }
   const L = live;
   const sim = L.sim;
   const me = f.home === g.userClub ? 0 : 1;
@@ -776,7 +780,7 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
       )}
       <div className="match2d">
           <div className="match-stage">
-            <OpenFootballPitch id={id} fixture={f} game={g} sim={sim} speed={openFootballPlaybackSpeed(speed, h2h ? { halfMinutes: g.options.h2hHalfMinutes ?? 3, homeSpeed: hs.homeSpeed, awaySpeed: hs.awaySpeed } : undefined)} playing={!paused && !report && viewerReady && !viewerFailed && (!h2h || hs.phase === 'play')}
+            <OpenFootballPitch id={id} setup={L.viewerSetup} speed={openFootballPlaybackSpeed(speed, h2h ? { halfMinutes: g.options.h2hHalfMinutes ?? 3, homeSpeed: hs.homeSpeed, awaySpeed: hs.awaySpeed } : undefined)} playing={!paused && !report && viewerReady && !viewerFailed && (!h2h || hs.phase === 'play')}
               onBridge={(bridge) => { L.viewer = bridge ?? undefined; setViewerBridge(bridge); }} onReady={setViewerReady}
               onFailure={() => { L.viewer = undefined; setViewerBridge(null); setViewerReady(false); setViewerFailed(true); }} />
             {!viewerReady && <div className="match-viewer-status" role="status" aria-live="polite">

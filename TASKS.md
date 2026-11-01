@@ -47,6 +47,7 @@ This file is the single source of truth for milestone status. Mark work complete
 ## TFC-M04: Match engine visual integration — IN PROGRESS
 
 - [x] Set the intended match architecture: TACTICA's CM-style React/TypeScript career and deterministic match engine are authoritative; Open Football is used as the embedded match presentation/viewer and only the required viewer/data bridge is retained. `npm run dev` now launches the TACTICA React application; `npm run open-football` remains an explicit way to launch the separate upstream application while migration work continues. H2H kickoff waits for viewer readiness so the simulation cannot get ahead of its opening image. Desktop/Android launchers, ownership of the full career flow, and visual acceptance remain open.
+- [x] Keep the embedded Open Football pitch component behind a presentation-only setup DTO: TACTICA prepares the opening snapshot, team colors/names, player roster, and duration; the renderer receives no `MatchSim` reference or match-advancement API. `npm exec tsc -- --noEmit` passes. Live visual acceptance remains separately tracked below.
 - [x] Existing `MatchSim.step()` supports live deterministic progression; simulation events, shots, tactical changes, and pitch snapshots are exposed to the UI.
 - [x] Add an opt-in live-only visual action timeline with match moment/minute, actor, optional recipient/defender, zone-space endpoints, action kind, and outcome.
 - [x] Add a regression check that recording visual actions leaves the exact match report unchanged for a fixed seed.
