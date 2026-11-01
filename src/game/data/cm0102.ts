@@ -231,7 +231,7 @@ export function parseCM0102(files: Record<string, ArrayBuffer>): CMWorld {
   const inGame = new Set(clubs.map((c) => c[0]));
 
   // spillere
-  const fields = ['id', 'first', 'last', 'dob', 'nation', 'club', 'pos', 'foot', 'height', 'value', 'maxValue', 'caps', 'intGoals', 'contract', 'apps', 'minutes', 'goals', 'assists', 'yellows', 'reds'];
+  const fields = ['id', 'first', 'last', 'dob', 'nation', 'club', 'pos', 'foot', 'height', 'value', 'maxValue', 'caps', 'intGoals', 'contract', 'apps', 'minutes', 'goals', 'assists', 'yellows', 'reds', 'shirtNumber'];
   const players: WorldData['players'] = [];
   const ratings: Record<number, CMRatings> = {};
   const pName = names; void pName;
@@ -242,6 +242,8 @@ export function parseCM0102(files: Record<string, ArrayBuffer>): CMWorld {
     const po = playerAt.get(pRef);
     if (pRef < 0 || po === undefined) continue;
     const id = S.i32(o);
+    // The CM 01/02 player record stores the shirt number immediately after its 32-bit ID.
+    const shirtNumber = S.u8(po + 4);
     const dob = S.date(o + 16);
     const nation = nationIdx.get(S.i32(o + 26));
     if (!dob || nation === undefined) continue;
@@ -277,7 +279,7 @@ export function parseCM0102(files: Record<string, ArrayBuffer>): CMWorld {
     const value = Math.max(0, S.i32(o + 82)) * 3.2;
     players.push([
       id, commonName ? '' : firstName, commonName || lastName || firstName, dob, nation, club, subPos(pos, side), foot, 0,
-      Math.round(value), Math.round(value), S.u8(o + 34), S.u8(o + 35), contract ? `${contract.slice(0, 4)}-06-30` : '', 0, 0, 0, 0, 0, 0,
+      Math.round(value), Math.round(value), S.u8(o + 34), S.u8(o + 35), contract ? `${contract.slice(0, 4)}-06-30` : '', 0, 0, 0, 0, 0, 0, shirtNumber,
     ]);
     ratings[id] = { ca, pa, attrs, pos, side };
   }

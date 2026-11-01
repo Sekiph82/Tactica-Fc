@@ -362,7 +362,7 @@ export class MatchSim {
     return this.teams.flatMap((t) => t.on.filter((sp) => !sp.off).map((sp) => {
       const center = includeCenters ? this.playerCenters.get(sp.p.id) : undefined;
       return {
-        id: sp.p.id, team: t.idx, num: sp.slot + 1, gk: t.tactic.slots[sp.slot]?.pos === 'GK',
+        id: sp.p.id, team: t.idx, num: sp.p.shirtNumber ?? sp.slot + 1, gk: t.tactic.slots[sp.slot]?.pos === 'GK',
         ax: sp.ax, ay: sp.ay, dx: sp.dx, dy: sp.dy, name: sp.p.last,
         ...(center ? { x: center[0], y: center[1] } : {}),
       };

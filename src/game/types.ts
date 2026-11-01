@@ -88,6 +88,8 @@ export interface Injury {
 
 export interface Player {
   id: number;
+  /** Original squad shirt number when supplied by an imported database. */
+  shirtNumber?: number;
   first: string;
   last: string;
   dob: string;

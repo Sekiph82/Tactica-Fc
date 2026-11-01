@@ -132,6 +132,8 @@ export function createGame(world: WorldData, o: NewGameOptions): GameState {
       stats: { apps: r[F.apps] as number, minutes: r[F.minutes] as number, goals: r[F.goals] as number, assists: r[F.assists] as number, yellows: r[F.yellows] as number, reds: r[F.reds] as number },
       contractEnd: (r[F.contract] as string) || undefined, date, seed, wealth,
     });
+    const shirtNumber = Number(r[F.shirtNumber]);
+    if (Number.isInteger(shirtNumber) && shirtNumber > 0 && shirtNumber <= 99) p.shirtNumber = shirtNumber;
     // CM 01/02: originalens evner, potentiale og positioner
     const rt = cm?.ratings[p.id];
     if (rt) {

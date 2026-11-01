@@ -40,7 +40,7 @@ export function makeOpenFootballSetup(game: GameState, fixture: Fixture, sim: Ma
       const slot = live.tactic.slots[entry.slot];
       return {
         id: entry.id,
-        shirt_number: entry.slot + 1,
+        shirt_number: player?.shirtNumber ?? entry.slot + 1,
         first_name: player?.first ?? '',
         last_name: player?.last || player?.first || `#${entry.id}`,
         position: slot?.pos === 'GK' ? 'GK' : slot?.pos ?? 'M',
@@ -54,7 +54,7 @@ export function makeOpenFootballSetup(game: GameState, fixture: Fixture, sim: Ma
       const bestPosition = player?.pos.length ? player.pos.indexOf(Math.max(...player.pos)) : -1;
       return {
         id,
-        shirt_number: 12 + benchIndex,
+        shirt_number: player?.shirtNumber ?? 12 + benchIndex,
         first_name: player?.first ?? '',
         last_name: player?.last || player?.first || `#${id}`,
         position: bestPosition >= 0 ? POSITIONS[bestPosition] ?? 'M' : 'M',
