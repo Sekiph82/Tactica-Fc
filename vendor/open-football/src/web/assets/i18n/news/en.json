@@ -1,6 +1,9 @@
 {
   "manager_mark_news_read": "Mark all editions as read",
   "manager_mark_news_read_failed": "Could not mark editions as read. Try again.",
+  "manager_follow_league": "Follow this league",
+  "manager_unfollow_league": "Unfollow this league",
+  "manager_follow_league_failed": "Could not update followed leagues. Try again.",
   "newspaper_edition": "Edition",
   "newspaper_results": "Results",
   "newspaper_in_brief": "In brief",

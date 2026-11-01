@@ -62,6 +62,7 @@ pub struct TeamScheduleTemplate {
     /// Printed items waiting on the newspaper tab, for the tabbar badge.
     pub newspaper_count: usize,
     pub unread_newspaper_count: usize,
+    pub followed_league_news: Vec<FollowedLeagueNewsView>,
     pub season_base: String,
     pub seasons: Option<SeasonStep>,
     pub items: Vec<TeamScheduleItem>,
@@ -70,6 +71,12 @@ pub struct TeamScheduleTemplate {
 pub struct ManagerRosterOption {
     pub id: u32,
     pub name: String,
+}
+
+pub struct FollowedLeagueNewsView {
+    pub name: String,
+    pub url: String,
+    pub unread_count: usize,
 }
 
 pub struct TeamScheduleItem {
@@ -334,17 +341,36 @@ pub async fn team_schedule_get_action(
         Vec::new()
     };
 
-    let unread_newspaper_count = if managed_team_id == Some(team.id) {
+    let manager_snapshot = (managed_team_id == Some(team.id))
+        .then(|| state.manager_career_store.load_snapshot(team.id).unwrap_or_default());
+    let unread_newspaper_count = if let Some(snapshot) = manager_snapshot.as_ref() {
         let latest_issue = team.newsroom.latest().map(|issue| issue.number).unwrap_or(0);
-        let last_read_issue = state
-            .manager_career_store
-            .load_snapshot(team.id)
-            .map(|snapshot| snapshot.last_read_newspaper_issue)
-            .unwrap_or(0);
+        let last_read_issue = snapshot.last_read_newspaper_issue;
         latest_issue.saturating_sub(last_read_issue) as usize
     } else {
         0
     };
+    let mut followed_league_news: Vec<_> = manager_snapshot
+        .as_ref()
+        .into_iter()
+        .flat_map(|snapshot| snapshot.followed_league_ids.iter())
+        .filter_map(|league_id| {
+            let league = simulator_data.league(*league_id)?;
+            let latest = league.newsroom.latest().map(|issue| issue.number).unwrap_or(0);
+            let last_read = manager_snapshot
+                .as_ref()?
+                .last_read_league_issues
+                .get(league_id)
+                .copied()
+                .unwrap_or(0);
+            Some(FollowedLeagueNewsView {
+                name: views::league_display_name(league, &i18n, simulator_data),
+                url: format!("{}/newspaper", LeagueAddress::of(simulator_data, league).url(&route_params.lang)),
+                unread_count: latest.saturating_sub(last_read) as usize,
+            })
+        })
+        .collect();
+    followed_league_news.sort_by(|a, b| a.name.cmp(&b.name));
 
     Ok(TeamScheduleTemplate {
         css_version: CSS_VERSION,
@@ -393,6 +419,7 @@ pub async fn team_schedule_get_action(
             NewspaperCounter::count(simulator_data, team)
         },
         unread_newspaper_count,
+        followed_league_news,
         season_base: current_path,
         seasons,
         items,

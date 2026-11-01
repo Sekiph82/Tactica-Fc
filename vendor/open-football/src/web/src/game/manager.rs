@@ -244,6 +244,67 @@ pub async fn manager_mark_news_read_action(State(state): State<GameAppData>) -> 
     }
 }
 
+pub async fn manager_toggle_follow_league_action(
+    State(state): State<GameAppData>,
+    Path(league_id): Path<u32>,
+) -> StatusCode {
+    let Some(team_id) = managed_team_id(&state).await else {
+        return StatusCode::FORBIDDEN;
+    };
+    let latest_issue = {
+        let guard = state.data.read().await;
+        let Some(data) = guard.as_ref() else {
+            return StatusCode::SERVICE_UNAVAILABLE;
+        };
+        let Some(league) = data.league(league_id) else {
+            return StatusCode::NOT_FOUND;
+        };
+        league.newsroom.latest().map(|issue| issue.number).unwrap_or(0)
+    };
+    match state.manager_career_store.update_snapshot(team_id, |snapshot| {
+        if snapshot.followed_league_ids.contains(&league_id) {
+            snapshot.followed_league_ids.retain(|id| *id != league_id);
+            snapshot.last_read_league_issues.remove(&league_id);
+        } else {
+            snapshot.followed_league_ids.push(league_id);
+            snapshot.last_read_league_issues.insert(league_id, latest_issue);
+        }
+    }) {
+        Ok(_) => StatusCode::NO_CONTENT,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+pub async fn manager_mark_league_news_read_action(
+    State(state): State<GameAppData>,
+    Path(league_id): Path<u32>,
+) -> StatusCode {
+    let Some(team_id) = managed_team_id(&state).await else {
+        return StatusCode::FORBIDDEN;
+    };
+    let latest_issue = {
+        let guard = state.data.read().await;
+        let Some(data) = guard.as_ref() else {
+            return StatusCode::SERVICE_UNAVAILABLE;
+        };
+        let Some(league) = data.league(league_id) else {
+            return StatusCode::NOT_FOUND;
+        };
+        league.newsroom.latest().map(|issue| issue.number).unwrap_or(0)
+    };
+    let result = state.manager_career_store.update_snapshot(team_id, |snapshot| {
+        if snapshot.followed_league_ids.contains(&league_id) {
+            let last_read = snapshot.last_read_league_issues.entry(league_id).or_default();
+            *last_read = (*last_read).max(latest_issue);
+        }
+    });
+    match result {
+        Ok(snapshot) if snapshot.followed_league_ids.contains(&league_id) => StatusCode::NO_CONTENT,
+        Ok(_) => StatusCode::FORBIDDEN,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
 /// Keep the manager's chosen XI when the formation changes, moving players
 /// into the new shape's most familiar positions. Any picks that cannot be
 /// matched by a playable position are retained in the remaining slots, so a

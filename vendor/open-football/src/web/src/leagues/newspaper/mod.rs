@@ -46,6 +46,10 @@ pub struct LeagueNewspaperTemplate {
     pub league_url: String,
     /// Editions on the shelf, for the tabbar badge.
     pub newspaper_count: usize,
+    pub manager_team: bool,
+    pub followed_by_manager: bool,
+    pub league_id: u32,
+    pub unread_newspaper_count: usize,
     /// Newest month first. Empty until the division's first press run.
     pub issues: Vec<IssueView>,
 }
@@ -77,6 +81,23 @@ pub async fn league_newspaper_action(
     let league_title = views::league_display_name(league, &i18n, simulator_data);
     let masthead = PressDesk::masthead(league.newsroom.masthead_key(), &league.name, &news);
     let issues = LeaguePress::typeset(simulator_data, league, &masthead, &i18n, &news);
+    let manager_team_id = *state.manager_team_id.read().await;
+    let manager_snapshot = manager_team_id
+        .map(|team_id| state.manager_career_store.load_snapshot(team_id).unwrap_or_default());
+    let followed_by_manager = manager_snapshot
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.followed_league_ids.contains(&league.id));
+    let latest_issue_number = league.newsroom.latest().map(|issue| issue.number).unwrap_or(0);
+    let unread_newspaper_count = manager_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.last_read_league_issues.get(&league.id))
+        .copied()
+        .unwrap_or(0);
+    let unread_newspaper_count = if followed_by_manager {
+        latest_issue_number.saturating_sub(unread_newspaper_count) as usize
+    } else {
+        0
+    };
 
     Ok(LeagueNewspaperTemplate {
         css_version: CSS_VERSION,
@@ -126,6 +147,10 @@ pub async fn league_newspaper_action(
         },
         league_url,
         newspaper_count: LeagueNewspaperCounter::count(league),
+        manager_team: manager_team_id.is_some(),
+        followed_by_manager,
+        league_id: league.id,
+        unread_newspaper_count,
         issues,
         lang: route_params.lang,
         i18n,

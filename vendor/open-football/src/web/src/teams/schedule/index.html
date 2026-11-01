@@ -10,6 +10,14 @@
             {% include "common/_seasonstep.html" %}
         </div>
         {% if is_managed %}
+        {% if !followed_league_news.is_empty() %}
+        <div style="padding:10px 18px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <strong>{{ i18n.t("news") }}:</strong>
+            {% for league_news in followed_league_news %}
+            <a class="fm-button" href="{{ league_news.url }}">{{ league_news.name }}{% if league_news.unread_count > 0 %} · {{ league_news.unread_count }}{% endif %}</a>
+            {% endfor %}
+        </div>
+        {% endif %}
         {% if unread_newspaper_count > 0 %}
         <div style="padding:10px 18px 0">
             <a class="fm-button" href="/{{ lang }}/teams/{{ team_slug }}/newspaper">{{ i18n.t("news") }} · {{ unread_newspaper_count }}</a>

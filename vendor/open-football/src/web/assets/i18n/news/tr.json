@@ -1,6 +1,9 @@
 {
   "manager_mark_news_read": "Tüm sayıları okundu olarak işaretle",
   "manager_mark_news_read_failed": "Okundu işaretlenemedi. Tekrar deneyin.",
+  "manager_follow_league": "Bu ligi takip et",
+  "manager_unfollow_league": "Lig takibini bırak",
+  "manager_follow_league_failed": "Lig takibi güncellenemedi. Tekrar deneyin.",
   "newspaper_edition": "Sayı",
   "newspaper_results": "Sonuçlar",
   "newspaper_in_brief": "Kısaca",

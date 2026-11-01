@@ -10,7 +10,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-const SCHEMA_VERSION: u32 = 4;
+const SCHEMA_VERSION: u32 = 5;
 const FILE_NAME: &str = "manager-career.jsonl";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -46,6 +46,12 @@ pub struct ManagerCareerSnapshot {
     /// Highest club-newspaper edition the manager has explicitly read.
     #[serde(default)]
     pub last_read_newspaper_issue: u32,
+    /// League IDs whose monthly newspapers the manager follows.
+    #[serde(default)]
+    pub followed_league_ids: Vec<u32>,
+    /// Highest monthly edition read for each followed league.
+    #[serde(default)]
+    pub last_read_league_issues: HashMap<u32, u32>,
 }
 
 #[derive(Debug, Clone)]

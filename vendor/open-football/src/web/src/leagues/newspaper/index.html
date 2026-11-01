@@ -19,6 +19,37 @@
    and the two papers are meant to look like they came off the same
    press. #}
 <div class="fm-page np-desk">
+    {% if manager_team %}
+    <div style="display:flex;justify-content:flex-end;gap:8px;padding:0 0 12px;flex-wrap:wrap">
+        <button type="button" class="fm-button" id="fm-manager-follow-league" data-league-id="{{ league_id }}" data-follow="{{ news.t("manager_follow_league") }}" data-unfollow="{{ news.t("manager_unfollow_league") }}" data-failed="{{ news.t("manager_follow_league_failed") }}">{% if followed_by_manager %}{{ news.t("manager_unfollow_league") }}{% else %}{{ news.t("manager_follow_league") }}{% endif %}</button>
+        {% if followed_by_manager && unread_newspaper_count > 0 %}
+        <button type="button" class="fm-button" id="fm-manager-mark-league-news-read" data-league-id="{{ league_id }}" data-failed="{{ news.t("manager_mark_news_read_failed") }}">{{ news.t("manager_mark_news_read") }}</button>
+        {% endif %}
+    </div>
+    <script>
+    (function() {
+        var follow = document.getElementById('fm-manager-follow-league');
+        var markRead = document.getElementById('fm-manager-mark-league-news-read');
+        async function post(button, url, onSuccess) {
+            button.disabled = true;
+            try {
+                var response = await fetch(url, { method: 'POST' });
+                if (!response.ok) throw new Error('request failed');
+                onSuccess();
+            } catch (_) {
+                button.disabled = false;
+                button.textContent = button.dataset.failed || 'Request failed';
+            }
+        }
+        if (follow) follow.addEventListener('click', function() {
+            post(follow, '/api/manager/followed-league/' + follow.dataset.leagueId, function() { window.location.reload(); });
+        });
+        if (markRead) markRead.addEventListener('click', function() {
+            post(markRead, '/api/manager/news/league/' + markRead.dataset.leagueId + '/read', function() { window.location.reload(); });
+        });
+    })();
+    </script>
+    {% endif %}
     {% if issues.is_empty() %}
     <div class="np-empty">
         <div class="np-empty-rule"></div>
