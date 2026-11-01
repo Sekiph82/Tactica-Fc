@@ -81,12 +81,17 @@ pub struct ManagerTrainingReport {
     pub date: String,
     pub trained_players: u8,
     pub focus: String,
+    #[serde(default)]
+    pub best_player_id: u32,
     pub best_player: String,
     /// Rolling engine training performance, in tenths on a 1.0–20.0 scale.
     pub best_performance_tenths: u8,
     pub lowest_player: String,
     /// Rolling engine training performance, in tenths on a 1.0–20.0 scale.
     pub lowest_performance_tenths: u8,
+    /// True after the manager has praised this report's best performer.
+    #[serde(default)]
+    pub manager_praised: bool,
 }
 
 #[derive(Debug, Clone)]

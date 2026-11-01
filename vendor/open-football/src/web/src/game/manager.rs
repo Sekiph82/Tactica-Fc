@@ -9,7 +9,7 @@ use core::transfers::deal::negotiation::{
 use core::transfers::deal::offer::{PersonalTermsOffer, TransferOffer};
 use core::transfers::market::TransferListingStatus;
 use core::{
-    IndividualTrainingPlan, MatchTacticType, Person, RoleFamiliarity, SkillType, TacticalStyle,
+    HappinessEventType, IndividualTrainingPlan, MatchTacticType, Person, RoleFamiliarity, SkillType, TacticalStyle,
     Tactics, TrainingFocus,
 };
 use core::continent::{
@@ -340,6 +340,79 @@ pub async fn manager_mark_match_reports_read_action(State(state): State<GameAppD
     }) {
         Ok(_) => StatusCode::NO_CONTENT,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+/// Apply the manager's one-time response to a stored training report. The
+/// player's existing morale event system remains authoritative, and the
+/// world snapshot is flushed before the report is marked as answered.
+pub async fn manager_praise_training_player_action(
+    State(state): State<GameAppData>,
+    Path(report_date): Path<String>,
+) -> StatusCode {
+    let Some(team_id) = managed_team_id(&state).await else {
+        return StatusCode::FORBIDDEN;
+    };
+    let Some(snapshot) = state.manager_career_store.load_snapshot(team_id) else {
+        return StatusCode::NOT_FOUND;
+    };
+    let Some(report) = snapshot.training_reports.iter().find(|report| report.date == report_date).cloned() else {
+        return StatusCode::NOT_FOUND;
+    };
+    if report.manager_praised || report.best_player_id == 0 {
+        return StatusCode::CONFLICT;
+    }
+
+    let data = Arc::clone(&state.data);
+    let mut guard = data.write().await;
+    let Some(sim) = guard.as_mut() else {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    };
+    let sim = Arc::make_mut(sim);
+    let Some(team) = sim.team(team_id) else {
+        return StatusCode::NOT_FOUND;
+    };
+    if team.team_type != core::TeamType::Main {
+        return StatusCode::FORBIDDEN;
+    }
+    let Some(player) = sim.team_mut(team_id).and_then(|team| {
+        team.players.players.iter_mut().find(|player| player.id == report.best_player_id)
+    }) else {
+        return StatusCode::NOT_FOUND;
+    };
+    let previous_happiness = player.happiness.clone();
+    if !player.happiness.add_event_default_with_cooldown(HappinessEventType::ManagerPraise, 7) {
+        return StatusCode::CONFLICT;
+    }
+
+    let status = persist_manager_world(&state, sim);
+    if status != StatusCode::ACCEPTED {
+        if let Some(player) = sim.team_mut(team_id).and_then(|team| {
+            team.players.players.iter_mut().find(|player| player.id == report.best_player_id)
+        }) {
+            player.happiness = previous_happiness;
+        }
+        return status;
+    }
+
+    match state.manager_career_store.update_snapshot(team_id, |snapshot| {
+        if let Some(report) = snapshot.training_reports.iter_mut().find(|report| report.date == report_date) {
+            report.manager_praised = true;
+        }
+    }) {
+        Ok(_) => StatusCode::NO_CONTENT,
+        Err(error) => {
+            log::error!("failed to persist manager training response: {error}");
+            if let Some(player) = sim.team_mut(team_id).and_then(|team| {
+                team.players.players.iter_mut().find(|player| player.id == report.best_player_id)
+            }) {
+                player.happiness = previous_happiness;
+            }
+            if persist_manager_world(&state, sim) != StatusCode::ACCEPTED {
+                log::error!("failed to roll back manager training praise in the world save");
+            }
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
     }
 }
 

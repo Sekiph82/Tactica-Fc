@@ -286,15 +286,15 @@ impl ProcessingRun {
             .filter(|player| player.training.sessions_completed > before.get(&player.id).copied().unwrap_or(0))
             .map(|player| {
                 let form = (player.training.training_performance * 10.0).round().clamp(10.0, 200.0) as u8;
-                (player.full_name.to_string(), form)
+                (player.id, player.full_name.to_string(), form)
             })
             .collect();
         if trained.is_empty() {
             return None;
         }
-        trained.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-        let (lowest_player, lowest_performance_tenths) = trained.first()?.clone();
-        let (best_player, best_performance_tenths) = trained.last()?.clone();
+        trained.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| a.0.cmp(&b.0)));
+        let (_, lowest_player, lowest_performance_tenths) = trained.first()?.clone();
+        let (best_player_id, best_player, best_performance_tenths) = trained.last()?.clone();
         let focus = match team.training_schedule.manager_focus {
             core::ManagerTrainingFocus::Balanced => "balanced",
             core::ManagerTrainingFocus::Fitness => "fitness",
@@ -307,10 +307,12 @@ impl ProcessingRun {
             date: day.to_string(),
             trained_players: trained.len().min(u8::MAX as usize) as u8,
             focus: focus.to_string(),
+            best_player_id,
             best_player,
             best_performance_tenths,
             lowest_player,
             lowest_performance_tenths,
+            manager_praised: false,
         })
     }
 

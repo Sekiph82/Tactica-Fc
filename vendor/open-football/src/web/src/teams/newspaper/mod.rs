@@ -105,6 +105,8 @@ pub struct ManagerTimelineItem {
     pub source_url: String,
     pub action_url: String,
     pub action_label: String,
+    pub manager_action_url: String,
+    pub manager_action_label: String,
     pub unread: bool,
 }
 
@@ -520,6 +522,8 @@ fn build_manager_timeline(
             source_url: String::new(),
             action_url: format!("/{lang}/match/{}", report.match_id),
             action_label: i18n.t("mgr_open_replay").to_string(),
+            manager_action_url: String::new(),
+            manager_action_label: String::new(),
             unread: index >= snapshot.last_read_match_reports,
         });
     }
@@ -547,7 +551,7 @@ fn build_manager_timeline(
         let statement = i18n.t(statement_key);
         let statement_prefix = i18n.t("mgr_training_statement_prefix")
             .replace("{player}", &report.best_player);
-        let (headline, body) = if lang.starts_with("tr") {
+        let (headline, mut body) = if lang.starts_with("tr") {
             (
                 format!("Antrenman raporu · {} oyuncu", report.trained_players),
                 format!(
@@ -576,7 +580,15 @@ fn build_manager_timeline(
                 ),
             )
         };
+        if report.manager_praised {
+            body.push_str(&format!(" {}", i18n.t("mgr_training_praise_recorded")));
+        }
         let team_url = format!("/{lang}/teams/{}", team.slug);
+        let praise_url = if report.manager_praised || report.best_player_id == 0 {
+            String::new()
+        } else {
+            format!("/api/manager/training/{}/praise", report.date)
+        };
         timeline.push(ManagerTimelineItem {
             date: i18n.format_date(sort_date),
             sort_date,
@@ -587,6 +599,8 @@ fn build_manager_timeline(
             source_url: team_url.clone(),
             action_url: team_url,
             action_label: i18n.t("mgr_team_training").to_string(),
+            manager_action_url: praise_url,
+            manager_action_label: i18n.t("mgr_praise_training_player").to_string(),
             unread: index >= snapshot.last_read_training_reports,
         });
     }
@@ -644,6 +658,8 @@ fn append_manager_issue(
             source_url: source_url.to_string(),
             action_url: source_url.to_string(),
             action_label: i18n.t("news").to_string(),
+            manager_action_url: String::new(),
+            manager_action_label: String::new(),
             unread,
         });
     }
