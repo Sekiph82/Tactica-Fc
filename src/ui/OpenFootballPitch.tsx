@@ -4,7 +4,7 @@ import type { MatchSim } from '../game/engine/match';
 import type { MatchPitchSnapshot, MatchVisualAction } from '../game/types';
 import { POSITIONS } from '../game/types';
 import { formationLayout } from '../game/match-pitch';
-import { actionMomentWindows, distributeActionMoments, OpenFootballStateTimeline, toOpenFootballRecordingEvents } from './openFootballRecording';
+import { actionMomentWindows, OpenFootballStateTimeline, toOpenFootballRecordingEvents } from './openFootballRecording';
 
 const MATCH_DURATION_MS = 505_340;
 
@@ -87,6 +87,7 @@ export function OpenFootballPitch({
 
       let previousSnapshotTime = 0;
       let previousBallTime = 0;
+      const previousPlayerTimes = new Map<number, number>();
       bridge = {
         push(snapshots, goals, actions) {
           if (cancelled || snapshots.length === 0) return;
@@ -96,25 +97,36 @@ export function OpenFootballPitch({
           // producing its single final snapshot. Spread those action paths
           // through that step so the viewer receives each real contact in order.
           const actionWindows = actionMomentWindows(actions);
-          const actionMoments = distributeActionMoments(actions);
+          const actionMoments = actionWindows.map((window) => window.event);
           const actionEnds = new Set(actions.map((action) => action.moment + 1));
           const ballSamples: { moment: number; point: [number, number] }[] = [];
+          const playerSamples: { id: number; moment: number; point: [number, number] }[] = [];
           for (const [index, action] of actions.entries()) {
             const window = actionWindows[index];
             const startMoment = window.start + 0.001;
             if (action.ballFrom) ballSamples.push({ moment: startMoment, point: point(action.ballFrom) });
             if (action.ballTo) ballSamples.push({ moment: window.end, point: point(action.ballTo) });
+            playerSamples.push({ id: action.actor, moment: startMoment, point: point(action.from) });
+            if (action.target !== undefined && ['pass', 'longBall', 'throughBall', 'cross'].includes(action.kind)) {
+              playerSamples.push({ id: action.target, moment: window.end, point: point(action.to) });
+            }
           }
           for (const snapshot of snapshots) {
             const time = timestamp(snapshot.moment, sim.totalMoments);
             if (time <= previousSnapshotTime) continue;
             const layout = formationLayout(snapshot);
             for (const [pid, pos] of layout.pos) {
-              const [x, y] = point(pos);
-              (players[pid] ??= []).push([time, x, y]);
+              playerSamples.push({ id: pid, moment: snapshot.moment, point: point(pos) });
             }
             if (!actionEnds.has(snapshot.moment)) ballSamples.push({ moment: snapshot.moment, point: point(layout.ball) });
             previousSnapshotTime = time;
+          }
+          playerSamples.sort((a, b) => a.moment - b.moment);
+          for (const sample of playerSamples) {
+            const time = timestamp(sample.moment, sim.totalMoments);
+            if (time <= (previousPlayerTimes.get(sample.id) ?? 0)) continue;
+            (players[sample.id] ??= []).push([time, sample.point[0], sample.point[1]]);
+            previousPlayerTimes.set(sample.id, time);
           }
           ballSamples.sort((a, b) => a.moment - b.moment);
           for (const sample of ballSamples) {
