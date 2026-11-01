@@ -577,11 +577,13 @@
                     });
                     if (incomingFrames.length) incomingFrames[incomingFrames.length - 1].events = viewerEvents;
                     var readyFrames = [];
+                    var latestAcceptedFrame = frame;
                     incomingFrames.forEach(function(candidate) {
                         // Responses can race; only advance the feed cursor.
                         if (candidate.sequence <= lastLiveSequence || candidate.elapsed_ms < lastLiveElapsedMs) return;
                         lastLiveSequence = candidate.sequence;
                         lastLiveElapsedMs = candidate.elapsed_ms;
+                        latestAcceptedFrame = candidate;
                         if (!viewerPromise) startViewer(view, candidate);
                         else if (viewerSessionId === view.session_id && viewerApi) readyFrames.push(candidate);
                         else if (viewerSessionId === view.session_id) viewerPendingFrames.push(candidate);
@@ -593,9 +595,9 @@
                             liveState.textContent = livePanel.dataset['sub' + subStatus.charAt(0).toUpperCase() + subStatus.slice(1)];
                         }
                     }
-                    liveClock.textContent = Math.floor(frame.elapsed_ms / 60000) + "'";
-                    liveScore.textContent = frame.home_score + ' – ' + frame.away_score;
-                    syncViewerPlayback(frame, view.status);
+                    liveClock.textContent = Math.floor(latestAcceptedFrame.elapsed_ms / 60000) + "'";
+                    liveScore.textContent = latestAcceptedFrame.home_score + ' – ' + latestAcceptedFrame.away_score;
+                    syncViewerPlayback(latestAcceptedFrame, view.status);
                 }).catch(function(error) {
                     liveState.textContent = livePanel.dataset.viewerFailed || livePanel.dataset.commandFailed;
                     console.error('Unable to read the managed live match frame', error);
