@@ -27,6 +27,7 @@ import { talkDone } from '../../game/teamtalk';
 import { OpenFootballPitch, type OpenFootballBridge } from '../OpenFootballPitch';
 import { makeOpenFootballSetup, type OpenFootballSetup } from '../openFootballSetup';
 import { openFootballPlaybackSpeed } from '../openFootballSpeed';
+import { OPEN_FOOTBALL_MATCH_DURATION_MS, openFootballMinuteTimestamp, openFootballTimestamp } from '../openFootballTimeline';
 
 // Den igangværende kamp overlever navigation mellem skærme
 /** Holdfarver til 2D-banen: ens eget hold i klubtemaets farver, modstanderen i en farve der skiller sig ud */
@@ -450,7 +451,7 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
       const goals = sim.events.slice(L.viewerEventsSeen ?? 0).filter((event) => event.k === 'goal' && event.p !== undefined).map((event) => {
         const shotIndex = viewerActions.findIndex((action) => action.kind === 'shot' && action.outcome === 'goal' && action.team === event.t && action.actor === event.p && action.minute === event.m);
         const goalMoment = shotIndex >= 0 ? goalWindows[shotIndex]?.end : undefined;
-        return { player_id: event.p!, time: goalMoment === undefined ? Math.round(event.m / 90 * 505_340) : Math.round(goalMoment / Math.max(sim.totalMoments, 1) * 505_340), is_auto_goal: false };
+        return { player_id: event.p!, time: goalMoment === undefined ? openFootballMinuteTimestamp(event.m) : openFootballTimestamp(goalMoment, sim.totalMoments), is_auto_goal: false };
       });
       L.viewerEventsSeen = sim.events.length;
       L.viewer.push(viewerSnapshots, goals, viewerActions);
@@ -574,7 +575,7 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
             homeSpeed: hs.homeSpeed,
             awaySpeed: hs.awaySpeed,
           } : undefined);
-          const finalBeatMs = Math.max(0, Math.round(505_340 / Math.max(1, sim.totalMoments) / viewerSpeed));
+          const finalBeatMs = Math.max(0, Math.round(OPEN_FOOTBALL_MATCH_DURATION_MS / Math.max(1, sim.totalMoments) / viewerSpeed));
           L.finishPresentationTimer = setTimeout(() => {
             L.finishPresentationReady = true;
             setReport(sim.report());
@@ -639,7 +640,7 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
     if (paused || report || hl || !viewerReady) return;
     const useViewer = !!viewerBridge && viewerReady && !viewerFailed;
     const ms = useViewer
-      ? Math.max(30, Math.round(505_340 / sim.totalMoments / speed))
+      ? Math.max(30, Math.round(OPEN_FOOTBALL_MATCH_DURATION_MS / sim.totalMoments / speed))
       : Math.max(30, g.options.matchSpeed / speed);
     const h = setInterval(() => advance(useViewer ? 1 : speed >= 8 ? 40 : 12), ms);
     return () => clearInterval(h);

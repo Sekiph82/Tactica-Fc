@@ -3,8 +3,7 @@ import type { MatchPitchSnapshot, MatchVisualAction } from '../game/types';
 import { formationLayout } from '../game/match-pitch';
 import { actionMomentWindows, OpenFootballStateTimeline, toOpenFootballRecordingEvents } from './openFootballRecording';
 import type { OpenFootballSetup } from './openFootballSetup';
-
-const MATCH_DURATION_MS = 505_340;
+import { OPEN_FOOTBALL_MATCH_DURATION_MS, openFootballTimestamp } from './openFootballTimeline';
 
 export interface OpenFootballBridge {
   push(
@@ -28,10 +27,6 @@ type ViewerModule = {
 
 function point([x, y]: [number, number]): [number, number] {
   return [Math.max(0, Math.min(840, x * 8.4)), Math.max(0, Math.min(545, y * 5.45))];
-}
-
-function timestamp(moment: number, total: number): number {
-  return Math.max(0, Math.min(MATCH_DURATION_MS, Math.round(moment / Math.max(total, 1) * MATCH_DURATION_MS)));
 }
 
 export function OpenFootballPitch({
@@ -101,7 +96,7 @@ export function OpenFootballPitch({
             }
           }
           for (const snapshot of snapshots) {
-            const time = timestamp(snapshot.moment, setup.totalMoments);
+            const time = openFootballTimestamp(snapshot.moment, setup.totalMoments);
             if (time <= previousSnapshotTime) continue;
             const layout = formationLayout(snapshot);
             for (const [pid, pos] of layout.pos) {
@@ -112,14 +107,14 @@ export function OpenFootballPitch({
           }
           playerSamples.sort((a, b) => a.moment - b.moment);
           for (const sample of playerSamples) {
-            const time = timestamp(sample.moment, setup.totalMoments);
+            const time = openFootballTimestamp(sample.moment, setup.totalMoments);
             if (time <= (previousPlayerTimes.get(sample.id) ?? 0)) continue;
             (players[sample.id] ??= []).push([time, sample.point[0], sample.point[1]]);
             previousPlayerTimes.set(sample.id, time);
           }
           ballSamples.sort((a, b) => a.moment - b.moment);
           for (const sample of ballSamples) {
-            const time = timestamp(sample.moment, setup.totalMoments);
+            const time = openFootballTimestamp(sample.moment, setup.totalMoments);
             if (time <= previousBallTime) continue;
             ball.push([time, sample.point[0], sample.point[1], 0]);
             previousBallTime = time;
@@ -175,7 +170,7 @@ function makeConfig(initial: ReturnType<typeof makeInitialRecording>, setup: Ope
     api_base: '',
     inline_recording: JSON.stringify(initial),
     embedded: true,
-    match_time_ms: MATCH_DURATION_MS,
+    match_time_ms: OPEN_FOOTBALL_MATCH_DURATION_MS,
     home: setup.homeColor,
     away: setup.awayColor,
     home_name: setup.homeName,

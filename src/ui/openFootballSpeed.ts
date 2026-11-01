@@ -1,4 +1,5 @@
-const VIEWER_MATCH_DURATION_MS = 505_340;
+import { OPEN_FOOTBALL_MATCH_DURATION_MS } from './openFootballTimeline';
+
 const MIN_SPEED = 0.1;
 
 export interface HeadToHeadPlayback {
@@ -13,5 +14,5 @@ export function openFootballPlaybackSpeed(singlePlayerSpeed: number, headToHead?
 
   const halfMinutes = Math.max(MIN_SPEED, headToHead.halfMinutes);
   const managersSpeed = Math.max(MIN_SPEED, Math.min(headToHead.homeSpeed, headToHead.awaySpeed));
-  return VIEWER_MATCH_DURATION_MS / (halfMinutes * 120_000) * managersSpeed;
+  return OPEN_FOOTBALL_MATCH_DURATION_MS / (halfMinutes * 120_000) * managersSpeed;
 }

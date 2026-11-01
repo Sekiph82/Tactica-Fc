@@ -1,6 +1,5 @@
 import type { MatchVisualAction } from '../game/types';
-
-const MATCH_DURATION_MS = 505_340;
+import { OPEN_FOOTBALL_MATCH_DURATION_MS, openFootballTimestamp } from './openFootballTimeline';
 const ACTION_ATTITUDE_MS = 2_400;
 
 export interface OpenFootballRecordingEvent {
@@ -39,7 +38,7 @@ export class OpenFootballStateTimeline {
         // win at the same time as the old neutral transition.
         for (const expiry of nextScheduled) playerOutput.push([expiry, state]);
 
-        const resetAt = Math.min(MATCH_DURATION_MS, time + ACTION_ATTITUDE_MS);
+        const resetAt = Math.min(OPEN_FOOTBALL_MATCH_DURATION_MS, time + ACTION_ATTITUDE_MS);
         if (resetAt > time) {
           playerOutput.push([resetAt, 'TACTICA: Neutral']);
           nextScheduled.push(resetAt);
@@ -104,8 +103,7 @@ export function toOpenFootballRecordingEvents(
   };
 
   for (const [index, action] of actions.entries()) {
-    const time = Math.max(0, Math.min(MATCH_DURATION_MS,
-      Math.round(presentationMoments[index] / Math.max(totalMoments, 1) * MATCH_DURATION_MS)));
+    const time = openFootballTimestamp(presentationMoments[index], totalMoments);
     const contact = action.ballTo ?? action.to;
     const px = Math.max(0, Math.min(840, contact[0] * 8.4));
     const py = Math.max(0, Math.min(545, contact[1] * 5.45));
