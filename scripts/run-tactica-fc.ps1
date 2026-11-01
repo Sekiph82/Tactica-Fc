@@ -9,7 +9,7 @@ if ($existingListener) {
     $processName = (Get-Process -Id $listenerProcessId -ErrorAction SilentlyContinue).ProcessName
     if (-not $processName) { $processName = 'unknown process' }
     Write-Host "Port $port is already in use by $processName (PID $listenerProcessId)." -ForegroundColor Yellow
-    Write-Host 'If this is an older TACTICA FC server, stop it in its PowerShell window with Ctrl+C, then run npm run dev again.'
+    Write-Host 'If this is an older TACTICA FC server, stop it in its PowerShell window with Ctrl+C, then run npm run open-football again.'
     exit 1
 }
 

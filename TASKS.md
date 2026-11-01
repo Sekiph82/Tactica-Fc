@@ -294,6 +294,7 @@ This file is the single source of truth for milestone status. Mark work complete
 
 ### TACTICA FC manager-career controls — IN PROGRESS
 
+- [x] Correct the 5184-port conflict message in the separate Open Football launcher to instruct rerunning `npm run open-football`, not the React app's `npm run dev`.
 - [x] Document the Turkish club-takeover, tactics/lineup, training, transfer, day-advance, and match-replay route in `docs/manager-career-guide.md` and link it from the Windows startup section in `README.md`.
 - [x] Add a local manager takeover action on a club's first-team page; selecting it stores the managed team in the running server.
 - [x] Add a searchable A-team career chooser to the opening page when no career is active; it lists league-playing first teams, creates the career through the existing manager API, then opens the managed team's schedule. Fresh-source isolated HTTP verification returned 2,075 choices, created 12 de Junio, and returned 200 for its schedule; the career hub replaced the chooser afterward. Port 5185 and a separate temporary data directory were used; the owner's 5184 process remained untouched.
