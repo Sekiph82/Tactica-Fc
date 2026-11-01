@@ -15406,9 +15406,29 @@ a.np-prose-link.np-mark:focus-visible,
     --tactica-red: #e32832;
     --tactica-red-deep: #a70e19;
     --tactica-border: rgba(216, 217, 220, .15);
+
+    /* Shared semantic tokens for new management screens and components. */
+    --bg: var(--tactica-black);
+    --bg2: var(--tactica-graphite);
+    --surface: var(--tactica-panel);
+    --surface2: var(--tactica-panel-raised);
+    --surface3: #2c2f36;
+    --text: var(--tactica-silver);
+    --muted: var(--tactica-muted);
+    --faint: #747780;
+    --accent: var(--tactica-red);
+    --accent2: #f0525b;
+    --good: #4db78a;
+    --mid: #e4b64f;
+    --bad: var(--tactica-red);
+    --control-height: 42px;
+    --radius-control: 7px;
+    --radius-card: 12px;
+    --radius-pill: 999px;
+    --shadow-card: 0 12px 35px rgba(0,0,0,.2);
 }
 
-html, body { background: var(--tactica-black); color: var(--tactica-silver); }
+html, body { background: var(--bg); color: var(--text); }
 body { background-image: radial-gradient(ellipse at 78% 0%, rgba(150, 18, 28, .12), transparent 34rem); }
 .fm-sidebar { background: #0c0d11; border-right-color: var(--tactica-border); }
 .tactica-sidebar-brand {

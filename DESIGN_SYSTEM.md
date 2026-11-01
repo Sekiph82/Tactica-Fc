@@ -1,24 +1,30 @@
 # TACTICA FC design system
 
-## Brand and themes
+## Brand and theme
 
-- The default interface uses deep navy surfaces with cyan and teal accents, matching the TACTICA FC matchday identity.
-- `--brand-cyan` and `--brand-teal` are product brand colors. Keep them stable when a manager chooses a club theme.
-- `--accent` and `--accent2` are semantic interface accents. Club themes may override them; controls, focus states, and selection states should use these semantic tokens.
-- Light and dark themes share the same semantic roles. Keep text and controls legible in both.
+Use the Black Metal identity across the manager interface: near-black and graphite surfaces, brushed-silver text, and stadium red for selection, focus, and primary actions. Match status colors remain semantic: green for positive, amber for caution, and red for negative or urgent states.
 
-## Shared tokens
+The Open Football web interface defines these shared tokens in `vendor/open-football/src/web/assets/static/css/style.css`. Prefer semantic tokens in new components so a theme adjustment stays consistent:
 
-- Surfaces: `--bg`, `--bg2`, `--surface`, `--surface2`, and `--surface3`.
-- Content: `--text`, `--muted`, `--faint`, `--good`, `--mid`, and `--bad`.
-- Spacing: `--space-1` through `--space-6` (4px through 24px).
-- Controls: `--control-height` and `--radius-control`.
-- Cards and overlays: `--radius-card`, `--radius-pill`, `--shadow`, and `--shadow-popover`.
-- Typography: `--font` for interface text and `--mono` for data that benefits from fixed-width alignment.
+| Role | Token | Current value |
+| --- | --- | --- |
+| Page background | `--bg` | `--tactica-black` (`#08090c`) |
+| Secondary background | `--bg2` | `--tactica-graphite` (`#111318`) |
+| Panel | `--surface` | `--tactica-panel` (`#191b20`) |
+| Raised panel | `--surface2` | `--tactica-panel-raised` (`#22252b`) |
+| Main text | `--text` | `--tactica-silver` (`#d8d9dc`) |
+| Muted text | `--muted` | `--tactica-muted` (`#9b9da4`) |
+| Selection and focus | `--accent` | `--tactica-red` (`#e32832`) |
+| Strong accent | `--accent2` | `#f0525b` |
+| Positive / caution / negative | `--good` / `--mid` / `--bad` | green / amber / red |
 
-## Component rules
+Keep player kit colors, club colors, pitch markings, and match-event semantics independent of the interface theme. Do not use the old navy/cyan shell palette for new TACTICA FC management screens.
 
-- Reuse the shared button, form control, `.panel`, `.screen-head`, `.tabs`, and `table.grid` patterns before adding screen-specific styling.
-- Use semantic accent tokens for selected, focused, and actionable states; reserve status tokens for positive, caution, and negative feedback.
-- Keep dense management tables compact and horizontally scrollable on narrow layouts. Let the pitch remain visually dominant on matchday.
-- Do not place lineup or rating panels over the live pitch. Ratings and condition belong in their existing separate views.
+## Shared component rules
+
+- Reuse the shared button, form control, `.fm-panel`, `.fm-header`, `.fm-submenu`, `.fm-tabs`, and table patterns before adding screen-specific styling.
+- Use `--accent` for selected, focused, and actionable states; reserve `--good`, `--mid`, and `--bad` for status.
+- Use `--control-height`, `--radius-control`, `--radius-card`, and `--radius-pill` to keep controls and panels consistent.
+- Keep dense squad, transfer, and fixture tables compact and horizontally scrollable on narrow layouts.
+- Keep the pitch visually dominant on matchday. Do not place lineup or ratings panels over the live pitch; show ratings and condition in their separate views.
+- Maintain readable contrast, visible keyboard focus, and touch-sized controls on laptop and mobile layouts.
