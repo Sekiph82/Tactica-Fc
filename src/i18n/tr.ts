@@ -54,6 +54,7 @@ export const tr: Record<string, string> = {
   'match.lost': '{opp} karşısında {score} kaybetti ({comp})', 'match.played': 'Maç oynandı',
   'match.preview': 'Maç önü', 'match.yourXI': 'İlk 11’in', 'match.quick': 'Sonucu simüle et',
   'match.kickoff': 'Maçı başlat ▶', 'match.notToday': 'Bu maç bugün oynanmıyor.', 'match.ft': 'Maç sonu',
+  'match.viewerLoading': 'Open Football maç görüntüsü hazırlanıyor…', 'match.viewerKickoffWait': 'Başlama vuruşu görüntüleyici hazır olunca yapılacak.', 'match.viewerFailed': 'Maç görüntüleyicisi başlatılamadı.', 'match.viewerRetryHint': 'Maç saati ilerlemedi. Ön izlemeye dönüp görüntüleyiciyi yeniden başlatabilirsin.', 'match.viewerRetry': 'Maç öncesine dön',
   'match.resume': 'Devam et', 'match.pause': 'Duraklat', 'match.toEnd': 'Maç sonuna git', 'match.continue': 'Devam ›',
   'match.commentary': 'Maç anlatımı', 'match.stats': 'İstatistikler', 'match.myTeam': 'Takımım',
   'match.camera.focus': 'Topa odaklan', 'match.camera.full': 'Tüm saha', 'match.subsLeft': '{n} değişiklik hakkı',

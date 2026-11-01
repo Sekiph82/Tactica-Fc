@@ -789,6 +789,9 @@ button.continue.nudge { animation: nudge 0.9s ease-in-out infinite, nudgeColor 0
 .match-stage { position: relative; width: 100%; aspect-ratio: 2.6 / 1; min-height: 290px; overflow: hidden; background: #10231e; border: 1px solid rgba(106, 190, 208, .42); border-radius: 12px 12px 0 0; box-shadow: 0 16px 35px rgba(0, 0, 0, .35); }
 .match-stage > .pitch2d { position: absolute; inset: 0; }
 .match-stage > .open-football-canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; background: #081820; outline: 0; }
+.match-viewer-status { position: absolute; inset: 0; z-index: 2; display: grid; place-items: center; padding: 20px; background: radial-gradient(ellipse at center, rgba(14, 32, 45, .88), rgba(4, 12, 21, .98)); }
+.match-viewer-status-card { display: flex; max-width: 520px; flex-direction: column; align-items: center; gap: 12px; padding: 24px 30px; text-align: center; color: #eef4f7; background: rgba(7, 22, 36, .9); border: 1px solid rgba(201, 211, 219, .26); border-top: 2px solid #d32638; border-radius: 12px; box-shadow: 0 18px 46px rgba(0, 0, 0, .4); }
+.match-viewer-status-card > span { color: #aab8c2; font-size: 13px; }
 .match-actionbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; padding: 5px 10px; color: #eef6f9; background: #07192a; border: 1px solid rgba(106, 190, 208, .32); border-top: 0; border-radius: 0 0 12px 12px; }
 .match-actionbar > strong { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; }
 .match-actionbar > div { display: flex; align-items: center; gap: 7px; flex-shrink: 0; color: #a6bdc9; font-size: 11px; }
