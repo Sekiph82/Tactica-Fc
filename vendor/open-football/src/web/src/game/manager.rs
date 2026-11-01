@@ -546,20 +546,31 @@ pub async fn set_training_action(
     let Some(team_id) = managed_team_id(&state).await else {
         return StatusCode::FORBIDDEN;
     };
-    let focus = match body.focus.as_str() {
-        "none" => None,
-        "fitness" => Some(TrainingFocus::FitnessBuilding),
-        "mental" => Some(TrainingFocus::MentalDevelopment),
-        "injury_recovery" => Some(TrainingFocus::InjuryRecovery),
-        "free_kicks" => Some(TrainingFocus::SpecificSkill(SkillType::FreeKicks)),
-        "penalties" => Some(TrainingFocus::SpecificSkill(SkillType::Penalties)),
-        "long_shots" => Some(TrainingFocus::SpecificSkill(SkillType::LongShots)),
-        "heading" => Some(TrainingFocus::SpecificSkill(SkillType::Heading)),
-        "tackling" => Some(TrainingFocus::SpecificSkill(SkillType::Tackling)),
-        "crossing" => Some(TrainingFocus::SpecificSkill(SkillType::Crossing)),
-        "dribbling" => Some(TrainingFocus::SpecificSkill(SkillType::Dribbling)),
-        "weak_foot" => Some(TrainingFocus::WeakFootImprovement),
-        _ => return StatusCode::BAD_REQUEST,
+    let focus = if let Some(position_key) = body.focus.strip_prefix("position:") {
+        let Some(position) = core::PlayerPositionType::ALL
+            .iter()
+            .copied()
+            .find(|position| position.as_i18n_key() == position_key)
+        else {
+            return StatusCode::BAD_REQUEST;
+        };
+        Some(TrainingFocus::PositionRetraining(position))
+    } else {
+        match body.focus.as_str() {
+            "none" => None,
+            "fitness" => Some(TrainingFocus::FitnessBuilding),
+            "mental" => Some(TrainingFocus::MentalDevelopment),
+            "injury_recovery" => Some(TrainingFocus::InjuryRecovery),
+            "free_kicks" => Some(TrainingFocus::SpecificSkill(SkillType::FreeKicks)),
+            "penalties" => Some(TrainingFocus::SpecificSkill(SkillType::Penalties)),
+            "long_shots" => Some(TrainingFocus::SpecificSkill(SkillType::LongShots)),
+            "heading" => Some(TrainingFocus::SpecificSkill(SkillType::Heading)),
+            "tackling" => Some(TrainingFocus::SpecificSkill(SkillType::Tackling)),
+            "crossing" => Some(TrainingFocus::SpecificSkill(SkillType::Crossing)),
+            "dribbling" => Some(TrainingFocus::SpecificSkill(SkillType::Dribbling)),
+            "weak_foot" => Some(TrainingFocus::WeakFootImprovement),
+            _ => return StatusCode::BAD_REQUEST,
+        }
     };
 
     let data = Arc::clone(&state.data);
@@ -585,6 +596,17 @@ pub async fn set_training_action(
         && !player.player_attributes.is_in_recovery()
     {
         return StatusCode::BAD_REQUEST;
+    }
+    if let Some(TrainingFocus::PositionRetraining(target)) = &focus {
+        let can_retrain = *target != player.position()
+            && player
+                .positions
+                .positions
+                .iter()
+                .any(|entry| entry.position == *target && (10..15).contains(&entry.level));
+        if !can_retrain {
+            return StatusCode::BAD_REQUEST;
+        }
     }
 
     if let Err(error) = state.manager_career_store.update_snapshot(team_id, |snapshot| {

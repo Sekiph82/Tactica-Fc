@@ -82,6 +82,7 @@ pub struct TeamPlayer {
     pub is_youth: bool,
     pub is_force_match_selection: bool,
     pub training_focus: String,
+    pub retraining_targets: Vec<RetrainingTarget>,
     pub country_slug: String,
     pub country_code: String,
     pub country_name: String,
@@ -97,6 +98,11 @@ pub struct TeamPlayer {
     pub is_vice_captain: bool,
     #[allow(dead_code)]
     pub status: PlayerStatusDto,
+}
+
+pub struct RetrainingTarget {
+    pub value: String,
+    pub label: String,
 }
 
 pub async fn team_get_action(
@@ -189,6 +195,7 @@ pub async fn team_get_action(
                 is_youth,
                 is_force_match_selection: p.is_force_match_selection,
                 training_focus: training_focus_key(p),
+                retraining_targets: retraining_targets(p),
                 country_slug,
                 country_code,
                 country_name,
@@ -266,6 +273,7 @@ pub async fn team_get_action(
                             is_youth: false,
                             is_force_match_selection: player.is_force_match_selection,
                             training_focus: "none".to_string(),
+                            retraining_targets: Vec::new(),
                             country_slug,
                             country_code,
                             country_name,
@@ -409,9 +417,25 @@ fn training_focus_key(player: &Player) -> String {
         TrainingFocus::SpecificSkill(SkillType::Dribbling) => "dribbling",
         TrainingFocus::SpecificSkill(SkillType::Penalties) => "penalties",
         TrainingFocus::InjuryRecovery => "injury_recovery",
-        TrainingFocus::PositionRetraining(_) => "none",
+        TrainingFocus::PositionRetraining(target) => {
+            return format!("position:{}", target.as_i18n_key());
+        }
     }
     .to_string()
+}
+
+fn retraining_targets(player: &Player) -> Vec<RetrainingTarget> {
+    let primary = player.position();
+    player
+        .positions
+        .positions
+        .iter()
+        .filter(|entry| entry.position != primary && (10..15).contains(&entry.level))
+        .map(|entry| RetrainingTarget {
+            value: format!("position:{}", entry.position.as_i18n_key()),
+            label: format!("{} · {}/15", entry.position.get_short_name(), entry.level),
+        })
+        .collect()
 }
 
 fn get_neighbor_teams(

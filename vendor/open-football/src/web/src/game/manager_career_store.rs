@@ -263,9 +263,15 @@ impl ManagerCareerSnapshot {
         }
         for (player_id, focus_key) in &self.player_training {
             if let Some(player) = team.players.players.iter_mut().find(|player| player.id == *player_id) {
-                let focus = player_training_focus_from_key(focus_key).filter(|focus| {
-                    !matches!(focus, core::TrainingFocus::InjuryRecovery)
-                        || player.player_attributes.is_in_recovery()
+                let focus = player_training_focus_from_key(focus_key).filter(|focus| match focus {
+                    core::TrainingFocus::InjuryRecovery => player.player_attributes.is_in_recovery(),
+                    core::TrainingFocus::PositionRetraining(target) => {
+                        *target != player.position()
+                            && player.positions.positions.iter().any(|entry| {
+                                entry.position == *target && (10..15).contains(&entry.level)
+                            })
+                    }
+                    _ => true,
                 });
                 player.individual_training = focus.map(|focus| core::IndividualTrainingPlan {
                     player_id: *player_id,
@@ -350,6 +356,13 @@ fn team_training_focus_from_key(key: &str) -> Option<core::ManagerTrainingFocus>
 }
 
 fn player_training_focus_from_key(key: &str) -> Option<core::TrainingFocus> {
+    if let Some(position_key) = key.strip_prefix("position:") {
+        let target = core::PlayerPositionType::ALL
+            .iter()
+            .copied()
+            .find(|position| position.as_i18n_key() == position_key)?;
+        return Some(core::TrainingFocus::PositionRetraining(target));
+    }
     Some(match key {
         "fitness" => core::TrainingFocus::FitnessBuilding,
         "mental" => core::TrainingFocus::MentalDevelopment,
