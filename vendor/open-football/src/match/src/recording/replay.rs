@@ -444,13 +444,18 @@ impl Track {
             return;
         }
         if incoming[0].t >= self.samples[self.samples.len() - 1].t {
-            // ⚠ **Reserved exactly, not grown.** `extend` doubles when it runs
-            // out, so a track that took twenty chunks in order ended the match
-            // holding about 1.6 times the samples it had — some 40 MiB of
-            // slack across a full recording, and on wasm32 a buffer that has
-            // been that big once is a page the tab is charged for until it
-            // closes. See [`MemoryBill`](crate::app::bill::MemoryBill).
-            self.samples.reserve_exact(incoming.len());
+            // Live manager playback sends one sample per player per frame.
+            // Reserving that exact one-sample increment reallocates and copies
+            // the whole growing track on every frame (quadratic work), which
+            // eventually stalls the viewer hard enough to miss live moments.
+            // Small streaming batches need amortized growth; normal replay
+            // chunks are large, so reserve those exactly to keep their memory
+            // footprint tight on wasm32.
+            if incoming.len() <= 16 {
+                self.samples.reserve(incoming.len());
+            } else {
+                self.samples.reserve_exact(incoming.len());
+            }
             self.samples.extend(incoming);
             return;
         }
@@ -882,6 +887,34 @@ mod chunks {
                 "{step} ms read back as {at:?}"
             );
         }
+    }
+
+    /// Live manager frames append one sample at a time. Their capacity must
+    /// grow geometrically, or every 500ms frame copies the entire prior match.
+    #[test]
+    fn single_sample_live_stream_appends_grow_amortized() {
+        let mut track = Track::default();
+        let mut capacity_changes = 0;
+        let mut previous_capacity = 0;
+
+        for stamp in 0..10_800 {
+            track.merge(samples(&[stamp]));
+            let capacity = track.samples.capacity();
+            if capacity != previous_capacity {
+                capacity_changes += 1;
+                previous_capacity = capacity;
+            }
+        }
+
+        assert_eq!(track.samples.len(), 10_800);
+        assert!(
+            capacity_changes <= 20,
+            "single-sample playback reallocated {capacity_changes} times"
+        );
+        assert!(
+            track.samples.windows(2).all(|pair| pair[0].t < pair[1].t),
+            "live samples must remain ordered"
+        );
     }
 
     /// **The sweep keeps what it is told to and forgets the rest.**
