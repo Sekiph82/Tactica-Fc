@@ -270,12 +270,44 @@
                 });
             }
 
-            function appendViewerFrame(frame) {
-                if (!viewerApi || !frame || frame.sequence <= viewerLastSequence) return;
-                viewerLastSequence = frame.sequence;
-                var newGoals = viewerGoals(frame.goals).slice(viewerGoalCount);
-                viewerGoalCount = (frame.goals || []).length;
-                viewerApi.pushRecording(JSON.stringify(framePayload(frame, newGoals)));
+            function appendViewerFrames(frames) {
+                if (!viewerApi || !Array.isArray(frames) || !frames.length) return;
+                var ball = [];
+                var players = {};
+                var events = [];
+                var goals = [];
+                frames.forEach(function(frame) {
+                    if (!frame || Number(frame.sequence) <= viewerLastSequence) return;
+                    viewerLastSequence = Number(frame.sequence);
+                    var timestamp = Math.max(0, Number(frame.elapsed_ms));
+                    ball.push([timestamp, frame.ball_x, frame.ball_y, frame.ball_z || 0]);
+                    frame.players.forEach(function(player) {
+                        var id = String(player.id);
+                        if (!players[id]) players[id] = [];
+                        players[id].push([timestamp, player.x, player.y]);
+                    });
+                    (frame.events || []).forEach(function(event) {
+                        events.push({
+                            timestamp: Math.max(0, Number(event.timestamp)),
+                            category: String(event.category || ''),
+                            description: String(event.description || '')
+                        });
+                    });
+                    var frameGoals = viewerGoals(frame.goals);
+                    goals.push.apply(goals, frameGoals.slice(viewerGoalCount));
+                    viewerGoalCount = Math.max(viewerGoalCount, frameGoals.length);
+                });
+                if (!ball.length) return;
+                // A delayed poll can recover many authoritative samples at once.
+                // Send them as one upstream-shaped recording so the viewer parses
+                // one payload per poll rather than one payload per recovered frame.
+                viewerApi.pushRecording(JSON.stringify({
+                    ball: ball,
+                    players: players,
+                    goals: goals,
+                    events: events,
+                    states: {}
+                }));
             }
 
             function startViewer(view, firstFrame) {
@@ -336,7 +368,7 @@
                         viewerApi.start(JSON.stringify(config));
                         viewerApi.setSpeed(viewerPlaybackSpeed);
                         setViewerPlaying(!!currentLiveView && currentLiveView.status === 'playing');
-                        viewerPendingFrames.forEach(appendViewerFrame);
+                        appendViewerFrames(viewerPendingFrames);
                         viewerPendingFrames = [];
                     })
                     .catch(function(error) {
@@ -401,15 +433,17 @@
                         return Number(event.sequence) > eventSequenceBeforePoll;
                     });
                     if (incomingFrames.length) incomingFrames[incomingFrames.length - 1].events = viewerEvents;
+                    var readyFrames = [];
                     incomingFrames.forEach(function(candidate) {
                         // Responses can race; only advance the feed cursor.
                         if (candidate.sequence <= lastLiveSequence || candidate.elapsed_ms < lastLiveElapsedMs) return;
                         lastLiveSequence = candidate.sequence;
                         lastLiveElapsedMs = candidate.elapsed_ms;
                         if (!viewerPromise) startViewer(view, candidate);
-                        else if (viewerSessionId === view.session_id && viewerApi) appendViewerFrame(candidate);
+                        else if (viewerSessionId === view.session_id && viewerApi) readyFrames.push(candidate);
                         else if (viewerSessionId === view.session_id) viewerPendingFrames.push(candidate);
                     });
+                    appendViewerFrames(readyFrames);
                     if (view.last_substitution) {
                         var subStatus = view.last_substitution.status;
                         if (subStatus === 'queued' || subStatus === 'applied' || subStatus === 'rejected') {
