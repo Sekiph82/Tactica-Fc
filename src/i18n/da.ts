@@ -316,6 +316,7 @@ export const da: Record<string, string> = {
   'adv.suggest': '{coach} foreslår: {schedule}.', 'adv.weakness': 'Han halter efter på {attrs} i forhold til sin rolle.', 'adv.youth': 'Ung spiller – udvikl især {attrs}.',
   'adv.age': 'Han er over 30 – fysikken skal holdes ved lige.', 'adv.injured': 'Han er skadet – hvile giver den hurtigste comeback.', 'adv.balanced': 'Han er velafbalanceret – generel træning passer bedst.',
   'news.trainingAdvice': '{coach} mener, {n} spillere bør ændre træning', 'news.trainingAdvice.body': 'Se assistentens forslag under Træning – du kan følge dem alle med ét klik.',
+  'news.playerWedding': 'Gode nyheder: {player} skal giftes', 'news.playerWedding.body': 'Truppen fejrede den gode nyhed sammen. Spillerens moral er steget en smule.',
   'list.title': 'Sæt {player} til salg', 'list.price': 'Udbudspris', 'list.ofValue': 'af værdien', 'list.changePrice': 'Ændr udbudspris', 'list.update': 'Opdatér pris',
   'list.explain': 'Klubber byder tæt på udbudsprisen. Du kan svare med modbud, og så hæver køberen måske sit bud – men går de for højt over deres smertegrænse, trækker de sig.',
   'list.hintBargain': 'Røverkøb! Der vil komme mange bud hurtigt.', 'list.hintCheap': 'Billig pris – ekstra attraktivt, flere bud.', 'list.hintFair': 'Markedspris – normalt antal bud.',

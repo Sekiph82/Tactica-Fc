@@ -166,6 +166,8 @@ export interface Player {
   fired?: string;
   /** Navngivet af en supporter (vises med en stjerne) */
   supporterNamed?: string;
+  /** Dato for spillerens personlige bryllupsnyhed; optional for old saves. */
+  marriedOn?: string;
 }
 
 export interface StaffAttrs {

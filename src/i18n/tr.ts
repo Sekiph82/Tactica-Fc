@@ -496,6 +496,8 @@ export const tr: Record<string, string> = {
 
   'news.trainingAdvice': '{coach}, {n} oyuncunun antrenman programını değiştirmesi gerektiğini düşünüyor',
   'news.trainingAdvice.body': 'Antrenman bölümündeki asistan önerilerine bak – tek tıkla hepsini uygula.',
+  'news.playerWedding': 'Güzel haber: {player} evleniyor',
+  'news.playerWedding.body': 'Takım bu mutlu haberi birlikte kutladı. Oyuncunun morali biraz yükseldi.',
   'news.scoutTalent': '{scout} büyük bir yetenek buldu: {player}',
   'news.scoutDone': '{scout}, {player} hakkındaki raporunu tamamladı',
   'news.jobOffer': '{club} sana menajerlik görevi teklif ediyor',

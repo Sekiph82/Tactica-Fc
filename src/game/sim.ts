@@ -9,6 +9,7 @@ import { weatherFor, type Weather } from './weather';
 import { maxSubs } from './rules';
 import { recordsAfterMatch } from './records';
 import { campDaily } from './camp';
+import { lifeEventsDaily } from './lifeEvents';
 import { trialsDaily } from './trials';
 import { friendliesDaily } from './friendlies';
 import { achievementsAfterMatch } from './achievements';
@@ -340,6 +341,7 @@ function newDay() {
   });
   completeProjects();
   campDaily();
+  lifeEventsDaily();
   trialsDaily();
   friendliesDaily();
   forEachHuman(aiBidsForListed);

@@ -303,6 +303,7 @@ export const en: Record<string, string> = {
   'adv.suggest': '{coach} suggests: {schedule}.', 'adv.weakness': 'He lags behind on {attrs} for his role.', 'adv.youth': 'Young player – develop {attrs} in particular.',
   'adv.age': 'He is over 30 – his fitness needs maintaining.', 'adv.injured': 'He is injured – rest gives the fastest comeback.', 'adv.balanced': 'He is well-rounded – general training suits him best.',
   'news.trainingAdvice': '{coach} thinks {n} players should change their training', 'news.trainingAdvice.body': "See the assistant's advice under Training – follow them all with one click.",
+  'news.playerWedding': 'Good news: {player} is getting married', 'news.playerWedding.body': 'The squad celebrated the happy news together. His morale has lifted a little.',
   'list.title': 'Transfer list {player}', 'list.price': 'Asking price', 'list.ofValue': 'of value', 'list.changePrice': 'Change asking price', 'list.update': 'Update price',
   'list.explain': 'Clubs bid close to the asking price. You can counter, and the buyer may raise their offer – but push too far beyond their limit and they walk away.',
   'list.hintBargain': 'Bargain! Expect many offers quickly.', 'list.hintCheap': 'Cheap – extra attractive, more offers.', 'list.hintFair': 'Market price – a normal number of offers.',
