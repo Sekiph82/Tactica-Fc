@@ -95,6 +95,11 @@ impl MatchViewer {
         crate::recording::playback::set_host_speed(speed);
     }
 
+    #[wasm_bindgen(js_name = setDuration)]
+    pub fn set_duration(duration_ms: f64) {
+        crate::recording::playback::set_host_duration(duration_ms);
+    }
+
     /// Entry point for the match page. `config` is the JSON form of
     /// [`ViewerConfig`]; the app takes over the canvas it names and runs until
     /// the page goes away.

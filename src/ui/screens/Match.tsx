@@ -27,7 +27,7 @@ import { talkDone } from '../../game/teamtalk';
 import { OpenFootballPitch, type OpenFootballBridge } from '../OpenFootballPitch';
 import { makeOpenFootballSetup, type OpenFootballSetup } from '../openFootballSetup';
 import { openFootballPlaybackSpeed } from '../openFootballSpeed';
-import { OPEN_FOOTBALL_MATCH_DURATION_MS, openFootballMinuteTimestamp, openFootballTimestamp } from '../openFootballTimeline';
+import { OPEN_FOOTBALL_MATCH_DURATION_MS, OPEN_FOOTBALL_MAX_MATCH_DURATION_MS, openFootballMinuteTimestamp, openFootballTimestamp } from '../openFootballTimeline';
 
 // Den igangværende kamp overlever navigation mellem skærme
 /** Holdfarver til 2D-banen: ens eget hold i klubtemaets farver, modstanderen i en farve der skiller sig ud */
@@ -70,7 +70,7 @@ export function statColors(home: number, away: number, me: number): [string, str
   return me === 0 ? [own, pick] : [pick, own];
 }
 
-let live: { fixture: number; sim: MatchSim; viewerSetup: OpenFootballSetup; lines: { text: string; cls: string; m: number; k?: string }[]; consumed: number; visualQueue: MatchVisualFrame[]; visualSeen: number; viewerEventsSeen?: number; viewer?: OpenFootballBridge; halfShown?: boolean; shotsSeen?: number; cornersSeen?: number; h2hInit?: boolean; evSeen?: number; h2h?: H2hState; ldSeen?: number; prevTab?: string; finishFrameSent?: boolean; finishPresentationReady?: boolean; finishPresentationTimer?: ReturnType<typeof setTimeout> } | null = null;
+let live: { fixture: number; sim: MatchSim; viewerSetup: OpenFootballSetup; lines: { text: string; cls: string; m: number; k?: string }[]; consumed: number; visualQueue: MatchVisualFrame[]; visualSeen: number; viewerEventsSeen?: number; viewer?: OpenFootballBridge; halfShown?: boolean; shotsSeen?: number; cornersSeen?: number; h2hInit?: boolean; evSeen?: number; h2h?: H2hState; ldSeen?: number; prevTab?: string; finishFrameSent?: boolean; finishPresentationReady?: boolean; finishPresentationTimer?: ReturnType<typeof setTimeout>; extraTimeDurationSent?: boolean } | null = null;
 
 export function MatchScreen({ id }: { id: number }) {
   const g = useGame()!;
@@ -427,6 +427,13 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
     while (n < maxMoments && (!untilLine || sim.commentary.length === before) && (h2h || L.viewer || hasVisualQueueCapacity(L.visualQueue.length + (visualFrame ? 1 : 0)))) {
       if (!sim.step()) break;
       n++;
+      if (sim.extraTime && L.viewer && !L.extraTimeDurationSent) {
+        L.viewer.setDuration(OPEN_FOOTBALL_MAX_MATCH_DURATION_MS);
+        // The simulation only enters extra time during active play. Extend and
+        // resume the viewer before its regulation clock can stop at 90:00.
+        L.viewer.setPlaying(true);
+        L.extraTimeDurationSent = true;
+      }
       const pitchSnapshot = sim.pitch();
       if (L.viewer) viewerSnapshots.push(pitchSnapshot);
       const timeline = sim.visualTimeline ?? [];

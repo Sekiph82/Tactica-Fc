@@ -8,6 +8,7 @@ use wasm_bindgen::JsValue;
 thread_local! {
     static HOST_PLAYING: Cell<Option<bool>> = const { Cell::new(None) };
     static HOST_SPEED: Cell<Option<f32>> = const { Cell::new(None) };
+    static HOST_DURATION: Cell<Option<f64>> = const { Cell::new(None) };
 }
 
 /// Let the host manager controls pause or resume the broadcast clock.
@@ -19,6 +20,13 @@ pub fn set_host_playing(playing: bool) {
 pub fn set_host_speed(speed: f32) {
     if speed.is_finite() {
         HOST_SPEED.with(|state| state.set(Some(speed.clamp(0.1, 32.0))));
+    }
+}
+
+/// Extend an embedded live match when the authoritative host enters extra time.
+pub fn set_host_duration(duration_ms: f64) {
+    if duration_ms.is_finite() && duration_ms > 0.0 {
+        HOST_DURATION.with(|state| state.set(Some(duration_ms)));
     }
 }
 
@@ -158,7 +166,11 @@ pub struct Playback {
 
 impl Playback {
     /// Applies one-shot transport commands queued by the embedding page.
-    pub fn apply_host_controls(mut playback: ResMut<Playback>) {
+    pub fn apply_host_controls(
+        mut playback: ResMut<Playback>,
+        mut config: ResMut<ViewerConfig>,
+        mut spans: ResMut<RecordedSpans>,
+    ) {
         HOST_PLAYING.with(|state| {
             if let Some(playing) = state.take() {
                 playback.playing = playing;
@@ -167,6 +179,16 @@ impl Playback {
         HOST_SPEED.with(|state| {
             if let Some(speed) = state.take() {
                 playback.speed = speed;
+            }
+        });
+        HOST_DURATION.with(|state| {
+            if let Some(duration_ms) = state.take() {
+                let duration_ms = duration_ms.max(playback.time_ms).max(1.0);
+                playback.duration_ms = duration_ms;
+                config.match_time_ms = duration_ms;
+                if config.inline_recording.is_some() {
+                    spans.set(vec![(0.0, duration_ms)]);
+                }
             }
         });
     }

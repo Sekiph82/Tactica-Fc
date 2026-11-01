@@ -13,6 +13,7 @@ export interface OpenFootballBridge {
   ): void;
   setPlaying(playing: boolean): void;
   setSpeed(speed: number): void;
+  setDuration(durationMs: number): void;
 }
 
 type ViewerModule = {
@@ -22,6 +23,7 @@ type ViewerModule = {
     pushRecording: (recording: string) => void;
     setPlaying: (playing: boolean) => void;
     setSpeed: (speed: number) => void;
+    setDuration: (durationMs: number) => void;
   };
 };
 
@@ -127,6 +129,7 @@ export function OpenFootballPitch({
         },
         setPlaying(value) { viewer.MatchViewer.setPlaying(value); },
         setSpeed(value) { viewer.MatchViewer.setSpeed(value); },
+        setDuration(value) { viewer.MatchViewer.setDuration(value); },
       };
       bridgeRef.current = bridge;
       bridge.setSpeed(speed);
