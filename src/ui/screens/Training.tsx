@@ -9,7 +9,7 @@ import { Bar, Panel, PlayerLink, Stars, posStr } from '../components';
 import { useGame } from '../core';
 import { Head } from './common';
 import { scoutStars } from '../../game/scouting';
-import { coachingInfo, trainingAdvice } from '../../game/training';
+import { coachingInfo, conditionRecoveryFactor, trainingAdvice } from '../../game/training';
 import { Arrow, totalDelta } from '../dev';
 
 /** Positionsgruppe ud fra spillerens bedste position (GK, SW, D, DM, M, AM, F, WB) */
@@ -74,7 +74,17 @@ export function Training() {
         </Panel>
         <Panel title={t('train.schedules')}>
           <div className="kv">
-            {SCHEDULES.map((s) => [<span key={s.key}>{t(`train.${s.key}`)}</span>, <span key={s.key + 'd'} className="muted">{Object.keys(s.focus).slice(0, 4).map((k) => t(`attr.${k}`)).join(', ') || t('train.restDesc')}</span>])}
+            {SCHEDULES.map((s) => {
+              const recovery = Math.round((conditionRecoveryFactor(s.key) - 1) * 100);
+              const recoveryLabel = `${recovery > 0 ? '+' : ''}${recovery}%`;
+              return [
+                <span key={s.key}>{t(`train.${s.key}`)}</span>,
+                <span key={s.key + 'd'} className="muted">
+                  {Object.keys(s.focus).slice(0, 4).map((k) => t(`attr.${k}`)).join(', ') || t('train.restDesc')}
+                  <span className="training-recovery">{t('train.recoveryEffect', { pct: recoveryLabel })}</span>
+                </span>,
+              ];
+            })}
           </div>
         </Panel>
       </div>

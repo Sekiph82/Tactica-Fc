@@ -171,6 +171,8 @@ This file is the single source of truth for milestone status. Mark work complete
 - [x] Verify multi-season IndexedDB save/load progression through the UI after match changes. The in-browser QA fixture advanced a cloned Fulham career from 2025-08-09 through 2027-07-02, saved and reloaded its versioned record, matched the save-list metadata, and the normal app auto-resumed the saved career in a separate in-conversation tab; then the actual `Oyunu kaydet` UI button showed its success toast, the updated save appeared at the top of the load list, and selecting it restored the normal app header at 2 July 2027. Two archived seasons and 40 match reports were retained (`design-qa.md`, 2026-10-30).
 - [x] Add safe migration coverage for the versioned save envelope introduced by this work.
 
+- [x] Show the condition-recovery modifier for each training schedule next to its focus, using the same shared factor as daily gameplay recovery. Turkish, English, and Danish labels are included; `npm exec tsc -- --noEmit` passes. Browser visual acceptance remains open.
+
 ## TFC-M09: Windows release — IN PROGRESS
 
 - [x] Select Electron 45.2.1 and configure a Windows NSIS package with the supplied Black Metal ICO, a local TACTICA React app host, single-instance guard, restrictive navigation, disabled renderer Node access, context isolation, and sandboxing. The earlier full Open Football server package is historical and superseded by the viewer-only integration direction.
