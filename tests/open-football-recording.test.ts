@@ -31,7 +31,7 @@ describe('TACTICA to Open Football viewer recording adapter', () => {
       category: 'ball',
       description: 'Blocked(22, [[764.4, 283.4, 0]])',
     }]);
-    expect(states[22]).toEqual([[252670, 'TACTICA: Tackling']]);
+    expect(states[22]).toEqual([[252670, 'TACTICA: Tackling'], [255070, 'TACTICA: Neutral']]);
   });
 
   it('translates a cleared cross into a headed-clear cue for the engine-selected defender', () => {
@@ -43,7 +43,7 @@ describe('TACTICA to Open Football viewer recording adapter', () => {
       category: 'ball',
       description: 'HeadedClear(7, [[831.6, 10.9, 0]])',
     });
-    expect(states[7]).toEqual([[252670, 'TACTICA: Alert']]);
+    expect(states[7]).toEqual([[252670, 'TACTICA: Alert'], [255070, 'TACTICA: Neutral']]);
   });
 
   it('passes the selected runner and receiver into viewer-supported attacking attitudes', () => {
@@ -52,8 +52,20 @@ describe('TACTICA to Open Football viewer recording adapter', () => {
       action({ kind: 'cross', outcome: 'complete', target: 10 }),
     ], 100);
     expect(events).toEqual([]);
-    expect(states[9]).toEqual([[252670, 'TACTICA: Running In Behind']]);
-    expect(states[10]).toEqual([[252670, 'TACTICA: Cross Receiving']]);
+    expect(states[9]).toEqual([[252670, 'TACTICA: Running In Behind'], [255070, 'TACTICA: Neutral']]);
+    expect(states[10]).toEqual([[252670, 'TACTICA: Cross Receiving'], [255070, 'TACTICA: Neutral']]);
+  });
+
+  it('does not let an older gesture reset erase a newer engine action', () => {
+    const { states } = toOpenFootballRecordingEvents([
+      action({ kind: 'throughBall', outcome: 'complete', moment: 50, target: 22 }),
+      action({ kind: 'throughBall', outcome: 'intercepted', moment: 50.25, target: 22 }),
+    ], 100);
+    expect(states[22]).toEqual([
+      [252670, 'TACTICA: Running In Behind'],
+      [253933, 'TACTICA: Intercepting'],
+      [256333, 'TACTICA: Neutral'],
+    ]);
   });
 
   it('leaves unrelated actions out and clamps blocked-contact coordinates/time to viewer bounds', () => {

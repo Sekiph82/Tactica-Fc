@@ -1,6 +1,7 @@
 import type { MatchVisualAction } from '../game/types';
 
 const MATCH_DURATION_MS = 505_340;
+const ACTION_ATTITUDE_MS = 2_400;
 
 export interface OpenFootballRecordingEvent {
   timestamp: number;
@@ -24,8 +25,9 @@ export function toOpenFootballRecordingEvents(
   totalMoments: number,
 ): OpenFootballActionRecording {
   const events: OpenFootballRecordingEvent[] = [];
-  const states: Record<number, [number, string][]> = {};
+  const pendingStates: Record<number, { time: number; order: number; attitude: string }[]> = {};
   const eventKeys = new Set<string>();
+  let stateOrder = 0;
 
   const addEvent = (timestamp: number, description: string) => {
     const key = `${timestamp}:${description}`;
@@ -36,9 +38,7 @@ export function toOpenFootballRecordingEvents(
 
   const addState = (playerId: number | undefined, time: number, attitude: string) => {
     if (playerId === undefined) return;
-    const entries = states[playerId] ??= [];
-    const state = `TACTICA: ${attitude}`;
-    if (entries.at(-1)?.[1] !== state) entries.push([time, state]);
+    (pendingStates[playerId] ??= []).push({ time, order: stateOrder++, attitude });
   };
 
   for (const action of actions) {
@@ -68,8 +68,29 @@ export function toOpenFootballRecordingEvents(
       addState(action.target, time, 'Running In Behind');
     } else if (action.kind === 'cross' && action.outcome === 'complete') {
       addState(action.target, time, 'Cross Receiving');
+    } else if (action.kind === 'throughBall' && action.outcome === 'offside') {
+      addState(action.target, time, 'Running In Behind');
+    } else if (action.kind === 'throughBall' && action.outcome === 'intercepted') {
+      addState(action.target, time, 'Intercepting');
     } else if (action.kind === 'tackle') {
       addState(action.actor, time, 'Tackling');
+    }
+  }
+
+  const states: Record<number, [number, string][]> = {};
+  for (const [playerId, queued] of Object.entries(pendingStates)) {
+    const ordered = queued.sort((a, b) => a.time - b.time || a.order - b.order);
+    const transitions = ordered.filter((entry, index) => entry.time !== ordered[index + 1]?.time);
+    const entries = states[Number(playerId)] = [];
+    for (let index = 0; index < transitions.length; index++) {
+      const transition = transitions[index];
+      const nextTime = transitions[index + 1]?.time ?? MATCH_DURATION_MS + 1;
+      entries.push([transition.time, `TACTICA: ${transition.attitude}`]);
+
+      // Viewer states remain in force until another state arrives. Reset short
+      // gestures after their dwell, unless a newer action should take over.
+      const resetAt = transition.time + ACTION_ATTITUDE_MS;
+      if (resetAt < nextTime && resetAt < MATCH_DURATION_MS) entries.push([resetAt, 'TACTICA: Neutral']);
     }
   }
 
