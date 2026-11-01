@@ -2383,6 +2383,7 @@
   "mgr_action": "İşlem",
   "mgr_accept_offer": "Teklifi kabul et",
   "mgr_accept_counteroffer": "Karşı teklifi kabul et",
+  "mgr_reject_counteroffer": "Karşı teklifi reddet",
   "mgr_reject_offer": "Reddet",
   "mgr_send": "Gönder",
   "mgr_waiting_response": "Bu aşamada yanıt bekleniyor.",

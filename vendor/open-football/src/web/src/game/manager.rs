@@ -259,7 +259,10 @@ fn queue_manager_decision(
     Ok(())
 }
 
-fn queue_manager_buyer_accept(negotiation: &mut TransferNegotiation) -> Result<(), StatusCode> {
+fn queue_manager_buyer_response(
+    negotiation: &mut TransferNegotiation,
+    accept: bool,
+) -> Result<(), StatusCode> {
     if negotiation.status != NegotiationStatus::Countered
         || !matches!(
             &negotiation.phase,
@@ -269,7 +272,7 @@ fn queue_manager_buyer_accept(negotiation: &mut TransferNegotiation) -> Result<(
     {
         return Err(StatusCode::CONFLICT);
     }
-    negotiation.manager_decision = Some(true);
+    negotiation.manager_decision = Some(accept);
     Ok(())
 }
 
@@ -1338,7 +1341,7 @@ pub async fn decide_incoming_transfer_offer_action(
                     .get(&body.negotiation_id)
                     .is_some_and(|negotiation| {
                         negotiation.selling_club_id == managed_club_id
-                            || (body.accept && negotiation.buying_club_id == managed_club_id)
+                            || negotiation.buying_club_id == managed_club_id
                     })
             })
         else {
@@ -1355,8 +1358,8 @@ pub async fn decide_incoming_transfer_offer_action(
         let previous = negotiation.clone();
         let decision = if negotiation.selling_club_id == managed_club_id {
             queue_manager_decision(negotiation, body.accept)
-        } else if negotiation.buying_club_id == managed_club_id && body.accept {
-            queue_manager_buyer_accept(negotiation)
+        } else if negotiation.buying_club_id == managed_club_id {
+            queue_manager_buyer_response(negotiation, body.accept)
         } else {
             Err(StatusCode::CONFLICT)
         };

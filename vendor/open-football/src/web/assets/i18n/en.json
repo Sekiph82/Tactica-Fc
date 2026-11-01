@@ -2383,6 +2383,7 @@
   "mgr_action": "Action",
   "mgr_accept_offer": "Accept offer",
   "mgr_accept_counteroffer": "Accept counter-offer",
+  "mgr_reject_counteroffer": "Reject counter-offer",
   "mgr_reject_offer": "Reject",
   "mgr_send": "Send",
   "mgr_waiting_response": "Waiting for a response at this stage.",

@@ -119,6 +119,7 @@ pub struct ManagerNegotiation {
     pub can_update_wage: bool,
     pub can_respond_as_seller: bool,
     pub can_accept_counter: bool,
+    pub can_reject_counter: bool,
 }
 
 pub async fn team_transfers_action(
@@ -298,6 +299,16 @@ pub async fn team_transfers_action(
                                 | core::transfers::deal::negotiation::NegotiationStatus::Countered
                         ) && negotiation.manager_decision.is_none(),
                         can_accept_counter: is_buyer_offer
+                            && matches!(
+                                &negotiation.phase,
+                                core::transfers::deal::negotiation::NegotiationPhase::ClubNegotiation { .. }
+                            )
+                            && matches!(
+                                &negotiation.status,
+                                core::transfers::deal::negotiation::NegotiationStatus::Countered
+                            )
+                            && negotiation.manager_decision.is_none(),
+                        can_reject_counter: is_buyer_offer
                             && matches!(
                                 &negotiation.phase,
                                 core::transfers::deal::negotiation::NegotiationPhase::ClubNegotiation { .. }

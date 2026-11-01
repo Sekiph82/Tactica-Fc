@@ -58,7 +58,9 @@
                 <td class="sq-name">{{ deal.player_name }}</td><td>{{ deal.direction }}</td><td>{{ deal.fee }}</td><td>{{ deal.phase }}</td><td>{{ deal.status }}</td><td>{{ deal.expires }}</td>
                 <td>
                     {% if deal.can_respond_as_seller %}<button type="button" class="fm-seller-response" data-negotiation-id="{{ deal.negotiation_id }}" data-accept="true">{{ i18n.t("mgr_accept_offer") }}</button><button type="button" class="fm-seller-response" data-negotiation-id="{{ deal.negotiation_id }}" data-accept="false">{{ i18n.t("mgr_reject_offer") }}</button><span class="fm-offer-status" role="status" aria-live="polite"></span>{% endif %}
-                    {% if deal.can_accept_counter %}<button type="button" class="fm-seller-response" data-negotiation-id="{{ deal.negotiation_id }}" data-accept="true">{{ i18n.t("mgr_accept_counteroffer") }}</button><span class="fm-offer-status" role="status" aria-live="polite"></span>{% endif %}
+                    {% if deal.can_accept_counter %}<button type="button" class="fm-seller-response" data-negotiation-id="{{ deal.negotiation_id }}" data-accept="true">{{ i18n.t("mgr_accept_counteroffer") }}</button>{% endif %}
+                    {% if deal.can_reject_counter %}<button type="button" class="fm-seller-response" data-negotiation-id="{{ deal.negotiation_id }}" data-accept="false">{{ i18n.t("mgr_reject_counteroffer") }}</button>{% endif %}
+                    {% if deal.can_accept_counter || deal.can_reject_counter %}<span class="fm-offer-status" role="status" aria-live="polite"></span>{% endif %}
                     {% if deal.can_update_fee %}<input class="fm-negotiation-fee" type="number" min="1" step="1000" value="{{ deal.fee_raw }}" aria-label="{{ deal.player_name }} — {{ i18n.t("mgr_offer_fee") }}">{% endif %}
                     {% if deal.can_update_wage %}<input class="fm-negotiation-wage" type="number" min="1" step="1000" value="{{ deal.annual_wage_raw }}" aria-label="{{ deal.player_name }} — {{ i18n.t("mgr_annual_wage") }}">{% endif %}
                     {% if deal.can_update_fee || deal.can_update_wage %}
