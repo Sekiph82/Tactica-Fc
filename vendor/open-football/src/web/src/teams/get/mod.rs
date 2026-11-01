@@ -72,6 +72,7 @@ pub struct TeamPlayer {
     pub position_sort: PlayerPositionType,
     pub value: String,
     pub injured: bool,
+    pub in_recovery: bool,
     pub unhappy: bool,
     pub transfer_listed: bool,
     pub loan_listed: bool,
@@ -178,6 +179,7 @@ pub async fn team_get_action(
                 position,
                 behaviour: p.behaviour.as_str().to_string(),
                 injured: p.player_attributes.is_injured,
+                in_recovery: p.player_attributes.is_in_recovery(),
                 unhappy: !p.happiness.is_happy(),
                 transfer_listed: p.statuses.get().contains(&PlayerStatusType::Lst),
                 loan_listed: p.statuses.get().contains(&PlayerStatusType::Loa),
@@ -254,6 +256,7 @@ pub async fn team_get_action(
                             position,
                             behaviour: player.behaviour.as_str().to_string(),
                             injured: player.player_attributes.is_injured,
+                            in_recovery: player.player_attributes.is_in_recovery(),
                             unhappy: !player.happiness.is_happy(),
                             transfer_listed: false,
                             loan_listed: false,
@@ -405,7 +408,8 @@ fn training_focus_key(player: &Player) -> String {
         TrainingFocus::SpecificSkill(SkillType::Crossing) => "crossing",
         TrainingFocus::SpecificSkill(SkillType::Dribbling) => "dribbling",
         TrainingFocus::SpecificSkill(SkillType::Penalties) => "penalties",
-        TrainingFocus::PositionRetraining(_) | TrainingFocus::InjuryRecovery => "none",
+        TrainingFocus::InjuryRecovery => "injury_recovery",
+        TrainingFocus::PositionRetraining(_) => "none",
     }
     .to_string()
 }

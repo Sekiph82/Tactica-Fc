@@ -550,6 +550,7 @@ pub async fn set_training_action(
         "none" => None,
         "fitness" => Some(TrainingFocus::FitnessBuilding),
         "mental" => Some(TrainingFocus::MentalDevelopment),
+        "injury_recovery" => Some(TrainingFocus::InjuryRecovery),
         "free_kicks" => Some(TrainingFocus::SpecificSkill(SkillType::FreeKicks)),
         "penalties" => Some(TrainingFocus::SpecificSkill(SkillType::Penalties)),
         "long_shots" => Some(TrainingFocus::SpecificSkill(SkillType::LongShots)),
@@ -580,6 +581,11 @@ pub async fn set_training_action(
     let Some(player) = team.players.players.iter_mut().find(|p| p.id == player_id) else {
         return StatusCode::NOT_FOUND;
     };
+    if matches!(&focus, Some(TrainingFocus::InjuryRecovery))
+        && !player.player_attributes.is_in_recovery()
+    {
+        return StatusCode::BAD_REQUEST;
+    }
 
     if let Err(error) = state.manager_career_store.update_snapshot(team_id, |snapshot| {
         snapshot.player_training.insert(player_id, body.focus.clone());

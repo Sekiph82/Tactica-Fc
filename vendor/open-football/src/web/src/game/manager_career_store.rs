@@ -262,8 +262,11 @@ impl ManagerCareerSnapshot {
             team.training_schedule.manager_focus = focus;
         }
         for (player_id, focus_key) in &self.player_training {
-            let focus = player_training_focus_from_key(focus_key);
             if let Some(player) = team.players.players.iter_mut().find(|player| player.id == *player_id) {
+                let focus = player_training_focus_from_key(focus_key).filter(|focus| {
+                    !matches!(focus, core::TrainingFocus::InjuryRecovery)
+                        || player.player_attributes.is_in_recovery()
+                });
                 player.individual_training = focus.map(|focus| core::IndividualTrainingPlan {
                     player_id: *player_id,
                     focus_areas: vec![focus],
@@ -350,6 +353,7 @@ fn player_training_focus_from_key(key: &str) -> Option<core::TrainingFocus> {
     Some(match key {
         "fitness" => core::TrainingFocus::FitnessBuilding,
         "mental" => core::TrainingFocus::MentalDevelopment,
+        "injury_recovery" => core::TrainingFocus::InjuryRecovery,
         "free_kicks" => core::TrainingFocus::SpecificSkill(core::SkillType::FreeKicks),
         "penalties" => core::TrainingFocus::SpecificSkill(core::SkillType::Penalties),
         "long_shots" => core::TrainingFocus::SpecificSkill(core::SkillType::LongShots),

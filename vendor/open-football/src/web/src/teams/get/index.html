@@ -144,6 +144,7 @@
                             <option value="crossing"{% if player.training_focus == "crossing" %} selected{% endif %}>{{ i18n.t("mgr_training_crossing") }}</option>
                             <option value="dribbling"{% if player.training_focus == "dribbling" %} selected{% endif %}>{{ i18n.t("mgr_training_dribbling") }}</option>
                             <option value="weak_foot"{% if player.training_focus == "weak_foot" %} selected{% endif %}>{{ i18n.t("mgr_training_weak_foot") }}</option>
+                            {% if player.in_recovery %}<option value="injury_recovery"{% if player.training_focus == "injury_recovery" %} selected{% endif %}>{{ i18n.t("mgr_training_injury_recovery") }}</option>{% endif %}
                         </select>
                         <button type="button" class="fm-manager-selection" data-player-id="{{ player.id }}">{% if player.is_force_match_selection %}{{ i18n.t("mgr_unpin_starter") }}{% else %}{{ i18n.t("mgr_pin_starter") }}{% endif %}</button>
                         <button type="button" class="fm-manager-transfer" data-player-id="{{ player.id }}">{% if player.transfer_listed %}{{ i18n.t("mgr_remove_from_list") }}{% else %}{{ i18n.t("mgr_add_to_list") }}{% endif %}</button>
