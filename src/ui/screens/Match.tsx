@@ -69,7 +69,7 @@ export function statColors(home: number, away: number, me: number): [string, str
   return me === 0 ? [own, pick] : [pick, own];
 }
 
-let live: { fixture: number; sim: MatchSim; viewerSetup: OpenFootballSetup; lines: { text: string; cls: string; m: number; k?: string }[]; consumed: number; visualQueue: MatchVisualFrame[]; visualSeen: number; viewerEventsSeen?: number; viewer?: OpenFootballBridge; halfShown?: boolean; shotsSeen?: number; cornersSeen?: number; h2hInit?: boolean; evSeen?: number; h2h?: H2hState; ldSeen?: number; prevTab?: string } | null = null;
+let live: { fixture: number; sim: MatchSim; viewerSetup: OpenFootballSetup; lines: { text: string; cls: string; m: number; k?: string }[]; consumed: number; visualQueue: MatchVisualFrame[]; visualSeen: number; viewerEventsSeen?: number; viewer?: OpenFootballBridge; halfShown?: boolean; shotsSeen?: number; cornersSeen?: number; h2hInit?: boolean; evSeen?: number; h2h?: H2hState; ldSeen?: number; prevTab?: string; finishFrameSent?: boolean; finishPresentationReady?: boolean; finishPresentationTimer?: ReturnType<typeof setTimeout> } | null = null;
 
 export function MatchScreen({ id }: { id: number }) {
   const g = useGame()!;
@@ -393,7 +393,7 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
   const [paused, setPaused] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [tab, setTab] = useState('commentary');
-  const [report, setReport] = useState<MatchReport | null>(null);
+  const [report, setReport] = useState<MatchReport | null>(() => L.finishPresentationReady ? sim.report() : null);
   const [viewerBridge, setViewerBridge] = useState<OpenFootballBridge | null>(null);
   const [viewerReady, setViewerReady] = useState(false);
   const [viewerFailed, setViewerFailed] = useState(false);
@@ -440,6 +440,11 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
     }
     const linesBefore = L.lines.length;
     pull();
+    // The final successful simulation step ends at moment totalMoments - 1.
+    // Append one terminal sample at the exact viewer duration before stopping
+    // playback, so the visual match reaches 90:00 instead of freezing one beat
+    // early when the simulation reports full time on its next step.
+    if (sim.finished && L.viewer && !L.finishFrameSent) viewerSnapshots.push(sim.pitch());
     if (L.viewer && viewerSnapshots.length) {
       const goalWindows = actionMomentWindows(viewerActions);
       const goals = sim.events.slice(L.viewerEventsSeen ?? 0).filter((event) => event.k === 'goal' && event.p !== undefined).map((event) => {
@@ -449,6 +454,7 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
       });
       L.viewerEventsSeen = sim.events.length;
       L.viewer.push(viewerSnapshots, goals, viewerActions);
+      if (sim.finished) L.finishFrameSent = true;
     }
     // store chancer og mål afspilles på 2D-banen (kampen venter imens)
     const seen = L.shotsSeen ?? 0;
@@ -560,7 +566,22 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
         started = true;
       }
     }
-    if (sim.finished && !report) setReport(sim.report());
+    if (sim.finished && !report) {
+      if (L.viewer && !L.finishPresentationReady) {
+        if (L.finishPresentationTimer === undefined) {
+          const viewerSpeed = openFootballPlaybackSpeed(speed, h2h ? {
+            halfMinutes: g.options.h2hHalfMinutes ?? 3,
+            homeSpeed: hs.homeSpeed,
+            awaySpeed: hs.awaySpeed,
+          } : undefined);
+          const finalBeatMs = Math.max(0, Math.round(505_340 / Math.max(1, sim.totalMoments) / viewerSpeed));
+          L.finishPresentationTimer = setTimeout(() => {
+            L.finishPresentationReady = true;
+            setReport(sim.report());
+          }, finalBeatMs);
+        }
+      } else setReport(sim.report());
+    }
     else if (!started) maybeHalftime();
     if (started) {
       // The highlight sequence below represents this spell of play; discard its ordinary-play queue.
