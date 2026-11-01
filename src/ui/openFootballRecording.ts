@@ -16,6 +16,47 @@ export interface OpenFootballActionRecording {
 }
 
 /**
+ * The viewer appends live state tracks and cannot remove an already queued
+ * transition. Reassert the latest attitude at any earlier pending reset so a
+ * later action from another batch is not accidentally cleared by it.
+ */
+export class OpenFootballStateTimeline {
+  private readonly expiries = new Map<number, number[]>();
+
+  apply(incoming: Record<number, [number, string][]>): Record<number, [number, string][]> {
+    const output: Record<number, [number, string][]> = {};
+    for (const [rawPlayerId, entries] of Object.entries(incoming)) {
+      const playerId = Number(rawPlayerId);
+      const scheduled = this.expiries.get(playerId) ?? [];
+      let nextScheduled = scheduled.filter((expiry) => expiry >= entries[0]?.[0]);
+      const playerOutput = output[playerId] = [];
+
+      for (const [time, state] of entries) {
+        playerOutput.push([time, state]);
+        nextScheduled = nextScheduled.filter((expiry) => expiry >= time);
+        // Correct every reset already sent to the viewer that this newer
+        // action now outlives. Stable timestamp sorting makes the correction
+        // win at the same time as the old neutral transition.
+        for (const expiry of nextScheduled) playerOutput.push([expiry, state]);
+
+        const resetAt = Math.min(MATCH_DURATION_MS, time + ACTION_ATTITUDE_MS);
+        if (resetAt > time) {
+          playerOutput.push([resetAt, 'TACTICA: Neutral']);
+          nextScheduled.push(resetAt);
+        }
+      }
+
+      playerOutput.sort((a, b) => a[0] - b[0]);
+      for (let index = playerOutput.length - 1; index > 0; index--) {
+        if (playerOutput[index][0] === playerOutput[index - 1][0]) playerOutput.splice(index - 1, 1);
+      }
+      this.expiries.set(playerId, [...new Set(nextScheduled)].sort((a, b) => a - b));
+    }
+    return output;
+  }
+}
+
+/**
  * Adapt only presentation cues from TACTICA's authoritative match timeline to
  * the Open Football viewer's recording schema. This never advances the match
  * engine or decides an outcome.
@@ -25,9 +66,8 @@ export function toOpenFootballRecordingEvents(
   totalMoments: number,
 ): OpenFootballActionRecording {
   const events: OpenFootballRecordingEvent[] = [];
-  const pendingStates: Record<number, { time: number; order: number; attitude: string }[]> = {};
+  const states: Record<number, [number, string][]> = {};
   const eventKeys = new Set<string>();
-  let stateOrder = 0;
 
   const addEvent = (timestamp: number, description: string) => {
     const key = `${timestamp}:${description}`;
@@ -38,7 +78,8 @@ export function toOpenFootballRecordingEvents(
 
   const addState = (playerId: number | undefined, time: number, attitude: string) => {
     if (playerId === undefined) return;
-    (pendingStates[playerId] ??= []).push({ time, order: stateOrder++, attitude });
+    const entries = states[playerId] ??= [];
+    entries.push([time, `TACTICA: ${attitude}`]);
   };
 
   for (const action of actions) {
@@ -77,20 +118,10 @@ export function toOpenFootballRecordingEvents(
     }
   }
 
-  const states: Record<number, [number, string][]> = {};
-  for (const [playerId, queued] of Object.entries(pendingStates)) {
-    const ordered = queued.sort((a, b) => a.time - b.time || a.order - b.order);
-    const transitions = ordered.filter((entry, index) => entry.time !== ordered[index + 1]?.time);
-    const entries = states[Number(playerId)] = [];
-    for (let index = 0; index < transitions.length; index++) {
-      const transition = transitions[index];
-      const nextTime = transitions[index + 1]?.time ?? MATCH_DURATION_MS + 1;
-      entries.push([transition.time, `TACTICA: ${transition.attitude}`]);
-
-      // Viewer states remain in force until another state arrives. Reset short
-      // gestures after their dwell, unless a newer action should take over.
-      const resetAt = transition.time + ACTION_ATTITUDE_MS;
-      if (resetAt < nextTime && resetAt < MATCH_DURATION_MS) entries.push([resetAt, 'TACTICA: Neutral']);
+  for (const entries of Object.values(states)) {
+    entries.sort((a, b) => a[0] - b[0]);
+    for (let i = entries.length - 1; i > 0; i--) {
+      if (entries[i][0] === entries[i - 1][0]) entries.splice(i - 1, 1);
     }
   }
 

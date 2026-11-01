@@ -3,7 +3,7 @@ import type { Fixture, GameState } from '../game/types';
 import type { MatchSim } from '../game/engine/match';
 import type { MatchPitchSnapshot, MatchVisualAction } from '../game/types';
 import { formationLayout } from '../game/match-pitch';
-import { toOpenFootballRecordingEvents } from './openFootballRecording';
+import { OpenFootballStateTimeline, toOpenFootballRecordingEvents } from './openFootballRecording';
 
 const MATCH_DURATION_MS = 505_340;
 
@@ -68,6 +68,7 @@ export function OpenFootballPitch({
   useEffect(() => {
     let cancelled = false;
     let bridge: OpenFootballBridge | null = null;
+    const attitudeTimeline = new OpenFootballStateTimeline();
     const progress = (event: Event) => {
       if ((event as CustomEvent<{ phase?: string }>).detail?.phase === 'ready') { setReady(true); onReady(true); }
     };
@@ -102,8 +103,9 @@ export function OpenFootballPitch({
             previousTime = time;
           }
           const { events, states } = toOpenFootballRecordingEvents(actions, sim.totalMoments);
-          if (ball.length || events.length || Object.keys(states).length) {
-            viewer.MatchViewer.pushRecording(JSON.stringify({ ball, players, goals, events, states }));
+          const liveStates = attitudeTimeline.apply(states);
+          if (ball.length || events.length || Object.keys(liveStates).length) {
+            viewer.MatchViewer.pushRecording(JSON.stringify({ ball, players, goals, events, states: liveStates }));
           }
         },
         setPlaying(value) { viewer.MatchViewer.setPlaying(value); },
