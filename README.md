@@ -16,7 +16,7 @@ Start the TACTICA web app:
 npm run dev
 ```
 
-Open [http://127.0.0.1:5184/tactica-fc/](http://127.0.0.1:5184/tactica-fc/). If port 5184 is already in use, stop the older TACTICA process in its own terminal with `Ctrl+C`, then run the command again. The app does not launch Chrome automatically.
+Vite prints the exact local URL when it starts. Open that URL with the `/tactica-fc/` path, for example [http://127.0.0.1:5184/tactica-fc/](http://127.0.0.1:5184/tactica-fc/). If port 5184 is busy, Vite automatically picks the next free port, so leave other running services alone and use the URL printed in PowerShell. The app does not launch Chrome automatically.
 
 For the club-selection, career, tactics, training, transfers and live-match flow, see [the Turkish manager-career guide](docs/manager-career-guide.md).
 

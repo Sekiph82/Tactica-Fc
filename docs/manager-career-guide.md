@@ -8,7 +8,7 @@ Proje klasöründeki PowerShell'de çalıştır:
 npm run dev
 ```
 
-Sonra `http://127.0.0.1:5184/tactica-fc/` adresini aç. Port doluysa çalışan eski TACTICA penceresinde `Ctrl+C` ile durdurup yeniden başlat. TACTICA web kariyeri Open Football sunucusunu başlatmayı gerektirmez.
+Vite'ın PowerShell'de yazdırdığı yerel adresi aç; adresin sonunda `/tactica-fc/` yolu bulunur. 5184 portu doluysa Vite otomatik olarak sonraki boş portu seçer. Open Football sunucusunu ayrıca başlatman gerekmez.
 
 ## Kariyer oluştur ve takımını seç
 

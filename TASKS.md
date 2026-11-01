@@ -15,6 +15,7 @@ This file is the single source of truth for milestone status. Mark work complete
 - [x] Attempt the existing full Playwright smoke script. It could not launch because the Chromium executable is not installed; the live career/match path was instead verified in the available in-app browser.
 
 ## TFC-M02: Rebranding and architecture — IN PROGRESS
+- [x] Let the TACTICA Vite dev server select the next free port when the default 5184 is occupied, and document using the exact URL printed by Vite. This prevents a separately running Open Football development server from blocking TACTICA startup or requiring the user to stop another process.
 
 - [x] Replace the primary product-facing CM Reborn branding with TACTICA FC while preserving MIT and third-party notices. Historical changelog entries and the current hosting URL are retained pending deployment ownership decisions.
 - [x] Update the browser title, social metadata, PWA manifest, npm package identity, start-screen logo, footer, support/about/share strings, and fallback notification identity to TACTICA FC.
