@@ -228,7 +228,14 @@ impl WorldSaveStore {
             return Err(error);
         }
 
-        self.prune_old_snapshots(&final_path)?;
+        if let Err(error) = self.prune_old_snapshots(&final_path) {
+            // The new snapshot was already renamed into place. Report its
+            // commit as successful; a pruning error must not make callers
+            // roll back in-memory changes that are already durable on disk.
+            log::warn!(
+                "career world snapshot committed, but old snapshots could not be pruned: {error}"
+            );
+        }
         Ok(())
     }
 
