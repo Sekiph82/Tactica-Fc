@@ -408,6 +408,13 @@ export class MatchSim {
     const action = this.pendingVisualPass;
     if (!action) return;
 
+    // The pass is intentionally withheld until the next engine step chooses
+    // its real receiver. A live viewer may already have accepted the snapshot
+    // at the original pass moment by then, so timestamp the finalized visual
+    // action at the resolution moment instead of streaming it behind playback.
+    action.moment = this.moment;
+    action.minute = this.minute;
+
     if (receiver) {
       const layout = this.visualPositions(action.toZone, action.team, receiver.p.id);
       const receivePoint = playerPoint(layout, receiver.p.id);
