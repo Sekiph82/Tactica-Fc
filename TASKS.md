@@ -88,6 +88,8 @@ This file is the single source of truth for milestone status. Mark work complete
 - [x] Extend the embedded live viewer to 120 minutes when TACTICA enters extra time, and map authoritative extra-time player/ball/action/goal timestamps onto that extended timeline. Rebuilt the active WASM viewer and generated JS/WASM assets; `cargo check --manifest-path vendor/open-football/src/match/Cargo.toml --target wasm32-unknown-unknown --release -j 2` and `npm exec tsc -- --noEmit` pass. Owner-visible extra-time playback remains unverified.
 - [x] Give each engine-resolved penalty shootout kick a separate viewer beat after extra time, with the real taker, goalkeeper, outcome, ball path, and scorer timestamp. The viewer duration grows with the actual kick count; `npm exec tsc -- --noEmit` passes. Visual acceptance of penalties remains open.
 
+- [x] Publish an explicit live match frame immediately after kickoff setup, at the current match timestamp before the first engine tick, then schedule normal samples 500 ms apart. This lets the already-prepared Open Football viewer attach to the real kickoff state instead of beginning from its first later tick. `cargo check --manifest-path vendor/open-football/Cargo.toml -p core --profile fast -j 2` passes; owner-visible continuity still needs acceptance.
+
 ## TFC-M05: Live tactical interaction — COMPLETE
 
 - [x] Existing match screen exposes tactics, substitutions, and stoppage/half-time interactions.

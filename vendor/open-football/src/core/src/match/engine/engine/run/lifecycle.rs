@@ -364,7 +364,56 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let mut next_position_record_ms: u64 =
             (initial_t / Self::POSITION_RECORD_INTERVAL_MS + 1) * Self::POSITION_RECORD_INTERVAL_MS;
         let track_positions = match_data.is_tracking_positions();
-        let mut next_live_sample_ms = context.total_match_time;
+        // Publish the actual kickoff shape before the first simulation tick.
+        // Otherwise a viewer that attaches on its first poll starts from a
+        // later frame, which can make the opening of the match disappear.
+        let mut next_live_sample_ms = context.total_match_time.saturating_add(500);
+
+        if let Some(session) = live_session {
+            let instruction = if session.manager_team_id() == context.field_home_team_id {
+                context.coach_home.instruction
+            } else {
+                context.coach_away.instruction
+            };
+            session.publish(crate::r#match::LiveMatchFrame {
+                sequence: 0,
+                home_team_id: context.field_home_team_id,
+                away_team_id: context.field_away_team_id,
+                elapsed_ms: context.total_match_time,
+                minute: (context.total_match_time / 60_000) as u32,
+                home_score: context.score.home_team.get(),
+                away_score: context.score.away_team.get(),
+                ball_x: field.ball.position.x,
+                ball_y: field.ball.position.y,
+                ball_z: field.ball.position.z,
+                instruction: crate::r#match::instruction_key(instruction).to_string(),
+                events: Vec::new(),
+                goals: live_goals.clone(),
+                players: field.players.iter()
+                    .filter(|player| !player.off_pitch)
+                    .map(|player| crate::r#match::LivePlayerFrame {
+                        id: player.id,
+                        team_id: player.team_id,
+                        name: String::new(),
+                        shirt_number: 0,
+                        x: player.position.x,
+                        y: player.position.y,
+                        goalkeeper: player.tactical_position.current_position.is_goalkeeper(),
+                    })
+                    .collect(),
+                substitutes: field.substitutes.iter()
+                    .map(|player| crate::r#match::LivePlayerFrame {
+                        id: player.id,
+                        team_id: player.team_id,
+                        name: String::new(),
+                        shirt_number: 0,
+                        x: player.position.x,
+                        y: player.position.y,
+                        goalkeeper: player.tactical_position.current_position.is_goalkeeper(),
+                    })
+                    .collect(),
+            });
+        }
 
         // **The interval.**
         //
