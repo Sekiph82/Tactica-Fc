@@ -384,9 +384,9 @@ pub async fn team_schedule_get_action(
         })
         .collect();
     followed_league_news.sort_by(|a, b| a.name.cmp(&b.name));
-    let manager_unread_total = unread_newspaper_count
-        + followed_league_news.iter().map(|paper| paper.unread_count).sum::<usize>()
-        + manager_snapshot.as_ref().map_or(0, |snapshot| snapshot.match_reports.len().saturating_sub(snapshot.last_read_match_reports));
+    let manager_unread_total = manager_snapshot.as_ref().map_or(0, |snapshot| {
+        crate::teams::newspaper::manager_unread_item_count(simulator_data, team, snapshot)
+    });
     let unread_manager_match_reports = manager_snapshot.as_ref().map_or(0, |snapshot| {
         snapshot.match_reports.len().saturating_sub(snapshot.last_read_match_reports)
     });

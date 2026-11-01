@@ -29,6 +29,41 @@
     })();
     </script>
     {% endif %}
+    {% if is_managed %}
+    {% if manager_timeline.is_empty() %}
+    <div class="np-empty">
+        <div class="np-empty-rule"></div>
+        <p class="np-empty-title">{{ news.t("newspaper_presses_idle") }}</p>
+        <p class="np-empty-body">{{ news.t("newspaper_no_issues") }}</p>
+    </div>
+    {% else %}
+    <section class="fm-panel" style="margin:0 0 18px">
+        <div class="fm-panel-head"><h3>{{ manager_inbox_heading }}{% if manager_unread_total > 0 %} · {{ manager_unread_total }}{% endif %}</h3></div>
+        <div style="padding:6px 16px 14px;display:grid;gap:10px">
+            {% for item in manager_timeline %}
+            <article style="padding:12px 14px;border:1px solid #274251;border-radius:9px;background:#071925">
+                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;color:#8fa9b7;font-size:.9em">
+                    <time datetime="{{ item.sort_date }}">{{ item.date }}</time>
+                    {% if item.unread %}<span aria-label="{{ i18n.t("news") }}" style="color:#61e6ce">●</span>{% endif %}
+                    {% if item.source_url.is_empty() %}{{ item.source }}{% else %}<a href="{{ item.source_url }}">{{ item.source }}</a>{% endif %}
+                </div>
+                <h3 style="margin:7px 0 5px;font-size:1.05em">
+                    {% if item.headline.has_links() %}
+                    {% let prose = item.headline %}{% let link_class = "np-story-link" %}{% include "teams/newspaper/_prose.html" %}
+                    {% else %}{{ item.headline.text() }}{% endif %}
+                </h3>
+                <p style="margin:0;color:#c0d0d9;line-height:1.45">
+                    {% if item.body.has_links() %}
+                    {% let prose = item.body %}{% let link_class = "np-prose-link" %}{% include "teams/newspaper/_prose.html" %}
+                    {% else %}{{ item.body.text() }}{% endif %}
+                </p>
+                {% if !item.action_url.is_empty() %}<a class="fm-button" style="display:inline-block;margin-top:9px" href="{{ item.action_url }}">{{ item.action_label }}</a>{% endif %}
+            </article>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+    {% else %}
     {% if issues.is_empty() %}
     <div class="np-empty">
         <div class="np-empty-rule"></div>
@@ -36,7 +71,6 @@
         <p class="np-empty-body">{{ news.t("newspaper_no_issues") }}</p>
     </div>
     {% else %}
-
     {% for issue in issues %}
     {% if loop.index0 == 1 %}
     <div class="np-archive-rule">
@@ -45,7 +79,7 @@
     {% endif %}
     {% include "teams/newspaper/_sheet.html" %}
     {% endfor %}
-
+    {% endif %}
     {% endif %}
     {% if is_managed && pending_transfer_decisions > 0 %}
     <section class="fm-panel" style="margin:18px 0;padding:16px">
@@ -53,35 +87,6 @@
         <p>{{ news.t("manager_transfer_decisions_pending") }}</p>
         <a class="fm-button" href="/{{ lang }}/teams/{{ team_slug }}/transfers">{{ news.t("manager_open_transfer_decisions") }}</a>
     </section>
-    {% endif %}
-
-    {% if is_managed && !manager_match_reports.is_empty() %}
-    <section class="fm-panel" style="margin:18px 0">
-        <div class="fm-panel-head"><h3>{{ news.t("newspaper_results") }}{% if unread_manager_match_reports > 0 %} · {{ unread_manager_match_reports }}{% endif %}</h3></div>
-        <ul style="list-style:none;padding:12px 18px;display:grid;gap:8px;margin:0">
-            {% for report in manager_match_reports %}
-            <li><a href="/{{ lang }}/match/{{ report.match_id }}">{{ report.date }} · {{ report.score }} vs {{ report.opponent }}</a></li>
-            {% endfor %}
-        </ul>
-    </section>
-    {% endif %}
-
-    {% if is_managed && !followed_league_issues.is_empty() %}
-    <div class="np-archive-rule"><span>{{ i18n.t("news") }} · {{ followed_league_issues.len() }}</span></div>
-    {% for paper in followed_league_issues %}
-    <section class="fm-panel" style="margin:18px 0">
-        <div class="fm-panel-head">
-            <h3><a href="{{ paper.url }}/newspaper">{{ paper.name }}</a>{% if paper.unread_count > 0 %} · {{ paper.unread_count }}{% endif %}</h3>
-        </div>
-        {% if paper.issues.is_empty() %}
-        <div class="np-empty"><p class="np-empty-body">{{ news.t("newspaper_no_league_issues") }}</p></div>
-        {% else %}
-        {% for issue in paper.issues %}
-        {% include "teams/newspaper/_sheet.html" %}
-        {% endfor %}
-        {% endif %}
-    </section>
-    {% endfor %}
     {% endif %}
 
 </div>

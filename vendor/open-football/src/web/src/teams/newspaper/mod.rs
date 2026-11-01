@@ -2,7 +2,7 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::slug::player_history_slug;
-use crate::game::ManagerMatchReport;
+use crate::game::ManagerCareerSnapshot;
 use crate::leagues::address::LeagueAddress;
 use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n, NewsI18n};
@@ -59,10 +59,9 @@ pub struct TeamNewspaperTemplate {
     pub newspaper_count: usize,
     pub is_managed: bool,
     pub unread_newspaper_count: usize,
-    pub followed_league_issues: Vec<FollowedLeagueIssuesView>,
-    pub manager_match_reports: Vec<ManagerMatchReport>,
-    pub unread_manager_match_reports: usize,
+    pub manager_timeline: Vec<ManagerTimelineItem>,
     pub manager_unread_total: usize,
+    pub manager_inbox_heading: &'static str,
     pub pending_transfer_decisions: usize,
     /// Newest edition first. Empty until the club's first press run.
     pub issues: Vec<IssueView>,
@@ -96,11 +95,17 @@ pub struct IssueView {
     pub portrait: Option<PortraitView>,
 }
 
-pub struct FollowedLeagueIssuesView {
-    pub name: String,
-    pub url: String,
-    pub unread_count: usize,
-    pub issues: Vec<IssueView>,
+pub struct ManagerTimelineItem {
+    pub date: String,
+    pub sort_date: NaiveDate,
+    pub priority: u16,
+    pub source: String,
+    pub headline: Prose,
+    pub body: Prose,
+    pub source_url: String,
+    pub action_url: String,
+    pub action_label: String,
+    pub unread: bool,
 }
 
 /// One edition's stories, shared out between the runs of type the page
@@ -367,33 +372,6 @@ pub async fn team_newspaper_action(
     let manager_snapshot = is_managed.then(|| state.manager_career_store.load_snapshot(team.id).unwrap_or_default());
     let last_read_issue = manager_snapshot.as_ref().map(|snapshot| snapshot.last_read_newspaper_issue).unwrap_or(0);
     let unread_newspaper_count = latest_issue_number.saturating_sub(last_read_issue) as usize;
-    let followed_league_issues: Vec<_> = manager_snapshot.as_ref()
-        .into_iter()
-        .flat_map(|snapshot| snapshot.followed_league_ids.iter().filter_map(|league_id| {
-            let followed = simulator_data.league(*league_id)?;
-            let last_read = snapshot.last_read_league_issues.get(league_id).copied().unwrap_or(0);
-            let unread_count = followed.newsroom.latest().map(|issue| issue.number).unwrap_or(0).saturating_sub(last_read) as usize;
-            let league_title = views::league_display_name(followed, &i18n, simulator_data);
-            let masthead = PressDesk::masthead(followed.newsroom.masthead_key(), &followed.name, &news);
-            let mut issues = crate::leagues::newspaper::LeaguePress::typeset(simulator_data, followed, &masthead, &i18n, &news);
-            for issue in &mut issues { issue.paper_slug.clear(); }
-            Some(FollowedLeagueIssuesView {
-                name: league_title,
-                url: LeagueAddress::of(simulator_data, followed).url(&route_params.lang),
-                unread_count,
-                issues,
-            })
-        }))
-        .collect();
-    let manager_match_reports = manager_snapshot.as_ref().map(|snapshot| {
-        snapshot.match_reports.iter().rev().take(10).cloned().collect::<Vec<_>>()
-    }).unwrap_or_default();
-    let unread_manager_match_reports = manager_snapshot.as_ref().map_or(0, |snapshot| {
-        snapshot.match_reports.len().saturating_sub(snapshot.last_read_match_reports)
-    });
-    let manager_unread_total = unread_newspaper_count
-        + followed_league_issues.iter().map(|paper| paper.unread_count).sum::<usize>()
-        + unread_manager_match_reports;
     let pending_transfer_decisions = if is_managed {
         simulator_data.continents.iter()
             .flat_map(|continent| &continent.countries)
@@ -406,6 +384,10 @@ pub async fn team_newspaper_action(
             })
             .count()
     } else { 0 };
+    let manager_timeline = manager_snapshot.as_ref().map(|snapshot| {
+        build_manager_timeline(simulator_data, team, snapshot, &route_params.lang, &i18n, &news)
+    }).unwrap_or_default();
+    let manager_unread_total = manager_timeline.iter().filter(|item| item.unread).count();
 
     let (neighbor_teams, country_leagues) =
         NewspaperPage::menu_sources(team.club_id, simulator_data, &i18n)?;
@@ -464,13 +446,124 @@ pub async fn team_newspaper_action(
         },
         is_managed,
         unread_newspaper_count,
-        followed_league_issues,
-        manager_match_reports,
-        unread_manager_match_reports,
+        manager_timeline,
         manager_unread_total,
+        manager_inbox_heading: if route_params.lang.starts_with("tr") { "Menajer gelen kutusu" } else { "Manager inbox" },
         pending_transfer_decisions,
         issues,
     })
+}
+
+fn build_manager_timeline(
+    data: &SimulatorData,
+    team: &Team,
+    snapshot: &ManagerCareerSnapshot,
+    lang: &str,
+    i18n: &I18n,
+    news: &NewsI18n,
+) -> Vec<ManagerTimelineItem> {
+    let mut timeline = Vec::new();
+    let club_paper = PaperFor::Own(Paper {
+        name: &team.name,
+        slug: &team.slug,
+        club_id: team.club_id,
+        team_id: team.id,
+    });
+    let club_source = PressDesk::masthead(team.newsroom.masthead_key(), &team.name, news);
+    let club_url = format!("/{lang}/teams/{}/newspaper", team.slug);
+    for issue in &team.newsroom.issues {
+        append_manager_issue(
+            &mut timeline, data, club_paper, issue, &club_source, &club_url,
+            issue.number > snapshot.last_read_newspaper_issue, i18n, news,
+        );
+    }
+
+    for league_id in &snapshot.followed_league_ids {
+        let Some(league) = data.league(*league_id) else { continue; };
+        let paper = PaperFor::Division(&league.name);
+        let source = PressDesk::masthead(league.newsroom.masthead_key(), &league.name, news);
+        let url = format!("{}/newspaper", LeagueAddress::of(data, league).url(lang));
+        let last_read = snapshot.last_read_league_issues.get(league_id).copied().unwrap_or(0);
+        for issue in &league.newsroom.issues {
+            append_manager_issue(
+                &mut timeline, data, paper, issue, &source, &url,
+                issue.number > last_read, i18n, news,
+            );
+        }
+    }
+
+    for (index, report) in snapshot.match_reports.iter().enumerate() {
+        let sort_date = NaiveDate::parse_from_str(&report.date, "%Y-%m-%d")
+            .unwrap_or_else(|_| data.date.date());
+        timeline.push(ManagerTimelineItem {
+            date: i18n.format_date(sort_date),
+            sort_date,
+            priority: u16::MAX,
+            source: news.t("newspaper_results").to_string(),
+            headline: Prose { spans: vec![Span::text(format!("{} vs {}", report.score, report.opponent))] },
+            body: Prose { spans: vec![Span::text(news.t("newspaper_results").to_string())] },
+            source_url: String::new(),
+            action_url: format!("/{lang}/match/{}", report.match_id),
+            action_label: i18n.t("mgr_open_replay").to_string(),
+            unread: index >= snapshot.last_read_match_reports,
+        });
+    }
+
+    timeline.sort_by(|a, b| {
+        b.sort_date.cmp(&a.sort_date)
+            .then_with(|| b.priority.cmp(&a.priority))
+            .then_with(|| a.source.cmp(&b.source))
+    });
+    timeline
+}
+
+pub(crate) fn manager_unread_item_count(
+    data: &SimulatorData,
+    team: &Team,
+    snapshot: &ManagerCareerSnapshot,
+) -> usize {
+    let club_unread = team.newsroom.issues.iter()
+        .filter(|issue| issue.number > snapshot.last_read_newspaper_issue)
+        .map(|issue| issue.stories.len())
+        .sum::<usize>();
+    let league_unread = snapshot.followed_league_ids.iter().filter_map(|league_id| {
+        let league = data.league(*league_id)?;
+        let last_read = snapshot.last_read_league_issues.get(league_id).copied().unwrap_or(0);
+        Some(league.newsroom.issues.iter()
+            .filter(|issue| issue.number > last_read)
+            .map(|issue| issue.stories.len())
+            .sum::<usize>())
+    }).sum::<usize>();
+    club_unread + league_unread
+        + snapshot.match_reports.len().saturating_sub(snapshot.last_read_match_reports)
+}
+
+fn append_manager_issue(
+    timeline: &mut Vec<ManagerTimelineItem>,
+    data: &SimulatorData,
+    paper: PaperFor<'_>,
+    issue: &NewspaperIssue,
+    source: &str,
+    source_url: &str,
+    unread: bool,
+    i18n: &I18n,
+    news: &NewsI18n,
+) {
+    for story in &issue.stories {
+        let rendered = PressDesk::story(data, paper.for_story(data, story), story, i18n, news, PressFocus::none());
+        timeline.push(ManagerTimelineItem {
+            date: rendered.date,
+            sort_date: story.date,
+            priority: story.priority,
+            source: source.to_string(),
+            headline: rendered.headline,
+            body: rendered.body,
+            source_url: source_url.to_string(),
+            action_url: source_url.to_string(),
+            action_label: i18n.t("news").to_string(),
+            unread,
+        });
+    }
 }
 
 /// Which side's paper a given team's tab shows.
