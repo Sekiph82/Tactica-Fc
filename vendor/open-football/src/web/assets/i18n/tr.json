@@ -2212,6 +2212,7 @@
   "mgr_training_statement_prefix": "{player} antrenman sonrası şöyle konuştu:",
   "mgr_praise_training_player": "Oyuncuyu öv",
   "mgr_training_praise_recorded": "Menajer oyuncuyu antrenman performansı için övdü.",
+  "mgr_training_praise_cooldown": "Bu oyuncu yakın zamanda övüldü; yeniden övgü için bekleme süresi dolmadı.",
   "manager_action_failed": "Karar kaydedilemedi. Yeniden deneyin.",
   "mgr_home_hero_alt": "Taktika FC menajeri saha kenarında takımını yönetiyor",
   "mgr_training_mental": "Mental",

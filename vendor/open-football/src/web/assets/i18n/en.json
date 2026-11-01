@@ -2212,6 +2212,7 @@
   "mgr_training_statement_prefix": "{player} said after training:",
   "mgr_praise_training_player": "Praise player",
   "mgr_training_praise_recorded": "The manager praised the player's training performance.",
+  "mgr_training_praise_cooldown": "This player was praised recently; the response cooldown has not expired.",
   "manager_action_failed": "The decision could not be saved. Please try again.",
   "mgr_home_hero_alt": "TACTICA FC manager leading the team from the touchline",
   "mgr_training_mental": "Mental",

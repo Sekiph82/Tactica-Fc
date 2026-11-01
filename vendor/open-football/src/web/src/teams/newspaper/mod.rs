@@ -580,11 +580,21 @@ fn build_manager_timeline(
                 ),
             )
         };
+        let praise_on_cooldown = team
+            .players
+            .players
+            .iter()
+            .find(|player| player.id == report.best_player_id)
+            .is_some_and(|player| {
+                player.happiness.has_recent_event(&core::HappinessEventType::ManagerPraise, 7)
+            });
         if report.manager_praised {
             body.push_str(&format!(" {}", i18n.t("mgr_training_praise_recorded")));
+        } else if praise_on_cooldown {
+            body.push_str(&format!(" {}", i18n.t("mgr_training_praise_cooldown")));
         }
         let team_url = format!("/{lang}/teams/{}", team.slug);
-        let praise_url = if report.manager_praised || report.best_player_id == 0 {
+        let praise_url = if report.manager_praised || report.best_player_id == 0 || praise_on_cooldown {
             String::new()
         } else {
             format!("/api/manager/training/{}/praise", report.date)
