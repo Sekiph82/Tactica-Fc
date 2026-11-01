@@ -8,14 +8,15 @@ use core::SimulatorData;
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
+use memmap2::MmapOptions;
 use serde::{Deserialize, Serialize};
 use serde_wincode::SerdeCompat;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufReader, BufWriter, Write};
+use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use wincode::config::{Configuration, DeserializeOwned as WincodeDeserializeOwned};
+use wincode::config::{Configuration, Deserialize as WincodeDeserialize};
 use wincode::int_encoding::{LittleEndian, VarInt};
 use wincode::io::std_write::WriteAdapter;
 use wincode::len::BincodeLen;
@@ -41,6 +42,62 @@ struct WorldSaveEnvelope {
     engine_version: String,
     database_signature: String,
     world: SimulatorData,
+}
+
+struct DecodedSaveTemp(PathBuf);
+
+impl Drop for DecodedSaveTemp {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+fn decode_snapshot(path: &Path) -> io::Result<WorldSaveEnvelope> {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temp_path = path.with_file_name(format!(
+        "{}.decode-{}-{stamp}.tmp",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(FILE_PREFIX),
+        std::process::id()
+    ));
+    let mut decoded_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)?;
+    let cleanup = DecodedSaveTemp(temp_path.clone());
+    let decoder = GzDecoder::new(BufReader::new(File::open(path)?));
+    let decoded_len = io::copy(
+        &mut decoder.take(MAX_WORLD_SAVE_BYTES as u64 + 1),
+        &mut decoded_file,
+    )?;
+    decoded_file.flush()?;
+
+    if decoded_len == 0 || decoded_len > MAX_WORLD_SAVE_BYTES as u64 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("decoded snapshot size {decoded_len} is outside the supported range"),
+        ));
+    }
+
+    // The Serde compatibility layer needs stable backing bytes for some enum
+    // identifiers. A gzip stream cannot provide those borrows; a temporary
+    // file mapping does so without allocating a second full-size heap buffer.
+    let mapping = unsafe { MmapOptions::new().map(&decoded_file)? };
+    let envelope =
+        <SerdeCompat<WorldSaveEnvelope> as WincodeDeserialize<'_, SaveCodec>>::deserialize(
+            mapping.as_ref(),
+            SaveCodec::new(),
+        )
+        .map_err(io::Error::other)?;
+    drop(mapping);
+    drop(decoded_file);
+    drop(cleanup);
+    Ok(envelope)
 }
 
 pub struct WorldSaveStore {
@@ -80,22 +137,16 @@ impl WorldSaveStore {
         candidates.sort();
 
         for path in candidates.into_iter().rev() {
-            let decoded = File::open(&path).and_then(|file| {
-                let mut decoder = GzDecoder::new(BufReader::new(file));
-                let envelope = <SerdeCompat<WorldSaveEnvelope> as WincodeDeserializeOwned<
-                    SaveCodec,
-                >>::deserialize_from(
-                    wincode::io::std_read::ReadAdapter::new(&mut decoder)
-                )
-                .map_err(io::Error::other)?;
-                // Consume the gzip trailer so its checksum is validated, as
-                // it was when the decoded stream was first read into a Vec.
-                io::copy(&mut decoder, &mut io::sink())?;
-                Ok(envelope)
-            });
-            let Ok(envelope) = decoded else {
-                log::warn!("ignoring unreadable career world save: {}", path.display());
-                continue;
+            let decoded = decode_snapshot(&path);
+            let envelope = match decoded {
+                Ok(envelope) => envelope,
+                Err(error) => {
+                    log::warn!(
+                        "ignoring unreadable career world save: {} ({error})",
+                        path.display()
+                    );
+                    continue;
+                }
             };
             if envelope.schema_version != SCHEMA_VERSION
                 || envelope.engine_version != env!("CARGO_PKG_VERSION")
