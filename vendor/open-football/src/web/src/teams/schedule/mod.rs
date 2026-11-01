@@ -55,6 +55,11 @@ pub struct TeamScheduleTemplate {
     pub managed_match_today: bool,
     pub managed_league_id: Option<u32>,
     pub managed_competition_ids: String,
+    pub managed_camp_status: String,
+    pub managed_camp_destination: String,
+    pub managed_camp_start_date: String,
+    pub managed_camp_days_completed: u8,
+    pub managed_camp_cost: String,
     pub active_tab: &'static str,
     pub show_finances_tab: bool,
     pub show_academy_tab: bool,
@@ -338,6 +343,16 @@ pub async fn team_schedule_get_action(
 
     let manager_snapshot = (managed_team_id == Some(team.id))
         .then(|| state.manager_career_store.load_snapshot(team.id).unwrap_or_default());
+    let managed_camp = manager_snapshot.as_ref().and_then(|snapshot| snapshot.training_camp.as_ref());
+    let managed_camp_status = managed_camp.map_or_else(String::new, |camp| camp.status.clone());
+    let managed_camp_destination = managed_camp.map_or_else(String::new, |camp| match camp.destination.as_str() {
+        "sun" => "mgr_camp_sun",
+        "alps" => "mgr_camp_alps",
+        _ => "mgr_camp_home",
+    }.to_string());
+    let managed_camp_start_date = managed_camp.map_or_else(String::new, |camp| camp.start_date.clone());
+    let managed_camp_days_completed = managed_camp.map_or(0, |camp| camp.days_completed);
+    let managed_camp_cost = managed_camp.map_or_else(String::new, |camp| format!("${}", camp.cost));
     let unread_newspaper_count = if let Some(snapshot) = manager_snapshot.as_ref() {
         let latest_issue = team.newsroom.latest().map(|issue| issue.number).unwrap_or(0);
         let last_read_issue = snapshot.last_read_newspaper_issue;
@@ -421,6 +436,11 @@ pub async fn team_schedule_get_action(
             .map(|id| id.to_string())
             .collect::<Vec<_>>()
             .join(","),
+        managed_camp_status,
+        managed_camp_destination,
+        managed_camp_start_date,
+        managed_camp_days_completed,
+        managed_camp_cost,
         active_tab: "schedule",
         show_finances_tab: team.team_type.is_own_team(),
         show_academy_tab: team.team_type == core::TeamType::Main

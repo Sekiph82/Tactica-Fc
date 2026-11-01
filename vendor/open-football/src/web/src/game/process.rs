@@ -3,6 +3,7 @@ use crate::I18nManager;
 use crate::r#match::stores::MatchStore;
 use crate::game::{
     managed_competition_ids, ManagerCareerStore, ManagerMatchReport, ManagerTrainingReport,
+    ManagerTrainingCampReport,
 };
 use axum::Json;
 use axum::extract::{Query, State};
@@ -207,6 +208,9 @@ impl ProcessingRun {
             }
 
             let day = simulator_data.date.date().to_string();
+            if let Some(team_id) = self.manager_team_id {
+                Self::start_training_camp(simulator_data, team_id, &day, &self.manager_career_store);
+            }
             let training_before: HashMap<u32, u16> = self.manager_team_id
                 .and_then(|team_id| simulator_data.team(team_id))
                 .map(|team| team.players.players.iter()
@@ -253,6 +257,7 @@ impl ProcessingRun {
                         error!("failed to persist manager training report: {error}");
                     }
                 }
+                Self::advance_training_camp(simulator_data, manager_team_id, &self.manager_career_store);
             }
             if result.has_match_results() && MatchRuntime::recordings_mode() {
                 self.handle.block_on(Self::write_match_results(result));
@@ -317,6 +322,85 @@ impl ProcessingRun {
             lowest_performance_tenths,
             manager_praised: false,
         })
+    }
+
+    fn start_training_camp(
+        simulator_data: &mut SimulatorData,
+        team_id: u32,
+        day: &str,
+        store: &ManagerCareerStore,
+    ) {
+        let Some(camp) = store.load_snapshot(team_id).and_then(|snapshot| snapshot.training_camp)
+            .filter(|camp| camp.status == "planned" && camp.start_date == day) else { return; };
+        let Some(team) = simulator_data.team(team_id) else { return; };
+        let club_id = team.club_id;
+        let Some(club) = simulator_data.club(club_id) else { return; };
+        let can_pay = club.finance.balance.balance >= camp.cost;
+        if let Err(error) = store.update_snapshot(team_id, |snapshot| {
+            if let Some(active) = snapshot.training_camp.as_mut()
+                .filter(|active| active.status == "planned" && active.start_date == day)
+            {
+                active.status = if can_pay { "running" } else { "cancelled" }.to_string();
+            }
+        }) {
+            error!("failed to persist training camp departure: {error}");
+            return;
+        }
+        if can_pay {
+            if let Some(club) = simulator_data.club_mut(club_id) {
+                club.finance.balance.push_outcome(camp.cost);
+            }
+        }
+    }
+
+    fn advance_training_camp(
+        simulator_data: &mut SimulatorData,
+        team_id: u32,
+        store: &ManagerCareerStore,
+    ) {
+        let Some(camp) = store.load_snapshot(team_id).and_then(|snapshot| snapshot.training_camp)
+            .filter(|camp| camp.status == "running") else { return; };
+        let next_day = camp.days_completed.saturating_add(1).min(7);
+        let completed = next_day >= 7;
+        let (condition_gain, morale_gain_tenths) = match camp.destination.as_str() {
+            "sun" => (500, 4),
+            "alps" => (700, 3),
+            _ => (300, 2),
+        };
+        let report = completed.then(|| {
+            let players = simulator_data.team(team_id).map_or(0, |team| team.players.players.len().min(u8::MAX as usize) as u8);
+            ManagerTrainingCampReport {
+                date: simulator_data.date.date().to_string(),
+                destination: camp.destination.clone(),
+                players,
+                condition_gain,
+                morale_gain_tenths,
+                cost: camp.cost,
+            }
+        });
+        if let Err(error) = store.update_snapshot(team_id, |snapshot| {
+            if let Some(active) = snapshot.training_camp.as_mut()
+                .filter(|active| active.status == "running" && active.start_date == camp.start_date)
+            {
+                active.days_completed = next_day;
+                if completed { active.status = "completed".to_string(); }
+            }
+            if let Some(report) = report.clone() {
+                snapshot.record_training_camp_report(report);
+            }
+        }) {
+            error!("failed to persist training camp progress: {error}");
+            return;
+        }
+        if completed {
+            if let Some(team) = simulator_data.team_mut(team_id) {
+                for player in &mut team.players.players {
+                    player.player_attributes.condition = player.player_attributes.condition
+                        .saturating_add(condition_gain).min(10_000);
+                    player.happiness.adjust_morale(morale_gain_tenths as f32 / 10.0);
+                }
+            }
+        }
     }
 
     async fn write_match_results(result: SimulationResult) {

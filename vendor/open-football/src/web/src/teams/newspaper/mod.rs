@@ -615,6 +615,43 @@ fn build_manager_timeline(
         });
     }
 
+    for (index, report) in snapshot.training_camp_reports.iter().enumerate() {
+        let sort_date = NaiveDate::parse_from_str(&report.date, "%Y-%m-%d")
+            .unwrap_or_else(|_| data.date.date());
+        let destination = match report.destination.as_str() {
+            "sun" => i18n.t("mgr_camp_sun"),
+            "alps" => i18n.t("mgr_camp_alps"),
+            _ => i18n.t("mgr_camp_home"),
+        };
+        let condition = report.condition_gain / 100;
+        let morale = report.morale_gain_tenths;
+        let headline = if lang.starts_with("tr") {
+            format!("Hazırlık kampı tamamlandı · {destination}")
+        } else {
+            format!("Training camp completed · {destination}")
+        };
+        let body = if lang.starts_with("tr") {
+            format!("{} oyuncu kampa katıldı. Oyuncu başına kondisyon +%{condition}, moral +{:.1}. Kamp maliyeti: ${}.", report.players, morale as f32 / 10.0, report.cost)
+        } else {
+            format!("{} players attended. Each player gained {condition}% condition and {:.1} morale. Camp cost: ${}.", report.players, morale as f32 / 10.0, report.cost)
+        };
+        let team_url = format!("/{lang}/teams/{}", team.slug);
+        timeline.push(ManagerTimelineItem {
+            date: i18n.format_date(sort_date),
+            sort_date,
+            priority: 450,
+            source: i18n.t("mgr_training_camp").to_string(),
+            headline: Prose { spans: vec![Span::text(headline)] },
+            body: Prose { spans: vec![Span::text(body)] },
+            source_url: team_url.clone(),
+            action_url: team_url,
+            action_label: i18n.t("mgr_training_camp").to_string(),
+            manager_action_url: String::new(),
+            manager_action_label: String::new(),
+            unread: index >= snapshot.last_read_training_camp_reports,
+        });
+    }
+
     timeline.sort_by(|a, b| {
         b.sort_date.cmp(&a.sort_date)
             .then_with(|| b.priority.cmp(&a.priority))
@@ -643,6 +680,7 @@ pub(crate) fn manager_unread_item_count(
     club_unread + league_unread
         + snapshot.match_reports.len().saturating_sub(snapshot.last_read_match_reports)
         + snapshot.training_reports.len().saturating_sub(snapshot.last_read_training_reports)
+        + snapshot.training_camp_reports.len().saturating_sub(snapshot.last_read_training_camp_reports)
 }
 
 fn append_manager_issue(

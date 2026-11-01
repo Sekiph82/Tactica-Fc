@@ -10,7 +10,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-const SCHEMA_VERSION: u32 = 7;
+const SCHEMA_VERSION: u32 = 8;
 const FILE_NAME: &str = "manager-career.jsonl";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -64,6 +64,15 @@ pub struct ManagerCareerSnapshot {
     /// Number of stored training reports the manager has explicitly read.
     #[serde(default)]
     pub last_read_training_reports: usize,
+    /// Optional manager-planned first-team camp, advanced by normal world days.
+    #[serde(default)]
+    pub training_camp: Option<ManagerTrainingCamp>,
+    /// Completed training-camp reports shown in the manager inbox.
+    #[serde(default)]
+    pub training_camp_reports: Vec<ManagerTrainingCampReport>,
+    /// Number of completed camp reports the manager has explicitly read.
+    #[serde(default)]
+    pub last_read_training_camp_reports: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -92,6 +101,26 @@ pub struct ManagerTrainingReport {
     /// True after the manager has praised this report's best performer.
     #[serde(default)]
     pub manager_praised: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ManagerTrainingCamp {
+    pub destination: String,
+    pub start_date: String,
+    pub status: String,
+    #[serde(default)]
+    pub days_completed: u8,
+    pub cost: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ManagerTrainingCampReport {
+    pub date: String,
+    pub destination: String,
+    pub players: u8,
+    pub condition_gain: i16,
+    pub morale_gain_tenths: u8,
+    pub cost: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -201,6 +230,18 @@ impl ManagerCareerSnapshot {
             let remove_count = self.training_reports.len() - 100;
             self.training_reports.drain(0..remove_count);
             self.last_read_training_reports = self.last_read_training_reports.saturating_sub(remove_count);
+        }
+    }
+
+    pub fn record_training_camp_report(&mut self, report: ManagerTrainingCampReport) {
+        if self.training_camp_reports.iter().any(|existing| existing.date == report.date) {
+            return;
+        }
+        self.training_camp_reports.push(report);
+        if self.training_camp_reports.len() > 30 {
+            let remove_count = self.training_camp_reports.len() - 30;
+            self.training_camp_reports.drain(0..remove_count);
+            self.last_read_training_camp_reports = self.last_read_training_camp_reports.saturating_sub(remove_count);
         }
     }
 

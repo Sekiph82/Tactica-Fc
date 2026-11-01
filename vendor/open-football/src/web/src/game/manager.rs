@@ -2,6 +2,7 @@ use crate::GameAppData;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use chrono::{Duration, NaiveDate};
 use core::shared::currency::{Currency, CurrencyValue};
 use core::transfers::deal::negotiation::{
     NegotiationPhase, NegotiationStatus, TransferNegotiation,
@@ -90,6 +91,100 @@ pub struct TrainingRequest {
 #[derive(Deserialize)]
 pub struct TeamTrainingFocusRequest {
     pub focus: String,
+}
+
+#[derive(Deserialize)]
+pub struct TrainingCampRequest {
+    pub destination: String,
+}
+
+fn training_camp_cost(sim: &SimulatorData, team_id: u32, destination: &str) -> Option<i64> {
+    let team = sim.team(team_id)?;
+    if team.team_type != core::TeamType::Main { return None; }
+    let club = sim.club(team.club_id)?;
+    let multiplier = match destination {
+        "home" => 1.0,
+        "sun" => 3.0,
+        "alps" => 4.0,
+        _ => return None,
+    };
+    let weekly_wages = club.finance.wage_budget.as_ref().map_or(0.0, |budget| budget.amount.max(0.0) / 52.0);
+    Some(((weekly_wages * multiplier).round() as i64).max(30_000))
+}
+
+fn next_training_camp_window(sim: &SimulatorData, team_id: u32) -> Option<String> {
+    let team = sim.team(team_id)?;
+    if team.team_type != core::TeamType::Main { return None; }
+    let today = sim.date.date();
+    let last_day = today + Duration::days(150);
+    let mut fixtures = Vec::new();
+    if let Some(country) = sim.country_by_club(team.club_id) {
+        for competition in country.leagues.leagues.iter()
+            .chain(country.domestic_cup.as_ref().map(|cup| &cup.league))
+            .chain(country.playoffs.iter().map(|playoff| &playoff.league))
+        {
+            fixtures.extend(competition.schedule.get_matches_for_team(team_id)
+                .into_iter().filter(|fixture| fixture.result.is_none())
+                .map(|fixture| fixture.date.date()));
+        }
+    }
+    fixtures.extend(sim.continental_matches_for_club(team.club_id).into_iter()
+        .filter(|(_, _, _, _, _, result)| result.is_none())
+        .map(|(_, _, _, date, _, _)| date));
+    fixtures.sort_unstable();
+    fixtures.dedup();
+    for offset in 1..=150 {
+        let start = today + Duration::days(offset);
+        let finish = start + Duration::days(6);
+        if finish > last_day { break; }
+        if !fixtures.iter().any(|date| *date >= start && *date <= finish) {
+            return Some(start.to_string());
+        }
+    }
+    None
+}
+
+pub async fn manager_plan_training_camp_action(
+    State(state): State<GameAppData>,
+    Json(body): Json<TrainingCampRequest>,
+) -> StatusCode {
+    let Some(team_id) = managed_team_id(&state).await else { return StatusCode::FORBIDDEN; };
+    let data = Arc::clone(&state.data);
+    let mut guard = data.write().await;
+    let Some(sim) = guard.as_mut() else { return StatusCode::SERVICE_UNAVAILABLE; };
+    let sim = Arc::make_mut(sim);
+    let Some(cost) = training_camp_cost(sim, team_id, &body.destination) else { return StatusCode::BAD_REQUEST; };
+    let Some(start_date) = next_training_camp_window(sim, team_id) else { return StatusCode::CONFLICT; };
+    let Some(team) = sim.team(team_id) else { return StatusCode::NOT_FOUND; };
+    let Some(club) = sim.club(team.club_id) else { return StatusCode::NOT_FOUND; };
+    if club.finance.balance.balance < cost { return StatusCode::PAYMENT_REQUIRED; }
+    let today = sim.date.date();
+    if let Some(previous_snapshot) = state.manager_career_store.load_snapshot(team_id) {
+        if let Some(previous) = previous_snapshot.training_camp {
+        if previous.status == "planned" || previous.status == "running" { return StatusCode::CONFLICT; }
+        if previous.status == "completed" {
+            let previous_date = previous_snapshot.training_camp_reports.last()
+                .and_then(|report| report.date.parse::<NaiveDate>().ok())
+                .or_else(|| previous.start_date.parse::<NaiveDate>().ok());
+            if previous_date.is_some_and(|date| (today - date).num_days() < 90) {
+                return StatusCode::CONFLICT;
+            }
+        }
+        }
+    }
+    if let Err(error) = state.manager_career_store.update_snapshot(team_id, |snapshot| {
+        snapshot.training_camp = Some(super::ManagerTrainingCamp {
+            destination: body.destination.clone(),
+            start_date,
+            status: "planned".to_string(),
+            days_completed: 0,
+            cost,
+        });
+    }) {
+        log::error!("failed to persist manager training camp: {error}");
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+    StatusCode::ACCEPTED
 }
 
 #[derive(Deserialize)]
@@ -323,6 +418,7 @@ pub async fn manager_mark_news_read_action(State(state): State<GameAppData>) -> 
         }
         snapshot.last_read_match_reports = snapshot.match_reports.len();
         snapshot.last_read_training_reports = snapshot.training_reports.len();
+        snapshot.last_read_training_camp_reports = snapshot.training_camp_reports.len();
     }) {
         Ok(_) => StatusCode::NO_CONTENT,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
