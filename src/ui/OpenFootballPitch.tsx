@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Fixture, GameState } from '../game/types';
 import type { MatchSim } from '../game/engine/match';
 import type { MatchPitchSnapshot, MatchVisualAction } from '../game/types';
+import { POSITIONS } from '../game/types';
 import { formationLayout } from '../game/match-pitch';
 import { OpenFootballStateTimeline, toOpenFootballRecordingEvents } from './openFootballRecording';
 
@@ -153,7 +154,7 @@ function makeConfig(initial: ReturnType<typeof makeInitialRecording>, game: Game
     const shirt = cssColor(club?.colors[0], index === 0 ? '#173c87' : '#eeeeee');
     const ink = cssColor(club?.colors[1], index === 0 ? '#ffffff' : '#111111');
     const live = sim.live(index);
-    const players = live.on.filter((entry) => !entry.off).map((entry) => {
+    const starters = live.on.filter((entry) => !entry.off).map((entry) => {
       const p = game.players[entry.id];
       const slot = live.tactic.slots[entry.slot];
       return {
@@ -166,7 +167,26 @@ function makeConfig(initial: ReturnType<typeof makeInitialRecording>, game: Game
         starting: true,
       };
     });
-    return { color: { background: shirt, foreground: ink }, players };
+    // Register the selected match bench before kick-off. The viewer creates
+    // actors from this team sheet, then only reveals a substitute once the
+    // authoritative TACTICA position timeline first contains that player.
+    // Without this roster, TACTICA could make a valid substitution while the
+    // viewer had no actor to render for the incoming player.
+    const starterIds = new Set(starters.map((player) => player.id));
+    const substitutes = live.bench.filter((id) => !starterIds.has(id)).map((id, benchIndex) => {
+      const p = game.players[id];
+      const bestPosition = p?.pos.length ? p.pos.indexOf(Math.max(...p.pos)) : -1;
+      return {
+        id,
+        shirt_number: 12 + benchIndex,
+        first_name: p?.first ?? '',
+        last_name: p?.last || p?.first || `#${id}`,
+        position: bestPosition >= 0 ? POSITIONS[bestPosition] ?? 'M' : 'M',
+        is_home: index === 0,
+        starting: false,
+      };
+    });
+    return { color: { background: shirt, foreground: ink }, players: [...starters, ...substitutes] };
   };
   const home = side(0, fixture.home);
   const away = side(1, fixture.away);
