@@ -130,6 +130,8 @@
             var viewerModulePromise = null;
             var viewerRateSampleAt = null;
             var viewerRateSampleElapsedMs = null;
+            var viewerRateSampleSequence = null;
+            var viewerLastProgressAt = null;
             // The manager match advances 500 ms of match time per 20 ms of
             // wall time, so the embedded viewer starts at the matching 25x.
             var viewerPlaybackSpeed = 25.0;
@@ -161,24 +163,38 @@
             function syncViewerPlayback(frame, status) {
                 var now = performance.now();
                 var elapsed = Number(frame.elapsed_ms) || 0;
-                if (viewerRateSampleAt === null || viewerRateSampleElapsedMs === null) {
+                var sequence = Number(frame.sequence) || 0;
+                if (viewerRateSampleAt === null || viewerRateSampleElapsedMs === null || viewerRateSampleSequence === null) {
                     viewerRateSampleAt = now;
                     viewerRateSampleElapsedMs = elapsed;
+                    viewerRateSampleSequence = sequence;
+                    viewerLastProgressAt = now;
                     if (status !== 'playing') setViewerPlaying(false);
+                    return;
+                }
+                // Command-triggered refreshes can race with the polling loop.
+                // Never let an older response rewind the playback-rate baseline.
+                if (sequence < viewerRateSampleSequence) return;
+                if (status !== 'playing') {
+                    setViewerPlaying(false);
                     return;
                 }
                 var wallDelta = now - viewerRateSampleAt;
                 if (wallDelta < 250) {
-                    if (status !== 'playing') setViewerPlaying(false);
                     return;
                 }
                 var matchDelta = elapsed - viewerRateSampleElapsedMs;
                 viewerRateSampleAt = now;
                 viewerRateSampleElapsedMs = elapsed;
-                if (status !== 'playing' || matchDelta <= 0) {
-                    setViewerPlaying(false);
+                viewerRateSampleSequence = sequence;
+                if (matchDelta <= 0) {
+                    // A single delayed engine tick should not pause and resume
+                    // the viewer on alternating polls. Treat a sustained lack
+                    // of authoritative progress as a real pause instead.
+                    if (now - viewerLastProgressAt >= 750) setViewerPlaying(false);
                     return;
                 }
+                viewerLastProgressAt = now;
                 // Both values are elapsed milliseconds; this ratio therefore
                 // matches the engine's accelerated live clock (about 25x).
                 var measuredSpeed = Math.max(0.25, Math.min(25, matchDelta / wallDelta));
@@ -416,6 +432,10 @@
                         lastLiveElapsedMs = -1;
                         lastLiveEventSequence = 0;
                         recentLiveEvents = [];
+                        viewerRateSampleAt = null;
+                        viewerRateSampleElapsedMs = null;
+                        viewerRateSampleSequence = null;
+                        viewerLastProgressAt = null;
                     }
                     var eventSequenceBeforePoll = lastLiveEventSequence;
                     renderLiveEvents(view.events || []);
@@ -426,6 +446,11 @@
                     if (viewerFailed) liveState.textContent = livePanel.dataset.viewerFailed || livePanel.dataset.commandFailed;
                     if (!view.frame) return;
                     var frame = view.frame;
+                    // A poll can finish after a command-triggered refresh that
+                    // already delivered a newer frame from the same session.
+                    // Keep event updates above, but don't rewind the HUD or the
+                    // playback clock with this stale snapshot.
+                    if (Number(frame.sequence) < lastLiveSequence) return;
                     var managedTeamId = String(view.manager_team_id);
                     refillSelect(substitutionOut, frame.players.filter(function(player) { return String(player.team_id) === managedTeamId; }).map(function(player) { return player.id; }));
                     refillSelect(substitutionIn, frame.substitutes.filter(function(player) { return String(player.team_id) === managedTeamId; }).map(function(player) { return player.id; }));
