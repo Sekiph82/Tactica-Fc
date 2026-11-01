@@ -24,7 +24,7 @@
         </div>
         {% endif %}
         {% if !manager_match_reports.is_empty() %}
-        <section style="margin:12px 18px;padding:12px 14px;border:1px solid #244555;border-radius:10px;background:#071925">
+        <section class="fm-panel tactica-match-reports">
             <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
                 <strong>{{ match_reports_heading }}{% if unread_manager_match_reports > 0 %} · {{ unread_manager_match_reports }}{% endif %}</strong>
                 {% if unread_manager_match_reports > 0 %}

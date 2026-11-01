@@ -15741,6 +15741,18 @@ input:focus, select:focus, textarea:focus, .form-control:focus { border-color: v
     font-weight: 800;
 }
 .fm-page .fm-manager-advance:hover { background: linear-gradient(135deg, #f0525b, #bd1420); }
+.fm-page .fm-panel.tactica-match-reports {
+    margin: 12px 18px !important;
+    padding: 12px 14px !important;
+    border-top: 2px solid var(--tactica-red) !important;
+    border-radius: var(--radius-card) !important;
+    background: linear-gradient(145deg, #1c1e23, #111216 78%) !important;
+}
+.tactica-match-reports > div > strong { color: #f0f0f1; }
+.tactica-match-reports ul li { padding: 7px 9px; border-bottom: 1px solid rgba(216,217,220,.08); }
+.tactica-match-reports ul li:last-child { border-bottom: 0; }
+.tactica-match-reports ul a { color: var(--tactica-silver); text-decoration: none; }
+.tactica-match-reports ul a:hover { color: #fff; text-decoration: underline; text-decoration-color: var(--tactica-red); }
 @media (max-width: 760px) {
     .tactica-live-match-layout { grid-template-columns: minmax(0, 1fr); }
     .tactica-live-match-score { display: grid; grid-template-columns: auto auto 1fr; gap: 12px; align-items: center; min-width: 0; }
