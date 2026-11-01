@@ -16,6 +16,13 @@ Date: 2026-10-30
 - PE32, x86, Windows GUI subsystem, image base `0x400000`, entry RVA `0x3edd670`.
 - No CLR/.NET header was present. This is native machine code, so a decompiler can at best infer C-like pseudocode and control flow; it cannot restore original source names, comments, or project files.
 
+## Read-only ISO revalidation — 2026-11-01
+
+- Rechecked the supplied ISO directly through its ISO9660 directory records without mounting the image, launching an installer/game executable, or writing extracted files. ISO SHA-256: `99918685612add30d7bfa146e366426c2f0e82be917153282dc8389660fe0469`.
+- Confirmed the installation target is `/SETUP/GAME/CM2010.EXE`, 24,747,176 bytes, with the same SHA-256 recorded above. The separate `/CRACK/CM2010.EXE` is 11,223,040 bytes and has `UPX0`/`UPX1` sections; it is not the installation target and was not executed or used for the gameplay analysis.
+- Re-read the installation target's PE section table and import directory. The entry RVA `0x3edd670` falls in `Sitext`; `Stext` has measured entropy 8.000 and `Sdata` 7.991. Imports include `d3d9.dll` and `d3dx9_33.dll`. The `.securom` section and strings are present, but this static evidence does not identify a precise protection version or expose the runtime's transformed code.
+- This reproduces the earlier protection-boundary finding against the current ISO and distinguishes the packed crack copy from the installed game. No source, movement algorithm, match-event bridge, or renderer state machine was recovered.
+
 ## Evidence of the 3D match presentation stack
 
 The executable imports:
@@ -42,4 +49,4 @@ The `SI-Games-Patch-v3.9.68.exe` in the CM0102 workspace is a separate CM0102 pa
 
 ## Next static-analysis step
 
-Identify the protection/packing format and determine whether any match-related code can be decoded from the on-disk executable without launching it. If it cannot, document the limit instead of treating guessed pseudocode as recovered engine behavior.
+The read-only offline pass reaches a documented protection boundary: the normal executable imports renderer APIs, but the entry stub and high-entropy transformed sections do not expose the match simulation-to-renderer event boundary. Further code recovery would require an appropriate, legally held decompiler/unpacker and likely runtime analysis; neither was available or attempted here. Treat this static-analysis task as bounded and complete, and do not present guessed pseudocode as recovered gameplay behavior. Continue using the manual's behavior descriptions and independently implemented engine/viewer interfaces as references.
