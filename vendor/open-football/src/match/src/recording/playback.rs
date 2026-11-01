@@ -9,7 +9,11 @@ thread_local! {
     static HOST_PLAYING: Cell<Option<bool>> = const { Cell::new(None) };
     static HOST_SPEED: Cell<Option<f32>> = const { Cell::new(None) };
     static HOST_DURATION: Cell<Option<f64>> = const { Cell::new(None) };
+    static HOST_TIME: Cell<Option<f64>> = const { Cell::new(None) };
 }
+
+/// Maximum visual lead over the newest authoritative live-match sample.
+const HOST_TIME_LEAD_MS: f64 = 125.0;
 
 /// Let the host manager controls pause or resume the broadcast clock.
 pub fn set_host_playing(playing: bool) {
@@ -27,6 +31,13 @@ pub fn set_host_speed(speed: f32) {
 pub fn set_host_duration(duration_ms: f64) {
     if duration_ms.is_finite() && duration_ms > 0.0 {
         HOST_DURATION.with(|state| state.set(Some(duration_ms)));
+    }
+}
+
+/// Supply the latest authoritative timestamp from an embedded live match.
+pub fn set_host_time(time_ms: f64) {
+    if time_ms.is_finite() && time_ms >= 0.0 {
+        HOST_TIME.with(|state| state.set(Some(time_ms)));
     }
 }
 
@@ -162,6 +173,8 @@ pub struct Playback {
     /// picture dark for as long as the drag lasted, which is precisely when
     /// somebody needs to see where they are going.
     pub cut: bool,
+    /// Latest timestamp supplied by an embedding live-match engine.
+    pub host_time_ms: Option<f64>,
 }
 
 impl Playback {
@@ -191,6 +204,14 @@ impl Playback {
                 }
             }
         });
+        HOST_TIME.with(|state| {
+            if let Some(time_ms) = state.take() {
+                let is_newer = playback.host_time_ms.map_or(true, |current| time_ms >= current);
+                if is_newer {
+                    playback.host_time_ms = Some(time_ms);
+                }
+            }
+        });
     }
 
     /// Speeds the debug overlay cycles through, slowest first.
@@ -213,6 +234,7 @@ impl Playback {
             seeked: false,
             advanced_ms: 0.0,
             cut: false,
+            host_time_ms: None,
         }
     }
 
@@ -321,7 +343,15 @@ impl Playback {
             return;
         }
         let from = playback.time_ms;
-        playback.time_ms += time.delta_secs_f64() * 1000.0 * playback.speed as f64;
+        let next_time_ms = playback.time_ms + time.delta_secs_f64() * 1000.0 * playback.speed as f64;
+        if let Some(host_time_ms) = playback.host_time_ms {
+            let maximum = (host_time_ms + HOST_TIME_LEAD_MS).min(playback.duration_ms);
+            if next_time_ms <= maximum {
+                playback.time_ms = next_time_ms;
+            }
+        } else {
+            playback.time_ms = next_time_ms;
+        }
 
         // Run out of the end of a clip and there is nothing ahead but empty
         // pitch, so cut to the next one. `seeked` because that is what it is

@@ -260,18 +260,19 @@
                 var now = performance.now();
                 var elapsed = Number(frame.elapsed_ms) || 0;
                 var sequence = Number(frame.sequence) || 0;
+                if (viewerApi && viewerApi.setHostTime) viewerApi.setHostTime(elapsed);
                 if (viewerRateSampleAt === null || viewerRateSampleElapsedMs === null || viewerRateSampleSequence === null) {
                     viewerRateSampleAt = now;
                     viewerRateSampleElapsedMs = elapsed;
                     viewerRateSampleSequence = sequence;
                     viewerLastProgressAt = now;
-                    if (status !== 'playing') setViewerPlaying(false);
+                    setViewerPlaying(status === 'finished');
                     return;
                 }
                 // Command-triggered refreshes can race with the polling loop.
                 // Never let an older response rewind the playback-rate baseline.
                 if (sequence < viewerRateSampleSequence) return;
-                if (status !== 'playing') {
+                if (status !== 'playing' && status !== 'finished') {
                     // Do not include halftime or another stopped phase in the
                     // wall-clock interval used after play resumes. Otherwise
                     // the first resumed rate estimate is diluted by the entire
@@ -437,6 +438,7 @@
                     viewerGoalCount = Math.max(viewerGoalCount, frameGoals.length);
                 });
                 if (!ball.length) return;
+                if (viewerApi.setHostTime) viewerApi.setHostTime(ball[ball.length - 1][0]);
                 // A delayed poll can recover many authoritative samples at once.
                 // Send them as one upstream-shaped recording so the viewer parses
                 // one payload per poll rather than one payload per recovered frame.
@@ -494,8 +496,9 @@
                     .then(function(api) {
                         viewerApi = api;
                         viewerApi.start(JSON.stringify(config));
+                        if (viewerApi.setHostTime) viewerApi.setHostTime(Number(firstFrame.elapsed_ms) || 0);
                         viewerApi.setSpeed(viewerPlaybackSpeed);
-                        setViewerPlaying(!!currentLiveView && currentLiveView.status === 'playing');
+                        setViewerPlaying(!!currentLiveView && (currentLiveView.status === 'playing' || currentLiveView.status === 'finished'));
                         appendViewerFrames(viewerPendingFrames);
                         viewerPendingFrames = [];
                     })
@@ -544,7 +547,7 @@
                     var normalizedStatus = view.status.replace(/_([a-z])/g, function(_, letter) { return letter.toUpperCase(); });
                     var statusKey = 'status' + normalizedStatus.charAt(0).toUpperCase() + normalizedStatus.slice(1);
                     liveState.textContent = livePanel.dataset[statusKey] || livePanel.dataset.statusWaiting;
-                    if (view.status !== 'playing') setViewerPlaying(false);
+                    if (view.status !== 'playing' && view.status !== 'finished') setViewerPlaying(false);
                     if (viewerFailed) liveState.textContent = livePanel.dataset.viewerFailed || livePanel.dataset.commandFailed;
                     if (!view.frame) return;
                     var frame = view.frame;
