@@ -7,10 +7,8 @@ import { gs } from '../../game/state';
 import type { GameState } from '../../game/types';
 
 export function Head({ title, children }: { title: ReactNode; children?: ReactNode }) {
-  const { back, canBack } = useNav();
   return (
     <div className="screen-head">
-      {canBack && <button className="back small" onClick={back}>‹ {t('common.back')}</button>}
       <h2>{title}</h2>
       <div className="grow" />
       {children}

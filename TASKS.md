@@ -105,6 +105,8 @@ This file is the single source of truth for milestone status. Mark work complete
 
 ## TFC-M07: Management UI modernisation — IN PROGRESS
 
+- [x] Move the history-aware Back control into the persistent app top bar so it stays in one predictable place across manager screens; remove duplicate page-heading controls. Direct-entry screens without history return to the inbox. TypeScript production build and no-emit typecheck pass; visual acceptance remains pending.
+
 - [x] Add Turkish to the language type, language selectors, community language metadata, AI text requests, and locale-aware number/date formatting; add a starter Turkish dictionary for common, start, navigation, and match strings with English fallback.
 - [x] Translate all landing-page, new-career, options, top-bar, match, tactics, team/player instructions, player profile, player attributes, chemistry, staff roles, table headings, and status-tag keys into Turkish.
 - [x] Translate and review the transfer, offer, bid, clause, loan, enquiry, contract, signing, negotiation, and agent UI keys into Turkish; total coverage is now 794 / 4,192 English keys.

@@ -78,7 +78,8 @@ const UNEMPLOYED: ScreenName[] = ['support', 'community', 'profile', 'inbox', 'c
 
 export function Shell() {
   const g = useGame()!;
-  const { route, nav } = useNav();
+  const { route, nav, back, canBack } = useNav();
+  const showBack = canBack || route.name !== 'inbox';
   // på selve kampskærmen styres kampen derinde – "Til kampen"/"Næste kamp" giver ingen mening dér
   const inMatch = route.name === 'match' && !!g.pendingFixture && (route as { id?: number }).id === g.pendingFixture;
   const [menuOpen, setMenuOpen] = useState(false);
@@ -249,6 +250,7 @@ export function Shell() {
   return (
     <div className="shell">
       <div className="topbar">
+        {showBack && <button className="nav-back small" onClick={() => canBack ? back() : nav({ name: 'inbox' })} aria-label={t('common.back')} title={t('common.back')}>‹ {t('common.back')}</button>}
         <button className="menu-toggle small" onClick={() => setMenuOpen(!menuOpen)}>☰</button>
         <div className="club">
           {club ? <><Crest id={club.id} size={34} /><span className="club-name">{club.name}</span></> : <span className="muted">{online && !online.inGame ? t('mp.lobby') : t('top.unemployed')}</span>}
