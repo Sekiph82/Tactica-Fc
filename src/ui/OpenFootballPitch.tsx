@@ -126,7 +126,7 @@ export function OpenFootballPitch({
           }
           const { events, states } = toOpenFootballRecordingEvents(actions, setup.totalMoments, actionMoments);
           const liveStates = attitudeTimeline.apply(states);
-          if (ball.length || events.length || Object.keys(liveStates).length) {
+          if (ball.length || Object.keys(players).length || goals.length || events.length || Object.keys(liveStates).length) {
             viewer.MatchViewer.pushRecording(JSON.stringify({ ball, players, goals, events, states: liveStates }));
           }
         },
