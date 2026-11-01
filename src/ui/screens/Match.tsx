@@ -773,7 +773,7 @@ function LiveMatch({ id }: { id: number }) {
       )}
       <div className="match2d">
           <div className="match-stage">
-            <OpenFootballPitch id={id} fixture={f} game={g} sim={sim} playing={!paused && !report && viewerReady && !viewerFailed && (!h2h || hs.phase === 'play')}
+            <OpenFootballPitch id={id} fixture={f} game={g} sim={sim} speed={h2h ? 505_340 / ((g.options.h2hHalfMinutes ?? 3) * 120_000) * Math.min(hs.homeSpeed, hs.awaySpeed) : speed} playing={!paused && !report && viewerReady && !viewerFailed && (!h2h || hs.phase === 'play')}
               onBridge={(bridge) => { L.viewer = bridge ?? undefined; setViewerBridge(bridge); }} onReady={setViewerReady}
               onFailure={() => { L.viewer = undefined; setViewerBridge(null); setViewerReady(false); setViewerFailed(true); }} />
             {(!viewerReady || viewerFailed) && <>

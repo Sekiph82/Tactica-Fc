@@ -14,6 +14,7 @@ export interface OpenFootballBridge {
     actions: readonly MatchVisualAction[],
   ): void;
   setPlaying(playing: boolean): void;
+  setSpeed(speed: number): void;
 }
 
 type ViewerModule = {
@@ -22,6 +23,7 @@ type ViewerModule = {
     start: (config: string) => void;
     pushRecording: (recording: string) => void;
     setPlaying: (playing: boolean) => void;
+    setSpeed: (speed: number) => void;
   };
 };
 
@@ -44,6 +46,7 @@ export function OpenFootballPitch({
   game,
   sim,
   playing,
+  speed,
   onBridge,
   onReady,
   onFailure,
@@ -53,6 +56,7 @@ export function OpenFootballPitch({
   game: GameState;
   sim: MatchSim;
   playing: boolean;
+  speed: number;
   onBridge: (bridge: OpenFootballBridge | null) => void;
   onReady: (ready: boolean) => void;
   onFailure: () => void;
@@ -103,8 +107,10 @@ export function OpenFootballPitch({
           }
         },
         setPlaying(value) { viewer.MatchViewer.setPlaying(value); },
+        setSpeed(value) { viewer.MatchViewer.setSpeed(value); },
       };
       bridgeRef.current = bridge;
+      bridge.setSpeed(speed);
       bridge.setPlaying(playing);
       onBridge(bridge);
     };
@@ -123,6 +129,7 @@ export function OpenFootballPitch({
   }, [id, fixture, game, sim]);
 
   useEffect(() => { bridgeRef.current?.setPlaying(playing); }, [playing]);
+  useEffect(() => { bridgeRef.current?.setSpeed(speed); }, [speed]);
 
   return <canvas id={`tactica-of-${id}`} ref={canvas} className="open-football-canvas" style={{ visibility: ready ? 'visible' : 'hidden' }} aria-label="Live match presentation" />;
 }
