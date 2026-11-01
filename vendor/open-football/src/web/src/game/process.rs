@@ -114,6 +114,7 @@ pub async fn game_process_action(
         selected_leagues.extend(managed_competition_ids(simulator_data, team_id));
     }
     let mut player_names = HashMap::new();
+    let mut player_shirt_numbers = HashMap::new();
     if manager_team_id.is_some() && let Some(simulator_data) = data_guard.as_ref() {
         for continent in &simulator_data.continents {
             for country in &continent.countries {
@@ -121,6 +122,7 @@ pub async fn game_process_action(
                     for team in &club.teams.teams {
                         for player in &team.players.players {
                             player_names.insert(player.id, player.full_name.to_string());
+                            player_shirt_numbers.insert(player.id, player.shirt_number());
                         }
                     }
                 }
@@ -138,9 +140,10 @@ pub async fn game_process_action(
         world_save_store: Arc::clone(&state.world_save_store),
         live_session: {
             let session = manager_team_id.map(|team_id| {
-                Arc::new(LiveMatchSession::with_player_names(
+                Arc::new(LiveMatchSession::with_player_details(
                     team_id,
                     player_names,
+                    player_shirt_numbers,
                 ))
             });
             *state.live_match_session.write().await = session.clone();

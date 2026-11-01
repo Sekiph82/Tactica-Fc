@@ -219,7 +219,7 @@
                 var splitName = playerName ? playerName.split(/\s+/) : [];
                 return {
                     id: Number(player.id),
-                    shirt_number: 0,
+                    shirt_number: Number(player.shirt_number) || 0,
                     first_name: splitName.slice(0, -1).join(' '),
                     last_name: splitName.slice(-1)[0] || '',
                     position: player.goalkeeper ? 'GK' : 'MC',

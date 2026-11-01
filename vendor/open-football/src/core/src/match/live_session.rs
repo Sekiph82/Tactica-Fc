@@ -35,6 +35,8 @@ pub struct LivePlayerFrame {
     pub team_id: u32,
     #[serde(default)]
     pub name: String,
+    #[serde(default)]
+    pub shirt_number: u8,
     pub x: f32,
     pub y: f32,
     pub goalkeeper: bool,
@@ -114,6 +116,7 @@ pub struct LiveMatchSession {
     next_event_sequence: AtomicU64,
     manager_team_id: u32,
     player_names: HashMap<u32, String>,
+    player_shirt_numbers: HashMap<u32, u8>,
     claimed: AtomicBool,
     status: Mutex<LiveMatchStatus>,
     frames: Mutex<LiveFrameBuffer>,
@@ -128,12 +131,20 @@ impl LiveMatchSession {
         Self::with_player_names(manager_team_id, HashMap::new())
     }
     pub fn with_player_names(manager_team_id: u32, player_names: HashMap<u32, String>) -> Self {
+        Self::with_player_details(manager_team_id, player_names, HashMap::new())
+    }
+    pub fn with_player_details(
+        manager_team_id: u32,
+        player_names: HashMap<u32, String>,
+        player_shirt_numbers: HashMap<u32, u8>,
+    ) -> Self {
         Self {
             session_id: next_live_session_id(),
             next_frame_sequence: AtomicU64::new(1),
             next_event_sequence: AtomicU64::new(1),
             manager_team_id,
             player_names,
+            player_shirt_numbers,
             claimed: AtomicBool::new(false),
             status: Mutex::new(LiveMatchStatus::Waiting),
             frames: Mutex::new(LiveFrameBuffer::default()),
@@ -186,6 +197,9 @@ impl LiveMatchSession {
         for player in frame.players.iter_mut().chain(frame.substitutes.iter_mut()) {
             if player.name.is_empty() {
                 player.name = self.player_names.get(&player.id).cloned().unwrap_or_default();
+            }
+            if player.shirt_number == 0 {
+                player.shirt_number = self.player_shirt_numbers.get(&player.id).copied().unwrap_or(0);
             }
         }
         for event in &mut frame.events {
