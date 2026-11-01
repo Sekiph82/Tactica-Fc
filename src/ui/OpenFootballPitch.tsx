@@ -91,11 +91,19 @@ export function OpenFootballPitch({
           if (cancelled || snapshots.length === 0) return;
           const ball: number[][] = [];
           const players: Record<number, number[][]> = {};
+          // A visual action records the engine-resolved ball endpoint for the
+          // same step. Prefer that contact/reception/shot point over deriving
+          // a new one from the next zone and holder, which can make the viewer
+          // appear to send the ball back to an unrelated player.
+          const ballEnds = new Map<number, [number, number]>();
+          for (const action of actions) {
+            if (action.ballTo) ballEnds.set(action.moment + 1, point(action.ballTo));
+          }
           for (const snapshot of snapshots) {
             const time = timestamp(snapshot.moment, sim.totalMoments);
             if (time <= previousTime) continue;
             const layout = formationLayout(snapshot);
-            const [ballX, ballY] = point(layout.ball);
+            const [ballX, ballY] = ballEnds.get(snapshot.moment) ?? point(layout.ball);
             ball.push([time, ballX, ballY, 0]);
             for (const [pid, pos] of layout.pos) {
               const [x, y] = point(pos);
