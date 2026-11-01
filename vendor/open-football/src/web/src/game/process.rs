@@ -27,6 +27,38 @@ pub struct ProcessQuery {
     pub league_ids: Option<String>,
 }
 
+fn manager_has_pending_transfer_decision(simulator_data: &SimulatorData, team_id: u32) -> bool {
+    let Some(team) = simulator_data.team(team_id) else {
+        return false;
+    };
+    if team.team_type != core::TeamType::Main {
+        return false;
+    }
+    let club_id = team.club_id;
+    simulator_data
+        .continents
+        .iter()
+        .flat_map(|continent| &continent.countries)
+        .flat_map(|country| country.transfer_market.negotiations.values())
+        .any(|negotiation| {
+            let club_phase = matches!(
+                negotiation.phase,
+                core::transfers::deal::negotiation::NegotiationPhase::ClubNegotiation { .. }
+            );
+            let manager_needs_to_respond = negotiation.manager_decision.is_none()
+                && (negotiation.selling_club_id == club_id
+                    && matches!(
+                        negotiation.status,
+                        core::transfers::deal::negotiation::NegotiationStatus::Pending
+                            | core::transfers::deal::negotiation::NegotiationStatus::Countered
+                    )
+                    || negotiation.buying_club_id == club_id
+                        && negotiation.status
+                            == core::transfers::deal::negotiation::NegotiationStatus::Countered);
+            club_phase && manager_needs_to_respond
+        })
+}
+
 pub async fn game_process_action(
     State(state): State<GameAppData>,
     Query(query): Query<ProcessQuery>,
@@ -69,6 +101,13 @@ pub async fn game_process_action(
         return StatusCode::SERVICE_UNAVAILABLE;
     }
     let manager_team_id = *state.manager_team_id.read().await;
+    if manager_team_id.is_some_and(|team_id| {
+        data_guard
+            .as_ref()
+            .is_some_and(|simulator_data| manager_has_pending_transfer_decision(simulator_data, team_id))
+    }) {
+        return StatusCode::CONFLICT;
+    }
     let mut player_names = HashMap::new();
     if manager_team_id.is_some() && let Some(simulator_data) = data_guard.as_ref() {
         for continent in &simulator_data.continents {

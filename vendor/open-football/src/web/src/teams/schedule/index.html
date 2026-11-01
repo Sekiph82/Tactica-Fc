@@ -51,7 +51,8 @@
                   data-processing-failed="{{ i18n.t("mgr_processing_status_failed") }}"
                   data-one-day="{{ i18n.t("mgr_one_day_starting") }}"
                   data-days="{{ i18n.t("mgr_days_starting") }}"
-                  data-advance-failed="{{ i18n.t("mgr_advance_failed") }}"></span>
+                  data-advance-failed="{{ i18n.t("mgr_advance_failed") }}"
+                  data-pending-decision="{{ i18n.t("mgr_pending_transfer_stop") }}"></span>
             <label>{{ i18n.t("mgr_match_formation") }}
                 <select id="fm-matchday-formation">
                     <option value="T442"{% if managed_formation_key == "T442" %} selected{% endif %}>4-4-2</option><option value="T433"{% if managed_formation_key == "T433" %} selected{% endif %}>4-3-3</option><option value="T451"{% if managed_formation_key == "T451" %} selected{% endif %}>4-5-1</option><option value="T4231"{% if managed_formation_key == "T4231" %} selected{% endif %}>4-2-3-1</option><option value="T352"{% if managed_formation_key == "T352" %} selected{% endif %}>3-5-2</option><option value="T442Diamond"{% if managed_formation_key == "T442Diamond" %} selected{% endif %}>{{ i18n.t("mgr_formation_diamond") }}</option><option value="T442DiamondWide"{% if managed_formation_key == "T442DiamondWide" %} selected{% endif %}>{{ i18n.t("mgr_formation_diamond_wide") }}</option><option value="T442Narrow"{% if managed_formation_key == "T442Narrow" %} selected{% endif %}>{{ i18n.t("mgr_formation_narrow") }}</option><option value="T4141"{% if managed_formation_key == "T4141" %} selected{% endif %}>4-1-4-1</option><option value="T4411"{% if managed_formation_key == "T4411" %} selected{% endif %}>4-4-1-1</option><option value="T343"{% if managed_formation_key == "T343" %} selected{% endif %}>3-4-3</option><option value="T1333"{% if managed_formation_key == "T1333" %} selected{% endif %}>1-3-3-3</option><option value="T4312"{% if managed_formation_key == "T4312" %} selected{% endif %}>4-3-1-2</option><option value="T4222"{% if managed_formation_key == "T4222" %} selected{% endif %}>4-2-2-2</option>
@@ -505,10 +506,13 @@
                         return fetch('/api/game/process?days=' + days + '&league_ids=' + encodeURIComponent(button.getAttribute('data-competition-ids')), { method: 'POST' });
                     })
                     .then(function(response) {
+                        if (response.status === 409) throw new Error(messages.pendingDecision);
                         if (!response.ok) throw new Error('http ' + response.status);
                         waitUntilDone();
-                    }).catch(function() {
-                        status.textContent = document.getElementById('fm-manager-schedule-messages').dataset.advanceFailed;
+                    }).catch(function(error) {
+                        status.textContent = error && error.message
+                            ? error.message
+                            : document.getElementById('fm-manager-schedule-messages').dataset.advanceFailed;
                         buttons.forEach(function(action) { action.disabled = false; });
                         formation.disabled = false;
                         style.disabled = false;

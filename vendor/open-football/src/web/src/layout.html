@@ -137,6 +137,7 @@
                                             <div class="spinner"></div>
                                         </div>
                                     </div>
+                                    <span id="fm-process-messages" hidden data-pending-decision="{{ i18n.t("mgr_pending_transfer_stop") }}"></span>
                                 </div>
                             </div>
                             {% block submenu %}{% endblock %}
@@ -246,10 +247,17 @@
         btn.classList.add('fm-processing');
         try {
             const res = await fetch(url, {method: 'POST'});
+            if (res.status === 409) {
+                btn.classList.remove('fm-processing');
+                const message = document.getElementById('fm-process-messages')?.dataset.pendingDecision;
+                alert(message || 'Answer the pending transfer decision before advancing time.');
+                return;
+            }
             if (res.status === 504) {
                 setProcessing(true);
                 return;
             }
+            if (!res.ok) throw new Error('process request failed');
         } catch (e) {
             setProcessing(true);
             return;

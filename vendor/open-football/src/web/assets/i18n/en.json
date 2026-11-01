@@ -2283,6 +2283,7 @@
   "mgr_one_day_starting": "Starting one-day simulation…",
   "mgr_days_starting": "Starting a {days}-day simulation through the next match…",
   "mgr_advance_failed": "Could not advance. Check your managed team and connection.",
+  "mgr_pending_transfer_stop": "Answer the pending transfer decision before advancing time.",
   "mgr_live_title": "Live match controls",
   "mgr_live_waiting": "Waiting for your team's match…",
   "mgr_live_playing": "Match is live",

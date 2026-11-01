@@ -2283,6 +2283,7 @@
   "mgr_one_day_starting": "Bir günlük simülasyon başlatılıyor…",
   "mgr_days_starting": "Sıradaki maça kadar {days} günlük simülasyon başlatılıyor…",
   "mgr_advance_failed": "İlerleme tamamlanamadı. Menajer takımını ve bağlantıyı kontrol et.",
+  "mgr_pending_transfer_stop": "Zamanı ilerletmeden önce bekleyen transfer kararını yanıtla.",
   "mgr_live_title": "Canlı maç kumandası",
   "mgr_live_waiting": "Menajer takımının maçı bekleniyor…",
   "mgr_live_playing": "Maç canlı oynanıyor",
