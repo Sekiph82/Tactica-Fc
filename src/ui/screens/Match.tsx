@@ -10,6 +10,7 @@ import { session, skippedMatches, type LiveCmd } from '../../online/client';
 import { fixturesOn, gs, notify, squad } from '../../game/state';
 import type { MatchPitchSnapshot, MatchReport, MatchVisualAction, OppInstructions, OppKind } from '../../game/types';
 import { hasVisualQueueCapacity, pairVisualActionsWithSnapshot, type MatchVisualFrame } from '../../game/match-visual';
+import { actionMomentWindows } from '../openFootballRecording';
 import { t } from '../../i18n';
 import { Bar, ClubLink, Crest, Panel, Pct, PlayerLink, posStr, Rating, Tabs } from '../components';
 import { useGame, useNav } from '../core';
@@ -436,9 +437,11 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
     const linesBefore = L.lines.length;
     pull();
     if (L.viewer && viewerSnapshots.length) {
+      const goalWindows = actionMomentWindows(viewerActions);
       const goals = sim.events.slice(L.viewerEventsSeen ?? 0).filter((event) => event.k === 'goal' && event.p !== undefined).map((event) => {
-        const shot = viewerActions.find((action) => action.kind === 'shot' && action.outcome === 'goal' && action.team === event.t && action.actor === event.p && action.minute === event.m);
-        return { player_id: event.p!, time: shot ? Math.round(shot.moment / Math.max(sim.totalMoments, 1) * 505_340) : Math.round(event.m / 90 * 505_340), is_auto_goal: false };
+        const shotIndex = viewerActions.findIndex((action) => action.kind === 'shot' && action.outcome === 'goal' && action.team === event.t && action.actor === event.p && action.minute === event.m);
+        const goalMoment = shotIndex >= 0 ? goalWindows[shotIndex]?.end : undefined;
+        return { player_id: event.p!, time: goalMoment === undefined ? Math.round(event.m / 90 * 505_340) : Math.round(goalMoment / Math.max(sim.totalMoments, 1) * 505_340), is_auto_goal: false };
       });
       L.viewerEventsSeen = sim.events.length;
       L.viewer.push(viewerSnapshots, goals, viewerActions);

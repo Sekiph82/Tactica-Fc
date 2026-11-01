@@ -4,7 +4,7 @@ import type { MatchSim } from '../game/engine/match';
 import type { MatchPitchSnapshot, MatchVisualAction } from '../game/types';
 import { POSITIONS } from '../game/types';
 import { formationLayout } from '../game/match-pitch';
-import { OpenFootballStateTimeline, toOpenFootballRecordingEvents } from './openFootballRecording';
+import { actionMomentWindows, distributeActionMoments, OpenFootballStateTimeline, toOpenFootballRecordingEvents } from './openFootballRecording';
 
 const MATCH_DURATION_MS = 505_340;
 
@@ -85,33 +85,45 @@ export function OpenFootballPitch({
       const config = makeConfig(initial, game, fixture, sim, `#tactica-of-${id}`);
       viewer.MatchViewer.start(JSON.stringify(config));
 
-      let previousTime = 0;
+      let previousSnapshotTime = 0;
+      let previousBallTime = 0;
       bridge = {
         push(snapshots, goals, actions) {
           if (cancelled || snapshots.length === 0) return;
           const ball: number[][] = [];
           const players: Record<number, number[][]> = {};
-          // A visual action records the engine-resolved ball endpoint for the
-          // same step. Prefer that contact/reception/shot point over deriving
-          // a new one from the next zone and holder, which can make the viewer
-          // appear to send the ball back to an unrelated player.
-          const ballEnds = new Map<number, [number, number]>();
-          for (const action of actions) {
-            if (action.ballTo) ballEnds.set(action.moment + 1, point(action.ballTo));
+          // A step may resolve a pass and shot (or a cross and header) before
+          // producing its single final snapshot. Spread those action paths
+          // through that step so the viewer receives each real contact in order.
+          const actionWindows = actionMomentWindows(actions);
+          const actionMoments = distributeActionMoments(actions);
+          const actionEnds = new Set(actions.map((action) => action.moment + 1));
+          const ballSamples: { moment: number; point: [number, number] }[] = [];
+          for (const [index, action] of actions.entries()) {
+            const window = actionWindows[index];
+            const startMoment = window.start + 0.001;
+            if (action.ballFrom) ballSamples.push({ moment: startMoment, point: point(action.ballFrom) });
+            if (action.ballTo) ballSamples.push({ moment: window.end, point: point(action.ballTo) });
           }
           for (const snapshot of snapshots) {
             const time = timestamp(snapshot.moment, sim.totalMoments);
-            if (time <= previousTime) continue;
+            if (time <= previousSnapshotTime) continue;
             const layout = formationLayout(snapshot);
-            const [ballX, ballY] = ballEnds.get(snapshot.moment) ?? point(layout.ball);
-            ball.push([time, ballX, ballY, 0]);
             for (const [pid, pos] of layout.pos) {
               const [x, y] = point(pos);
               (players[pid] ??= []).push([time, x, y]);
             }
-            previousTime = time;
+            if (!actionEnds.has(snapshot.moment)) ballSamples.push({ moment: snapshot.moment, point: point(layout.ball) });
+            previousSnapshotTime = time;
           }
-          const { events, states } = toOpenFootballRecordingEvents(actions, sim.totalMoments);
+          ballSamples.sort((a, b) => a.moment - b.moment);
+          for (const sample of ballSamples) {
+            const time = timestamp(sample.moment, sim.totalMoments);
+            if (time <= previousBallTime) continue;
+            ball.push([time, sample.point[0], sample.point[1], 0]);
+            previousBallTime = time;
+          }
+          const { events, states } = toOpenFootballRecordingEvents(actions, sim.totalMoments, actionMoments);
           const liveStates = attitudeTimeline.apply(states);
           if (ball.length || events.length || Object.keys(liveStates).length) {
             viewer.MatchViewer.pushRecording(JSON.stringify({ ball, players, goals, events, states: liveStates }));

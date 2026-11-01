@@ -56,6 +56,26 @@ export class OpenFootballStateTimeline {
   }
 }
 
+/** Give engine actions sharing a simulation moment ordered presentation windows within that moment. */
+export function actionMomentWindows(actions: readonly MatchVisualAction[]): { start: number; event: number; end: number }[] {
+  const counts = new Map<number, number>();
+  for (const action of actions) counts.set(action.moment, (counts.get(action.moment) ?? 0) + 1);
+  const offsets = new Map<number, number>();
+  return actions.map((action) => {
+    const count = counts.get(action.moment) ?? 1;
+    const index = offsets.get(action.moment) ?? 0;
+    offsets.set(action.moment, index + 1);
+    const start = action.moment + index / count;
+    const end = action.moment + (index + 1) / count;
+    return { start, event: (start + end) / 2, end };
+  });
+}
+
+/** Give engine actions sharing a simulation moment ordered presentation times within that moment. */
+export function distributeActionMoments(actions: readonly MatchVisualAction[]): number[] {
+  return actionMomentWindows(actions).map((window) => window.event);
+}
+
 /**
  * Adapt only presentation cues from TACTICA's authoritative match timeline to
  * the Open Football viewer's recording schema. This never advances the match
@@ -64,6 +84,7 @@ export class OpenFootballStateTimeline {
 export function toOpenFootballRecordingEvents(
   actions: readonly MatchVisualAction[],
   totalMoments: number,
+  presentationMoments = distributeActionMoments(actions),
 ): OpenFootballActionRecording {
   const events: OpenFootballRecordingEvent[] = [];
   const states: Record<number, [number, string][]> = {};
@@ -82,9 +103,9 @@ export function toOpenFootballRecordingEvents(
     entries.push([time, `TACTICA: ${attitude}`]);
   };
 
-  for (const action of actions) {
+  for (const [index, action] of actions.entries()) {
     const time = Math.max(0, Math.min(MATCH_DURATION_MS,
-      Math.round(action.moment / Math.max(totalMoments, 1) * MATCH_DURATION_MS)));
+      Math.round(presentationMoments[index] / Math.max(totalMoments, 1) * MATCH_DURATION_MS)));
     const contact = action.ballTo ?? action.to;
     const px = Math.max(0, Math.min(840, contact[0] * 8.4));
     const py = Math.max(0, Math.min(545, contact[1] * 5.45));
