@@ -537,28 +537,42 @@ fn build_manager_timeline(
             _ => i18n.t("mgr_style_balanced"),
         };
         let rating = |tenths: u8| format!("{}.{}/20", tenths / 10, tenths % 10);
+        let statement_key = if report.best_performance_tenths >= 160 {
+            "mgr_training_statement_high"
+        } else if report.best_performance_tenths >= 135 {
+            "mgr_training_statement_steady"
+        } else {
+            "mgr_training_statement_low"
+        };
+        let statement = i18n.t(statement_key);
+        let statement_prefix = i18n.t("mgr_training_statement_prefix")
+            .replace("{player}", &report.best_player);
         let (headline, body) = if lang.starts_with("tr") {
             (
                 format!("Antrenman raporu · {} oyuncu", report.trained_players),
                 format!(
-                    "En iyi antrenman formu: {} ({}) · Takip edilmesi gereken form: {} ({}) · Takım odağı: {}",
+                    "En iyi antrenman formu: {} ({}) · Takip edilmesi gereken form: {} ({}) · Takım odağı: {}. {} “{}”",
                     report.best_player,
                     rating(report.best_performance_tenths),
                     report.lowest_player,
                     rating(report.lowest_performance_tenths),
                     focus,
+                    statement_prefix,
+                    statement,
                 ),
             )
         } else {
             (
                 format!("Training report · {} players", report.trained_players),
                 format!(
-                    "Highest training form: {} ({}) · Form to monitor: {} ({}) · Team focus: {}",
+                    "Highest training form: {} ({}) · Form to monitor: {} ({}) · Team focus: {}. {} “{}”",
                     report.best_player,
                     rating(report.best_performance_tenths),
                     report.lowest_player,
                     rating(report.lowest_performance_tenths),
                     focus,
+                    statement_prefix,
+                    statement,
                 ),
             )
         };
