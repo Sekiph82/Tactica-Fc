@@ -244,6 +244,7 @@ pub async fn manager_mark_news_read_action(State(state): State<GameAppData>) -> 
             *last_read = (*last_read).max(issue_number);
         }
         snapshot.last_read_match_reports = snapshot.match_reports.len();
+        snapshot.last_read_training_reports = snapshot.training_reports.len();
     }) {
         Ok(_) => StatusCode::NO_CONTENT,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,

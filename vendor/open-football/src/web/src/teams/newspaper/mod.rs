@@ -509,6 +509,59 @@ fn build_manager_timeline(
         });
     }
 
+    for (index, report) in snapshot.training_reports.iter().enumerate() {
+        let sort_date = NaiveDate::parse_from_str(&report.date, "%Y-%m-%d")
+            .unwrap_or_else(|_| data.date.date());
+        let focus = match report.focus.as_str() {
+            "balanced" => i18n.t("mgr_style_balanced"),
+            "fitness" => i18n.t("mgr_training_fitness"),
+            "technical" => i18n.t("technical"),
+            "tactical" => i18n.t("mgr_style_tactical"),
+            "set_pieces" => i18n.t("mgr_training_set_pieces"),
+            "recovery" => i18n.t("mgr_training_recovery"),
+            _ => i18n.t("mgr_style_balanced"),
+        };
+        let rating = |tenths: u8| format!("{}.{}/20", tenths / 10, tenths % 10);
+        let (headline, body) = if lang.starts_with("tr") {
+            (
+                format!("Antrenman raporu · {} oyuncu", report.trained_players),
+                format!(
+                    "En iyi antrenman formu: {} ({}) · Takip edilmesi gereken form: {} ({}) · Takım odağı: {}",
+                    report.best_player,
+                    rating(report.best_performance_tenths),
+                    report.lowest_player,
+                    rating(report.lowest_performance_tenths),
+                    focus,
+                ),
+            )
+        } else {
+            (
+                format!("Training report · {} players", report.trained_players),
+                format!(
+                    "Highest training form: {} ({}) · Form to monitor: {} ({}) · Team focus: {}",
+                    report.best_player,
+                    rating(report.best_performance_tenths),
+                    report.lowest_player,
+                    rating(report.lowest_performance_tenths),
+                    focus,
+                ),
+            )
+        };
+        let team_url = format!("/{lang}/teams/{}", team.slug);
+        timeline.push(ManagerTimelineItem {
+            date: i18n.format_date(sort_date),
+            sort_date,
+            priority: 400,
+            source: i18n.t("mgr_team_training").to_string(),
+            headline: Prose { spans: vec![Span::text(headline)] },
+            body: Prose { spans: vec![Span::text(body)] },
+            source_url: team_url.clone(),
+            action_url: team_url,
+            action_label: i18n.t("mgr_team_training").to_string(),
+            unread: index >= snapshot.last_read_training_reports,
+        });
+    }
+
     timeline.sort_by(|a, b| {
         b.sort_date.cmp(&a.sort_date)
             .then_with(|| b.priority.cmp(&a.priority))
@@ -536,6 +589,7 @@ pub(crate) fn manager_unread_item_count(
     }).sum::<usize>();
     club_unread + league_unread
         + snapshot.match_reports.len().saturating_sub(snapshot.last_read_match_reports)
+        + snapshot.training_reports.len().saturating_sub(snapshot.last_read_training_reports)
 }
 
 fn append_manager_issue(

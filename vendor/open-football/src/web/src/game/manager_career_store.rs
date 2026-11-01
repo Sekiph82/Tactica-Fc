@@ -10,7 +10,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-const SCHEMA_VERSION: u32 = 6;
+const SCHEMA_VERSION: u32 = 7;
 const FILE_NAME: &str = "manager-career.jsonl";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -58,6 +58,12 @@ pub struct ManagerCareerSnapshot {
     /// Number of match reports the manager has explicitly read.
     #[serde(default)]
     pub last_read_match_reports: usize,
+    /// Actual managed-team training outcomes captured from daily engine ticks.
+    #[serde(default)]
+    pub training_reports: Vec<ManagerTrainingReport>,
+    /// Number of stored training reports the manager has explicitly read.
+    #[serde(default)]
+    pub last_read_training_reports: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -68,6 +74,19 @@ pub struct ManagerMatchReport {
     /// Score in the managed team's home/away orientation.
     pub score: String,
     pub is_home: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ManagerTrainingReport {
+    pub date: String,
+    pub trained_players: u8,
+    pub focus: String,
+    pub best_player: String,
+    /// Rolling engine training performance, in tenths on a 1.0–20.0 scale.
+    pub best_performance_tenths: u8,
+    pub lowest_player: String,
+    /// Rolling engine training performance, in tenths on a 1.0–20.0 scale.
+    pub lowest_performance_tenths: u8,
 }
 
 #[derive(Debug, Clone)]
@@ -165,6 +184,18 @@ impl ManagerCareerSnapshot {
             let remove_count = self.match_reports.len() - 100;
             self.match_reports.drain(0..remove_count);
             self.last_read_match_reports = self.last_read_match_reports.saturating_sub(remove_count);
+        }
+    }
+
+    pub fn record_training_report(&mut self, report: ManagerTrainingReport) {
+        if self.training_reports.iter().any(|existing| existing.date == report.date) {
+            return;
+        }
+        self.training_reports.push(report);
+        if self.training_reports.len() > 100 {
+            let remove_count = self.training_reports.len() - 100;
+            self.training_reports.drain(0..remove_count);
+            self.last_read_training_reports = self.last_read_training_reports.saturating_sub(remove_count);
         }
     }
 

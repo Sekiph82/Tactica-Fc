@@ -1,7 +1,7 @@
 use crate::GameAppData;
 use crate::I18nManager;
 use crate::r#match::stores::MatchStore;
-use crate::game::{ManagerCareerStore, ManagerMatchReport};
+use crate::game::{ManagerCareerStore, ManagerMatchReport, ManagerTrainingReport};
 use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -152,6 +152,12 @@ impl ProcessingRun {
             }
 
             let day = simulator_data.date.date().to_string();
+            let training_before: HashMap<u32, u16> = self.manager_team_id
+                .and_then(|team_id| simulator_data.team(team_id))
+                .map(|team| team.players.players.iter()
+                    .map(|player| (player.id, player.training.sessions_completed))
+                    .collect())
+                .unwrap_or_default();
             let result = self
                 .handle
                 .block_on(FootballSimulator::simulate_selected_with(
@@ -185,6 +191,13 @@ impl ProcessingRun {
                         error!("failed to persist manager match reports: {error}");
                     }
                 }
+                if let Some(report) = Self::training_report(simulator_data, manager_team_id, &day, &training_before) {
+                    if let Err(error) = self.manager_career_store.update_snapshot(manager_team_id, |snapshot| {
+                        snapshot.record_training_report(report);
+                    }) {
+                        error!("failed to persist manager training report: {error}");
+                    }
+                }
             }
             if result.has_match_results() && MatchRuntime::recordings_mode() {
                 self.handle.block_on(Self::write_match_results(result));
@@ -201,6 +214,45 @@ impl ProcessingRun {
         }
         MatchRuntime::set_live_session(None);
         self.i18n.set_date(simulator_data.date);
+    }
+
+    fn training_report(
+        simulator_data: &SimulatorData,
+        manager_team_id: u32,
+        day: &str,
+        before: &HashMap<u32, u16>,
+    ) -> Option<ManagerTrainingReport> {
+        let team = simulator_data.team(manager_team_id)?;
+        let mut trained: Vec<_> = team.players.players.iter()
+            .filter(|player| player.training.sessions_completed > before.get(&player.id).copied().unwrap_or(0))
+            .map(|player| {
+                let form = (player.training.training_performance * 10.0).round().clamp(10.0, 200.0) as u8;
+                (player.full_name.to_string(), form)
+            })
+            .collect();
+        if trained.is_empty() {
+            return None;
+        }
+        trained.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        let (lowest_player, lowest_performance_tenths) = trained.first()?.clone();
+        let (best_player, best_performance_tenths) = trained.last()?.clone();
+        let focus = match team.training_schedule.manager_focus {
+            core::ManagerTrainingFocus::Balanced => "balanced",
+            core::ManagerTrainingFocus::Fitness => "fitness",
+            core::ManagerTrainingFocus::Technical => "technical",
+            core::ManagerTrainingFocus::Tactical => "tactical",
+            core::ManagerTrainingFocus::SetPieces => "set_pieces",
+            core::ManagerTrainingFocus::Recovery => "recovery",
+        };
+        Some(ManagerTrainingReport {
+            date: day.to_string(),
+            trained_players: trained.len().min(u8::MAX as usize) as u8,
+            focus: focus.to_string(),
+            best_player,
+            best_performance_tenths,
+            lowest_player,
+            lowest_performance_tenths,
+        })
     }
 
     async fn write_match_results(result: SimulationResult) {
