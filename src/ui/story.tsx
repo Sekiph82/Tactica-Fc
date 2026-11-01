@@ -75,9 +75,9 @@ async function drawCard(s: SeasonStory, manager: string, season: string): Promis
   const x = c.getContext('2d');
   if (!x) return null;
   const grad = x.createLinearGradient(0, 0, W, H);
-  grad.addColorStop(0, '#0b1226'); grad.addColorStop(1, '#22184a');
+  grad.addColorStop(0, '#08090c'); grad.addColorStop(1, '#311116');
   x.fillStyle = grad; x.fillRect(0, 0, W, H);
-  x.fillStyle = 'rgba(255, 207, 63, 0.15)'; x.beginPath(); x.arc(W - 120, 140, 320, 0, Math.PI * 2); x.fill();
+  x.fillStyle = 'rgba(227, 40, 50, 0.16)'; x.beginPath(); x.arc(W - 120, 140, 320, 0, Math.PI * 2); x.fill();
   const text = (str: string, px: number, y: number, size: number, color = '#fff', weight = 700) => { x.font = `${weight} ${size}px Inter, system-ui, sans-serif`; x.fillStyle = color; x.fillText(str, px, y); };
   const wrap = (str: string, px: number, y: number, size: number, maxW: number, color = '#fff', weight = 600) => {
     x.font = `${weight} ${size}px Inter, system-ui, sans-serif`; x.fillStyle = color;
@@ -88,17 +88,17 @@ async function drawCard(s: SeasonStory, manager: string, season: string): Promis
   };
   const av = getAvatar();
   if (av) { const img = new Image(); img.src = av; await img.decode().catch(() => {}); x.save(); x.beginPath(); x.arc(150, 170, 80, 0, Math.PI * 2); x.clip(); x.drawImage(img, 70, 90, 160, 160); x.restore(); }
-  text('CM REBORN', av ? 260 : 80, 120, 30, '#ffcf3f', 800);
+  text('TACTICA FC', av ? 260 : 80, 120, 30, '#f0525b', 800);
   text(manager, av ? 260 : 80, 180, 56, '#fff', 900);
-  text(`${s.clubName} · ${season}`, av ? 260 : 80, 232, 34, '#c2cbe6', 600);
-  text(s.pos ? `${s.pos}.` : '–', 80, 420, 150, '#ffcf3f', 900);
-  text(s.league, 80, 480, 36, '#c2cbe6', 600);
+  text(`${s.clubName} · ${season}`, av ? 260 : 80, 232, 34, '#d8d9dc', 600);
+  text(s.pos ? `${s.pos}.` : '–', 80, 420, 150, '#e32832', 900);
+  text(s.league, 80, 480, 36, '#d8d9dc', 600);
   text(t('story.record', { w: s.record[0], d: s.record[1], l: s.record[2] }), 80, 560, 36);
   text(t('story.goals', { gf: s.gf, ga: s.ga }), 80, 610, 36);
   if (s.top) text(t('story.top', { name: s.top.name, n: s.top.goals }), 80, 660, 36);
   let y = 760;
-  if (s.items[0]) { text(t('story.bestMoment').toUpperCase(), 80, y, 26, '#ffcf3f', 800); y = wrap(storyText(s.items[0]), 80, y + 56, 46, W - 160, '#fff', 800) + 20; }
-  for (const it of s.items.slice(1, 5)) y = wrap(`• ${storyText(it)}`, 80, y, 30, W - 160, '#c2cbe6', 500);
-  text('cm0102-reborn.vercel.app', 80, H - 70, 26, '#8a93b5', 600);
+  if (s.items[0]) { text(t('story.bestMoment').toUpperCase(), 80, y, 26, '#f0525b', 800); y = wrap(storyText(s.items[0]), 80, y + 56, 46, W - 160, '#d8d9dc', 800) + 20; }
+  for (const it of s.items.slice(1, 5)) y = wrap(`• ${storyText(it)}`, 80, y, 30, W - 160, '#b9bbc1', 500);
+  text('github.com/Sekiph82/Tactica-Fc', 80, H - 70, 26, '#9b9da4', 600);
   return new Promise((res) => c.toBlob((b) => res(b), 'image/png'));
 }

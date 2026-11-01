@@ -13,9 +13,9 @@ export async function drawDraftCard(team: DraftTeam, picks: DraftPick[], byId: R
   const x = c.getContext('2d');
   if (!x) return null;
   const bg = x.createLinearGradient(0, 0, W, H);
-  bg.addColorStop(0, '#0b1226'); bg.addColorStop(1, '#16285a');
+  bg.addColorStop(0, '#08090c'); bg.addColorStop(1, '#311116');
   x.fillStyle = bg; x.fillRect(0, 0, W, H);
-  x.fillStyle = `${team.colors[0]}33`; x.beginPath(); x.arc(W - 100, 120, 300, 0, Math.PI * 2); x.fill();
+  x.fillStyle = 'rgba(227,40,50,0.14)'; x.beginPath(); x.arc(W - 100, 120, 300, 0, Math.PI * 2); x.fill();
   const text = (s: string, px: number, y: number, size: number, color = '#fff', weight = 700, align: CanvasTextAlign = 'left') => { x.font = `${weight} ${size}px Inter, system-ui, sans-serif`; x.fillStyle = color; x.textAlign = align; x.fillText(s, px, y); };
   const wrap = (s: string, px: number, y: number, size: number, maxW: number, color = '#fff', weight = 600) => {
     x.font = `${weight} ${size}px Inter, system-ui, sans-serif`; x.fillStyle = color; x.textAlign = 'left';
@@ -29,14 +29,14 @@ export async function drawDraftCard(team: DraftTeam, picks: DraftPick[], byId: R
   img.src = `data:image/svg+xml;utf8,${encodeURIComponent(crestSvg(team.crest, team.colors[0], team.colors[1], team.short))}`;
   await img.decode().catch(() => {});
   x.drawImage(img, 70, 60, 150, 150);
-  text('CM REBORN · DRAFT LEAGUE', 250, 100, 26, '#ffcf3f', 800);
+  text('TACTICA FC · DRAFT LEAGUE', 250, 100, 26, '#f0525b', 800);
   text(team.name, 250, 160, 56, '#fff', 900);
-  text(`${team.manager} · ${t('dr.seasonN', { n: season })} · ${team.formation}`, 250, 205, 30, '#c2cbe6', 600);
+  text(`${team.manager} · ${t('dr.seasonN', { n: season })} · ${team.formation}`, 250, 205, 30, '#d8d9dc', 600);
   // karakter
   if (grade) {
     x.fillStyle = 'rgba(255,255,255,0.06)'; x.beginPath(); x.roundRect(70, 245, W - 140, 170, 24); x.fill();
     text(grade.grade, 150, 370, 120, GRADE_COLOR[grade.grade] ?? '#fff', 900, 'center');
-    text(t('dr.gradesTitle').toUpperCase(), 260, 290, 22, '#8a93b5', 800);
+    text(t('dr.gradesTitle').toUpperCase(), 260, 290, 22, '#9b9da4', 800);
     wrap(t(grade.line), 260, 330, 30, W - 360, '#fff', 700);
   }
   // banen
@@ -62,11 +62,11 @@ export async function drawDraftCard(team: DraftTeam, picks: DraftPick[], byId: R
   });
   // bænken
   const bench = mine.filter((p) => p.place === BENCH_PLACE).map((p) => byId[p.player]?.last).filter(Boolean);
-  text(`${t('dr.bench').toUpperCase()}: ${bench.join(' · ')}`, 70, 1135, 26, '#c2cbe6', 700);
-  if (preview) text(`🔮 ${t('dr.cardPreview', { pos: preview.expPos, pts: preview.expPts, pct: preview.title })}`, 70, 1230, 28, '#ffcf3f', 800);
+  text(`${t('dr.bench').toUpperCase()}: ${bench.join(' · ')}`, 70, 1135, 26, '#d8d9dc', 700);
+  if (preview) text(`🔮 ${t('dr.cardPreview', { pos: preview.expPos, pts: preview.expPts, pct: preview.title })}`, 70, 1230, 28, '#f0525b', 800);
   if (grade?.steal && byId[grade.steal.player]) text(`🔥 ${t('dr.cardSteal', { player: `${byId[grade.steal.player].first} ${byId[grade.steal.player].last}`.trim() })}`, 70, 1185, 28, '#9ff0bd', 800);
   text(t('dr.cardCta'), 70, H - 80, 30, '#fff', 800);
-  text('cm0102-reborn.vercel.app/?draft=1', 70, H - 40, 26, '#8a93b5', 600);
+  text('github.com/Sekiph82/Tactica-Fc', 70, H - 40, 26, '#9b9da4', 600);
   return new Promise((res) => c.toBlob((b) => res(b), 'image/png'));
 }
 

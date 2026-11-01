@@ -1267,7 +1267,7 @@ export const da: Record<string, string> = {
   // kamp
   'match.played': 'Kampen er spillet', 'match.preview': 'Optakt', 'match.yourXI': 'Din startopstilling', 'match.quick': 'Simulér resultat',
   'match.kickoff': 'Kick-off ▶', 'match.notToday': 'Kampen spilles ikke i dag.', 'match.ft': 'Slut', 'match.resume': 'Fortsæt', 'match.pause': 'Pause',
-  'match.viewerLoading': 'Open Football-kampvisningen indlæses…', 'match.viewerKickoffWait': 'Kampen fløjtes først i gang, når visningen er klar.', 'match.viewerFailed': 'Kampvisningen kunne ikke starte.', 'match.viewerRetryHint': 'Kampuret er ikke gået. Gå tilbage til optakten, og prøv igen.', 'match.viewerRetry': 'Tilbage til optakten',
+  'match.viewerLoading': 'Kampvisningen indlæses…', 'match.viewerKickoffWait': 'Kampen fløjtes først i gang, når visningen er klar.', 'match.viewerFailed': 'Kampvisningen kunne ikke starte.', 'match.viewerRetryHint': 'Kampuret er ikke gået. Gå tilbage til optakten, og prøv igen.', 'match.viewerRetry': 'Tilbage til optakten',
   'match.toEnd': 'Spring til slut', 'match.continue': 'Fortsæt ›', 'match.commentary': 'Kommentar', 'match.stats': 'Statistik', 'match.myTeam': 'Mit hold',
   'match.camera.focus': 'Følg bolden', 'match.camera.full': 'Hele banen',
   'match.subsLeft': '{n} udsk. tilbage', 'match.vidiprinter': 'Andre kampe', 'match.noOther': 'Ingen andre kampe i dag', 'match.rating': 'Karakter',
