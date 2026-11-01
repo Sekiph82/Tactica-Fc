@@ -7,7 +7,7 @@ use crate::game::{
 use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use core::FootballSimulator;
 use core::MatchRuntime;
 use core::r#match::LiveMatchSession;
@@ -64,10 +64,10 @@ fn manager_has_pending_transfer_decision(simulator_data: &SimulatorData, team_id
 pub async fn game_process_action(
     State(state): State<GameAppData>,
     Query(query): Query<ProcessQuery>,
-) -> impl IntoResponse {
+) -> Response {
     let days = query.days.unwrap_or(1);
     let Some(raw_league_ids) = query.league_ids else {
-        return StatusCode::BAD_REQUEST;
+        return StatusCode::BAD_REQUEST.into_response();
     };
     let mut selected_leagues: HashSet<u32> = raw_league_ids
         .split(',')
@@ -80,13 +80,13 @@ pub async fn game_process_action(
             .filter(|part| !part.trim().is_empty())
             .any(|part| part.trim().parse::<u32>().is_err())
     {
-        return StatusCode::BAD_REQUEST;
+        return StatusCode::BAD_REQUEST.into_response();
     }
 
     // If already processing, return immediately
     let process_guard = match Arc::clone(&state.process_lock).try_lock_owned() {
         Ok(guard) => guard,
-        Err(_) => return StatusCode::OK,
+        Err(_) => return StatusCode::OK.into_response(),
     };
 
     // Reset cancel flag at start
@@ -100,7 +100,7 @@ pub async fn game_process_action(
     // tick to publish.
     let data_guard = Arc::clone(&state.data).write_owned().await;
     if data_guard.is_none() {
-        return StatusCode::SERVICE_UNAVAILABLE;
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     let manager_team_id = *state.manager_team_id.read().await;
     if manager_team_id.is_some_and(|team_id| {
@@ -108,7 +108,7 @@ pub async fn game_process_action(
             .as_ref()
             .is_some_and(|simulator_data| manager_has_pending_transfer_decision(simulator_data, team_id))
     }) {
-        return StatusCode::CONFLICT;
+        return StatusCode::CONFLICT.into_response();
     }
     if let (Some(team_id), Some(simulator_data)) = (manager_team_id, data_guard.as_ref()) {
         selected_leagues.extend(managed_competition_ids(simulator_data, team_id));
@@ -158,17 +158,24 @@ pub async fn game_process_action(
         let world = data_guard
             .as_mut()
             .expect("world was checked before starting the processing task");
-        run.execute(Arc::make_mut(world), days);
+        run.execute(Arc::make_mut(world), days)
     })
     .await;
 
-    if let Err(err) = join_result {
-        MatchRuntime::set_live_session(None);
-        error!("game process task failed: {err}");
-        return StatusCode::INTERNAL_SERVER_ERROR;
+    let stopped_for_manager_decision = match join_result {
+        Ok(stopped) => stopped,
+        Err(err) => {
+            MatchRuntime::set_live_session(None);
+            error!("game process task failed: {err}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    if stopped_for_manager_decision {
+        return (StatusCode::OK, [("X-Manager-Decision-Pending", "true")]).into_response();
     }
 
-    StatusCode::OK
+    StatusCode::OK.into_response()
 }
 
 /// One processing run behind `POST /api/game/process`.
@@ -187,8 +194,9 @@ impl ProcessingRun {
     /// Simulate `days` daily ticks directly in the exclusively-held world.
     /// Match frames and live coach/substitution commands remain available via
     /// their independent session API while manager pages queue behind the
-    /// world lock until the final tick is committed.
-    fn execute(self, simulator_data: &mut SimulatorData, days: u32) {
+    /// world lock until the final or decision-triggered tick is committed.
+    fn execute(self, simulator_data: &mut SimulatorData, days: u32) -> bool {
+        let mut stopped_for_manager_decision = false;
         for _ in 0..days {
             // Check cancellation before each day
             if self.cancel_flag.load(Ordering::SeqCst) {
@@ -250,6 +258,12 @@ impl ProcessingRun {
             if let Err(error) = self.world_save_store.save(simulator_data) {
                 error!("failed to persist career world snapshot: {error}");
             }
+            if self.manager_team_id.is_some_and(|team_id| {
+                manager_has_pending_transfer_decision(simulator_data, team_id)
+            }) {
+                stopped_for_manager_decision = true;
+                break;
+            }
         }
 
         self.cancel_flag.store(false, Ordering::SeqCst);
@@ -258,6 +272,7 @@ impl ProcessingRun {
         }
         MatchRuntime::set_live_session(None);
         self.i18n.set_date(simulator_data.date);
+        stopped_for_manager_decision
     }
 
     fn training_report(

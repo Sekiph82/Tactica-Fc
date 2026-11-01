@@ -245,6 +245,7 @@
         if (days) params.set('days', days);
         const url = '/api/game/process?' + params.toString();
         btn.classList.add('fm-processing');
+        let stoppedForManagerDecision = false;
         try {
             const res = await fetch(url, {method: 'POST'});
             if (res.status === 409) {
@@ -258,6 +259,7 @@
                 return;
             }
             if (!res.ok) throw new Error('process request failed');
+            stoppedForManagerDecision = res.headers.get('X-Manager-Decision-Pending') === 'true';
         } catch (e) {
             setProcessing(true);
             return;
@@ -266,6 +268,10 @@
         }
         btn.classList.remove('fm-processing');
         await refreshContent();
+        if (stoppedForManagerDecision) {
+            const message = document.getElementById('fm-process-messages')?.dataset.pendingDecision;
+            alert(message || 'Answer the pending transfer decision before advancing time.');
+        }
     }
 
     // Click Process → show spinner → single request → handle result
