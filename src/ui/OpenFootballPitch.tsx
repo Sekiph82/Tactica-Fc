@@ -3,7 +3,7 @@ import type { Fixture, GameState } from '../game/types';
 import type { MatchSim } from '../game/engine/match';
 import type { MatchPitchSnapshot, MatchVisualAction } from '../game/types';
 import { formationLayout } from '../game/match-pitch';
-import { OpenFootballStateTimeline, toOpenFootballRecordingEvents } from './openFootballRecording';
+import { OpenFootballStateTimeline, toOpenFootballPlayerPositions, toOpenFootballRecordingEvents } from './openFootballRecording';
 
 const MATCH_DURATION_MS = 505_340;
 
@@ -90,14 +90,16 @@ export function OpenFootballPitch({
           if (cancelled || snapshots.length === 0) return;
           const ball: number[][] = [];
           const players: Record<number, number[][]> = {};
+          const actionPositions = toOpenFootballPlayerPositions(actions, sim.totalMoments);
           for (const snapshot of snapshots) {
             const time = timestamp(snapshot.moment, sim.totalMoments);
             if (time <= previousTime) continue;
             const layout = formationLayout(snapshot);
+            const actionCenters = actionPositions.get(snapshot.moment);
             const [ballX, ballY] = point(layout.ball);
             ball.push([time, ballX, ballY, 0]);
             for (const [pid, pos] of layout.pos) {
-              const [x, y] = point(pos);
+              const [x, y] = point(actionCenters?.get(pid) ?? pos);
               (players[pid] ??= []).push([time, x, y]);
             }
             previousTime = time;

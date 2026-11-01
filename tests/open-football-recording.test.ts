@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MatchVisualAction } from '../src/game/types';
-import { OpenFootballStateTimeline, toOpenFootballRecordingEvents } from '../src/ui/openFootballRecording';
+import { OpenFootballStateTimeline, toOpenFootballPlayerPositions, toOpenFootballRecordingEvents } from '../src/ui/openFootballRecording';
 
 function action(overrides: Partial<MatchVisualAction> = {}): MatchVisualAction {
   return {
@@ -24,6 +24,26 @@ function action(overrides: Partial<MatchVisualAction> = {}): MatchVisualAction {
 }
 
 describe('TACTICA to Open Football viewer recording adapter', () => {
+  it('uses engine-selected receiver and runner centers at their action moment', () => {
+    const positions = toOpenFootballPlayerPositions([
+      action({ kind: 'pass', moment: 12, actor: 5, target: 8, from: [20, 50], to: [41, 35] }),
+      action({ kind: 'throughBall', moment: 13, actor: 8, target: 9, from: [41, 35], to: [64, 40] }),
+    ], 100);
+    expect(positions.get(12)).toEqual(new Map([[8, [41, 35]]]));
+    expect(positions.get(13)).toEqual(new Map([[9, [64, 40]]]));
+  });
+
+  it('uses resolved carry/tackle endpoints but never treats a shot goal point as a player position', () => {
+    const positions = toOpenFootballPlayerPositions([
+      action({ kind: 'dribble', moment: 7, actor: 11, target: undefined, from: [70, 50], to: [75, 48] }),
+      action({ kind: 'tackle', moment: 8, actor: 22, target: 11, from: [76, 48], to: [74, 49] }),
+      action({ kind: 'shot', moment: 9, actor: 11, target: 1, to: [100, 50] }),
+    ], 100);
+    expect(positions.get(7)).toEqual(new Map([[11, [75, 48]]]));
+    expect(positions.get(8)).toEqual(new Map([[22, [74, 49]]]));
+    expect(positions.has(9)).toBe(false);
+  });
+
   it('translates a blocked shot into the viewer contact cue at the engine event time and location', () => {
     const { events, states } = toOpenFootballRecordingEvents([action()], 100);
     expect(events).toEqual([{
