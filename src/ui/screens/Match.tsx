@@ -8,7 +8,7 @@ import { humanManager, isHumanClub } from '../../game/humans';
 import { isBotClub } from '../../game/bots';
 import { session, skippedMatches, type LiveCmd } from '../../online/client';
 import { fixturesOn, gs, notify, squad } from '../../game/state';
-import type { MatchPitchSnapshot, MatchReport, MatchVisualAction, OppInstructions, OppKind } from '../../game/types';
+import type { MatchPitchSnapshot, MatchReport, MatchVisualAction, OppInstructions, OppKind, ShootoutKick } from '../../game/types';
 import { hasVisualQueueCapacity, pairVisualActionsWithSnapshot, type MatchVisualFrame } from '../../game/match-visual';
 import { actionMomentWindows } from '../openFootballRecording';
 import { t } from '../../i18n';
@@ -27,7 +27,7 @@ import { talkDone } from '../../game/teamtalk';
 import { OpenFootballPitch, type OpenFootballBridge } from '../OpenFootballPitch';
 import { makeOpenFootballSetup, type OpenFootballSetup } from '../openFootballSetup';
 import { openFootballPlaybackSpeed } from '../openFootballSpeed';
-import { OPEN_FOOTBALL_MATCH_DURATION_MS, OPEN_FOOTBALL_MAX_MATCH_DURATION_MS, openFootballMinuteTimestamp, openFootballTimestamp } from '../openFootballTimeline';
+import { OPEN_FOOTBALL_MATCH_DURATION_MS, OPEN_FOOTBALL_MAX_MATCH_DURATION_MS, openFootballMinuteTimestamp, openFootballShootoutDuration, openFootballTimestamp } from '../openFootballTimeline';
 
 // Den igangværende kamp overlever navigation mellem skærme
 /** Holdfarver til 2D-banen: ens eget hold i klubtemaets farver, modstanderen i en farve der skiller sig ud */
@@ -70,7 +70,56 @@ export function statColors(home: number, away: number, me: number): [string, str
   return me === 0 ? [own, pick] : [pick, own];
 }
 
-let live: { fixture: number; sim: MatchSim; viewerSetup: OpenFootballSetup; lines: { text: string; cls: string; m: number; k?: string }[]; consumed: number; visualQueue: MatchVisualFrame[]; visualSeen: number; viewerEventsSeen?: number; viewer?: OpenFootballBridge; halfShown?: boolean; shotsSeen?: number; cornersSeen?: number; h2hInit?: boolean; evSeen?: number; h2h?: H2hState; ldSeen?: number; prevTab?: string; finishFrameSent?: boolean; finishPresentationReady?: boolean; finishPresentationTimer?: ReturnType<typeof setTimeout>; extraTimeDurationSent?: boolean } | null = null;
+let live: { fixture: number; sim: MatchSim; viewerSetup: OpenFootballSetup; lines: { text: string; cls: string; m: number; k?: string }[]; consumed: number; visualQueue: MatchVisualFrame[]; visualSeen: number; viewerEventsSeen?: number; viewer?: OpenFootballBridge; halfShown?: boolean; shotsSeen?: number; cornersSeen?: number; h2hInit?: boolean; evSeen?: number; h2h?: H2hState; ldSeen?: number; prevTab?: string; finishFrameSent?: boolean; finishPresentationReady?: boolean; finishPresentationTimer?: ReturnType<typeof setTimeout>; extraTimeDurationSent?: boolean; shootoutPresentationStarted?: boolean; shootoutKicksSeen?: number } | null = null;
+
+/** Stage and play one engine-resolved shootout kick on its own viewer beat. */
+function shootoutPresentation(base: MatchPitchSnapshot, kick: ShootoutKick | undefined, moment: number) {
+  const direction = kick?.t === 1 ? -1 : 1;
+  const spot: [number, number] = [50 + direction * 38, 50];
+  const goalX = direction === 1 ? 100 : 0;
+  const keeperX = goalX - direction * 4;
+  const keeperY = kick?.outcome === 'saved' ? (kick.p % 2 ? 46 : 54) : 50;
+  const ballTo: [number, number] = kick?.outcome === 'goal'
+    ? [goalX, 50]
+    : kick?.outcome === 'saved'
+      ? [keeperX, keeperY]
+      : [goalX + direction * 2, kick && kick.p % 2 ? 39 : 61];
+  const players = base.players.map((player, index) => {
+    const angle = (index / Math.max(1, base.players.length)) * Math.PI * 2;
+    let x = 50 + Math.cos(angle) * 6;
+    let y = 50 + Math.sin(angle) * 8;
+    if (player.gk) { x = player.team === 0 ? 4 : 96; y = 50; }
+    if (kick?.gk === player.id) { x = keeperX; y = 50; }
+    if (kick?.p === player.id) { x = spot[0] + direction * 4; y = 50; }
+    return { ...player, x, y };
+  });
+  const snapshot: MatchPitchSnapshot = {
+    ...base,
+    moment,
+    poss: kick?.t ?? base.poss,
+    holder: kick?.p ?? base.holder,
+    shot: kick ? { team: kick.t, outcome: kick.outcome === 'goal' ? 'goal' : kick.outcome === 'saved' ? 'saved' : 'off', zone: 0 } : null,
+    players,
+  };
+  const action: MatchVisualAction | undefined = kick ? {
+    moment: moment - 1,
+    minute: 120,
+    team: kick.t,
+    kind: 'shot',
+    actor: kick.p,
+    target: kick.gk,
+    fromZone: 0,
+    toZone: 0,
+    fromPoss: kick.t,
+    toPoss: kick.t,
+    from: spot,
+    to: ballTo,
+    ballFrom: spot,
+    ballTo,
+    outcome: kick.outcome,
+  } : undefined;
+  return { snapshot, action };
+}
 
 export function MatchScreen({ id }: { id: number }) {
   const g = useGame()!;
@@ -419,6 +468,7 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
     const before = sim.commentary.length;
     const viewerSnapshots: MatchPitchSnapshot[] = [];
     const viewerActions: MatchVisualAction[] = [];
+    const shootoutGoals: { player_id: number; time: number; is_auto_goal: boolean }[] = [];
     // straffesparkskonkurrencen: højst ét spark ad gangen
     const soBefore = sim.shootout?.kicks.length ?? -1;
     let n = 0;
@@ -434,8 +484,39 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
         L.viewer.setPlaying(true);
         L.extraTimeDurationSent = true;
       }
+      const shootoutKicks = sim.shootout?.kicks ?? [];
+      const shootoutKickCount = shootoutKicks.length;
+      if (sim.shootout && L.viewer && (shootoutKickCount > (L.shootoutKicksSeen ?? 0) || !L.shootoutPresentationStarted)) {
+        L.viewer.setDuration(openFootballShootoutDuration(shootoutKickCount, sim.totalMoments));
+        // The regulation/extra-time playhead can reach its endpoint between
+        // simulation steps. Reopen it before staging the first penalty beat.
+        L.viewer.setPlaying(true);
+        L.shootoutPresentationStarted = true;
+      }
       const pitchSnapshot = sim.pitch();
-      if (L.viewer) viewerSnapshots.push(pitchSnapshot);
+      if (L.viewer) {
+        if (sim.shootout && shootoutKickCount > (L.shootoutKicksSeen ?? 0)) {
+          const kick = shootoutKicks[shootoutKickCount - 1];
+          const extraTimeEnd = sim.totalMoments + Math.round(sim.totalMoments / 3);
+          const kickMoment = extraTimeEnd + shootoutKickCount - 1 + 0.25;
+          const presentation = shootoutPresentation(pitchSnapshot, kick, kickMoment + 1);
+          viewerSnapshots.push(presentation.snapshot);
+          if (presentation.action) {
+            viewerActions.push(presentation.action);
+            if (kick.outcome === 'goal') {
+              shootoutGoals.push({
+                player_id: kick.p,
+                time: openFootballTimestamp(presentation.action.moment + 0.5, sim.totalMoments),
+                is_auto_goal: false,
+              });
+            }
+          }
+          L.shootoutKicksSeen = shootoutKickCount;
+        } else if (sim.shootout && !L.shootoutKicksSeen) {
+          const extraTimeEnd = sim.totalMoments + Math.round(sim.totalMoments / 3);
+          viewerSnapshots.push(shootoutPresentation(pitchSnapshot, undefined, extraTimeEnd + 0.05).snapshot);
+        } else if (!sim.shootout) viewerSnapshots.push(pitchSnapshot);
+      }
       const timeline = sim.visualTimeline ?? [];
       const freshVisual = timeline.slice(L.visualSeen);
       if (L.viewer) viewerActions.push(...freshVisual);
@@ -461,7 +542,7 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
         return { player_id: event.p!, time: goalMoment === undefined ? openFootballMinuteTimestamp(event.m) : openFootballTimestamp(goalMoment, sim.totalMoments), is_auto_goal: false };
       });
       L.viewerEventsSeen = sim.events.length;
-      L.viewer.push(viewerSnapshots, goals, viewerActions);
+      L.viewer.push(viewerSnapshots, [...goals, ...shootoutGoals], viewerActions);
       if (sim.finished) L.finishFrameSent = true;
     }
     // store chancer og mål afspilles på 2D-banen (kampen venter imens)
