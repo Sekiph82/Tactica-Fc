@@ -77,6 +77,9 @@ export function OpenFootballPitch({
       let previousSnapshotTime = 0;
       let previousBallTime = 0;
       const previousPlayerTimes = new Map<number, number>();
+      const previousPlayerPositions = new Map<number, { team: number; x: number; y: number; moment: number }>();
+      const lastMovementCueTimes = new Map<number, number>();
+      let previousBallPosition: { x: number; y: number; moment: number } | undefined;
       bridge = {
         push(snapshots, goals, actions) {
           if (cancelled || snapshots.length === 0) return;
@@ -90,6 +93,7 @@ export function OpenFootballPitch({
           const actionEnds = new Set(actions.map((action) => action.moment + 1));
           const ballSamples: { moment: number; point: [number, number] }[] = [];
           const playerSamples: { id: number; moment: number; point: [number, number] }[] = [];
+          const movementStates: Record<number, [number, string][]> = {};
           for (const [index, action] of actions.entries()) {
             const window = actionWindows[index];
             const startMoment = window.start + 0.001;
@@ -107,6 +111,29 @@ export function OpenFootballPitch({
             for (const [pid, pos] of layout.pos) {
               playerSamples.push({ id: pid, moment: snapshot.moment, point: point(pos) });
             }
+            const stepScale = 240 * (snapshot.moment - (previousBallPosition?.moment ?? snapshot.moment)) / Math.max(1, setup.totalMoments);
+            const movementThreshold = Math.max(0.12, stepScale * 0.3);
+            for (const player of snapshot.players) {
+              const current = layout.pos.get(player.id);
+              if (!current) continue;
+              const previous = previousPlayerPositions.get(player.id);
+              if (previous && snapshot.moment > previous.moment && !player.gk && player.id !== snapshot.holder) {
+                const attackDirection = player.team === 0 ? 1 : -1;
+                const forwardRun = player.team === snapshot.poss
+                  && (current[0] - previous.x) * attackDirection > movementThreshold;
+                const closingDown = player.team !== snapshot.poss && previousBallPosition
+                  && Math.hypot(previous.x - previousBallPosition.x, previous.y - previousBallPosition.y)
+                    - Math.hypot(current[0] - previousBallPosition.x, current[1] - previousBallPosition.y) > movementThreshold;
+                const cue = forwardRun ? 'Supporting Attack' : closingDown ? 'Pressing' : undefined;
+                const lastCueAt = lastMovementCueTimes.get(player.id) ?? -Infinity;
+                if (cue && time - lastCueAt >= 2_400) {
+                  (movementStates[player.id] ??= []).push([time, `TACTICA: ${cue}`]);
+                  lastMovementCueTimes.set(player.id, time);
+                }
+              }
+              previousPlayerPositions.set(player.id, { team: player.team, x: current[0], y: current[1], moment: snapshot.moment });
+            }
+            previousBallPosition = { x: layout.ball[0], y: layout.ball[1], moment: snapshot.moment };
             if (!actionEnds.has(snapshot.moment)) ballSamples.push({ moment: snapshot.moment, point: point(layout.ball) });
             previousSnapshotTime = time;
           }
@@ -125,6 +152,9 @@ export function OpenFootballPitch({
             previousBallTime = time;
           }
           const { events, states } = toOpenFootballRecordingEvents(actions, setup.totalMoments, actionMoments);
+          for (const [playerId, entries] of Object.entries(movementStates)) {
+            states[Number(playerId)] = [...entries, ...(states[Number(playerId)] ?? [])];
+          }
           const liveStates = attitudeTimeline.apply(states);
           if (ball.length || Object.keys(players).length || goals.length || events.length || Object.keys(liveStates).length) {
             viewer.MatchViewer.pushRecording(JSON.stringify({ ball, players, goals, events, states: liveStates }));
