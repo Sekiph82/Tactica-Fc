@@ -186,8 +186,8 @@ This file is the single source of truth for milestone status. Mark work complete
 
 ## TFC-M11: iOS preparation and release — NOT STARTED
 
-- [ ] Prepare a Capacitor iOS project and validate platform-independent behavior on Windows.
-- [ ] Document outstanding macOS/Xcode, signing, and device validation requirements.
+- [x] Generate and configure the Capacitor iOS project under `ios/App`; replace the template app icon and launch splash with the exact supplied TACTICA logo; on Windows, confirm the shared web bundle and plugin/resource sync with `npm run build` and `npm exec -- cap sync ios`. This is platform-independent project validation only; no Xcode build or iOS runtime was available.
+- [x] Document current macOS/Xcode, signing, and device acceptance prerequisites in `docs/ios-release-prerequisites.md`, with official Capacitor and Apple references.
 - [ ] Do not claim native release validation without an appropriate Apple build/runtime environment.
 
 ## TFC-M12: Final QA and optimisation — NOT STARTED
