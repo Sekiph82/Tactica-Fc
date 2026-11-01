@@ -206,6 +206,16 @@
                 };
             }
 
+            function viewerGoals(goals) {
+                return (goals || []).map(function(goal) {
+                    return {
+                        player_id: Number(goal.player_id),
+                        time: Math.max(0, Number(goal.time)),
+                        is_auto_goal: !!goal.is_auto_goal
+                    };
+                });
+            }
+
             function describeLiveEvent(event) {
                 var description = String(event.description || '');
                 if (description.indexOf('REFUSED ') === 0) description = description.slice(8);
@@ -263,13 +273,7 @@
             function appendViewerFrame(frame) {
                 if (!viewerApi || !frame || frame.sequence <= viewerLastSequence) return;
                 viewerLastSequence = frame.sequence;
-                var newGoals = (frame.goals || []).slice(viewerGoalCount).map(function(goal) {
-                    return {
-                        player_id: Number(goal.player_id),
-                        time: Math.max(0, Number(goal.time)),
-                        is_auto_goal: !!goal.is_auto_goal
-                    };
-                });
+                var newGoals = viewerGoals(frame.goals).slice(viewerGoalCount);
                 viewerGoalCount = (frame.goals || []).length;
                 viewerApi.pushRecording(JSON.stringify(framePayload(frame, newGoals)));
             }
@@ -289,7 +293,10 @@
                 var managerColor = livePanel.dataset.teamColor || '#b20d22';
                 var managerText = livePanel.dataset.teamText || '#ffffff';
                 var opponentName = livePanel.dataset.opponentName || '';
-                var initialRecording = framePayload(firstFrame, []);
+                // A page can attach after the engine has already recorded a
+                // goal. Seed those authoritative goals into the opening
+                // recording so the pitch viewer and manager scoreboard agree.
+                var initialRecording = framePayload(firstFrame, viewerGoals(firstFrame.goals));
                 var config = {
                     canvas: '#fm-live-viewer-canvas',
                     api_base: '',
