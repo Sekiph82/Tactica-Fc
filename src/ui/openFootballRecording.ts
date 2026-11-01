@@ -105,7 +105,11 @@ export function toOpenFootballRecordingEvents(
 
     // These are viewer-supported idle attitudes, attached to engine-picked
     // runners/defenders so the same action also reads between ball contacts.
-    if (action.kind === 'throughBall' && action.outcome === 'complete') {
+    if (action.kind === 'pass' && action.outcome === 'complete') {
+      addState(action.target, time, 'Supporting Attack');
+    } else if (action.kind === 'longBall' && action.outcome === 'complete') {
+      addState(action.target, time, 'Cross Receiving');
+    } else if (action.kind === 'throughBall' && action.outcome === 'complete') {
       addState(action.target, time, 'Running In Behind');
     } else if (action.kind === 'cross' && action.outcome === 'complete') {
       addState(action.target, time, 'Cross Receiving');
