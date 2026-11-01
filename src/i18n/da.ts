@@ -12,7 +12,7 @@ export const da: Record<string, string> = {
   'start.noSaves': 'Ingen gemte spil endnu.', 'start.savedAt': 'gemt', 'start.confirmDelete': 'Slet dette gemte spil?',
   'start.seasons': '{n} sæson(er)', 'start.managerName': 'Managerens navn', 'start.managerPlaceholder': 'Dit navn',
   'start.nations': 'Følgede lande', 'start.nationsHint': 'Vælg lande for at se deres ligaer nedenfor',
-  'start.leagues': 'Følgede ligaer', 'start.leaguesSelected': 'Valgte ligaer: {n}', 'start.leaguesHint': 'Kun valgte ligaer får kampprogram og tabeller. Vælg din klub blandt disse ligaer.',
+  'start.leagues': 'Følgede ligaer', 'start.leaguesSelected': 'Valgte ligaer: {n}', 'start.leaguesAll': 'Vælg alle', 'start.leaguesNone': 'Ryd', 'start.leaguesHint': 'Kun valgte ligaer får kampprogram og tabeller. Vælg din klub blandt disse ligaer.',
   'start.perfHint': 'Tip: Flere nationer betyder en mere levende verden, men lidt langsommere dage. Alle spillere findes uanset valget.',
   'start.pickClub': 'Vælg klub', 'start.options': 'Indstillinger', 'start.masking': 'Attribut-maskering (scouting med usikkerhed)',
   'start.maskingHint': 'Du ser kun præcise attributter for spillere, du kender. Andre vises som intervaller, fx 11–15, indtil de er scoutet.',

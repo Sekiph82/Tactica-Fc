@@ -249,7 +249,11 @@ function NewGame({ challenge, onBack, setBusy, online }: { challenge?: string; o
         </Panel>
       )}
       {!ch && (
-        <Panel title={t('start.leagues')} right={<span className="muted">{t('start.leaguesSelected', { n: selectedLeagues.size })}</span>}>
+        <Panel title={t('start.leagues')} right={<div className="row" style={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <span className="muted">{t('start.leaguesSelected', { n: selectedLeagues.size })}</span>
+          <button className="small" onClick={() => { const next = new Set(world.leagues.filter((l) => active.has(l.nation)).map((l) => l.id)); setSelectedLeagues(next); if (!next.has(league)) setLeague([...next][0] ?? ''); setClub(0); }}>{t('start.leaguesAll')}</button>
+          <button className="small" onClick={() => { setSelectedLeagues(new Set()); setLeague(''); setClub(0); }}>{t('start.leaguesNone')}</button>
+        </div>}>
           <div className="grid-choices">
             {world.leagues.filter((l) => active.has(l.nation)).map((l) => (
               <label key={l.id} className={`choice ${selectedLeagues.has(l.id) ? 'on' : ''}`}>

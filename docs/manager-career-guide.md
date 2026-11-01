@@ -14,7 +14,7 @@ Vite'ın PowerShell'de yazdırdığı yerel adresi aç; adresin sonunda `/tactic
 
 1. Açılış ekranında **Yeni oyun** seç.
 2. İstersen varsayılan modern veritabanını kullan. **CM 01/02** veritabanı seçeneği, kendi oyun kurulumundan kullanıcı tarafından sağlanan veriyi içe aktarmak içindir; ISO veya patch çalıştırılmaz.
-3. Menajer adını yaz, takip edilecek ülkeleri ve bu ülkelerde oynanacak ligleri işaretle. Seçili lig sayısı bu bölümde görünür; yalnızca işaretli liglerin fikstürü ve puan tablosu oluşturulur.
+3. Menajer adını yaz, takip edilecek ülkeleri ve bu ülkelerde oynanacak ligleri işaretle. Seçili lig sayısı bu bölümde görünür; **Tümünü seç** ve **Temizle** düğmeleriyle kapsamı düzenleyebilirsin. Yalnızca işaretli liglerin fikstürü ve puan tablosu oluşturulur.
 4. Seçili liglerden yönetmek istediğin A takımını seçip kariyeri başlat.
 5. Kaydedilmiş kariyere dönmek için açılış ekranındaki **Oyunu yükle** bölümünü kullan. Oyun içinden de **Oyunu kaydet** ile kaydedebilir veya açılış ekranındaki **Kayıt dosyasını içe aktar** seçeneğini kullanabilirsin.
 

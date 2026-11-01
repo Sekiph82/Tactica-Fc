@@ -10,7 +10,7 @@ export const en: Record<string, string> = {
   'start.noSaves': 'No saved games yet.', 'start.savedAt': 'saved', 'start.confirmDelete': 'Delete this saved game?',
   'start.seasons': '{n} season(s)', 'start.managerName': 'Manager name', 'start.managerPlaceholder': 'Your name',
   'start.nations': 'Followed nations', 'start.nationsHint': 'Choose nations to see their leagues below',
-  'start.leagues': 'Followed leagues', 'start.leaguesSelected': 'Selected leagues: {n}', 'start.leaguesHint': 'Only selected leagues get fixtures and tables. Choose your club from these leagues.',
+  'start.leagues': 'Followed leagues', 'start.leaguesSelected': 'Selected leagues: {n}', 'start.leaguesAll': 'Select all', 'start.leaguesNone': 'Clear', 'start.leaguesHint': 'Only selected leagues get fixtures and tables. Choose your club from these leagues.',
   'start.perfHint': 'Tip: more nations means a livelier world but slightly slower days. Every player exists regardless.',
   'start.pickClub': 'Choose club', 'start.options': 'Options', 'start.masking': 'Attribute masking (scouting with uncertainty)',
   'start.maskingHint': 'You only see exact attributes for players you know. Others show as ranges, e.g. 11–15, until scouted.',
