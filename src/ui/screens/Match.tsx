@@ -24,6 +24,7 @@ import { useHotkeys } from '../hotkeys';
 import { TeamTalk } from '../teamtalk';
 import { talkDone } from '../../game/teamtalk';
 import { OpenFootballPitch, type OpenFootballBridge } from '../OpenFootballPitch';
+import { openFootballPlaybackSpeed } from '../openFootballSpeed';
 
 // Den igangværende kamp overlever navigation mellem skærme
 /** Holdfarver til 2D-banen: ens eget hold i klubtemaets farver, modstanderen i en farve der skiller sig ud */
@@ -773,7 +774,7 @@ function LiveMatch({ id }: { id: number }) {
       )}
       <div className="match2d">
           <div className="match-stage">
-            <OpenFootballPitch id={id} fixture={f} game={g} sim={sim} speed={h2h ? 505_340 / ((g.options.h2hHalfMinutes ?? 3) * 120_000) * Math.min(hs.homeSpeed, hs.awaySpeed) : speed} playing={!paused && !report && viewerReady && !viewerFailed && (!h2h || hs.phase === 'play')}
+            <OpenFootballPitch id={id} fixture={f} game={g} sim={sim} speed={openFootballPlaybackSpeed(speed, h2h ? { halfMinutes: g.options.h2hHalfMinutes ?? 3, homeSpeed: hs.homeSpeed, awaySpeed: hs.awaySpeed } : undefined)} playing={!paused && !report && viewerReady && !viewerFailed && (!h2h || hs.phase === 'play')}
               onBridge={(bridge) => { L.viewer = bridge ?? undefined; setViewerBridge(bridge); }} onReady={setViewerReady}
               onFailure={() => { L.viewer = undefined; setViewerBridge(null); setViewerReady(false); setViewerFailed(true); }} />
             {(!viewerReady || viewerFailed) && <>
