@@ -439,11 +439,21 @@ impl Track {
         if incoming.is_empty() {
             return;
         }
+        // The append path is only valid when the new batch itself is ordered.
+        // Most live batches are, but a chunk assembled from overlapping or
+        // delayed reads can start after the current tail and still contain an
+        // earlier sample later in the same vector. Appending that batch would
+        // make `locate` walk a non-monotonic track and visibly send the entity
+        // backward during playback.
+        let incoming_is_ordered = incoming.windows(2).all(|pair| pair[0].t <= pair[1].t);
         if self.samples.is_empty() {
             self.samples = incoming;
+            if !incoming_is_ordered {
+                self.samples.sort_by_key(|sample| sample.t);
+            }
             return;
         }
-        if incoming[0].t >= self.samples[self.samples.len() - 1].t {
+        if incoming_is_ordered && incoming[0].t >= self.samples[self.samples.len() - 1].t {
             // Live manager playback sends one sample per player per frame.
             // Reserving that exact one-sample increment reallocates and copies
             // the whole growing track on every frame (quadratic work), which
