@@ -470,10 +470,11 @@
             }
             function pollLiveMatch() {
                 refreshLiveMatch().finally(function() {
-                    // Match the engine's 20ms live-frame cadence while visible.
-                    // A hidden browser tab can use a slower poll without wasting
-                    // JSON serialization and render time.
-                    var delay = document.hidden ? 250 : (currentLiveView && currentLiveView.status === 'playing' ? 20 : 300);
+                    // Pull a small batch of timestamped frames while visible.
+                    // The server retains every sample and appendViewerFrames
+                    // submits recovered samples together, so this reduces polling
+                    // and JSON overhead without dropping movement history.
+                    var delay = document.hidden ? 250 : (currentLiveView && currentLiveView.status === 'playing' ? 33 : 300);
                     window.setTimeout(pollLiveMatch, delay);
                 });
             }
