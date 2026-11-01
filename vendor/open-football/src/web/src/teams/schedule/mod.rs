@@ -52,6 +52,7 @@ pub struct TeamScheduleTemplate {
     pub managed_style_key: &'static str,
     pub managed_players: Vec<ManagerRosterOption>,
     pub live_opponent_name: String,
+    pub managed_match_today: bool,
     pub managed_league_id: Option<u32>,
     pub managed_competition_ids: String,
     pub active_tab: &'static str,
@@ -282,6 +283,9 @@ pub async fn team_schedule_get_action(
 
     // Sort all matches by date
     items.sort_by_key(|(dt, _, _)| *dt);
+    let managed_match_today = items.iter().any(|(date, _, item)| {
+        date.date() == simulator_data.date.date() && item.result.is_none()
+    });
     let seasons = SeasonStep::resolve(
         items.iter().map(|(_, season, _)| *season),
         query.season,
@@ -410,6 +414,7 @@ pub async fn team_schedule_get_action(
         managed_style_key,
         managed_players,
         live_opponent_name,
+        managed_match_today,
         managed_league_id: team.league_id,
         managed_competition_ids: managed_competition_ids
             .into_iter()
