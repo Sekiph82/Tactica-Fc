@@ -260,8 +260,8 @@
                 var now = performance.now();
                 var elapsed = Number(frame.elapsed_ms) || 0;
                 var sequence = Number(frame.sequence) || 0;
-                if (viewerApi && viewerApi.setHostTime) viewerApi.setHostTime(elapsed);
                 if (viewerRateSampleAt === null || viewerRateSampleElapsedMs === null || viewerRateSampleSequence === null) {
+                    if (viewerApi && viewerApi.setHostTime) viewerApi.setHostTime(elapsed);
                     viewerRateSampleAt = now;
                     viewerRateSampleElapsedMs = elapsed;
                     viewerRateSampleSequence = sequence;
@@ -270,8 +270,11 @@
                     return;
                 }
                 // Command-triggered refreshes can race with the polling loop.
-                // Never let an older response rewind the playback-rate baseline.
-                if (sequence < viewerRateSampleSequence) return;
+                // Never let an older response rewind either the playback-rate
+                // baseline or the viewer's authoritative playback ceiling.
+                // setHostTime replaces the ceiling, so it must follow this guard.
+                if (sequence < viewerRateSampleSequence || elapsed < viewerRateSampleElapsedMs) return;
+                if (viewerApi && viewerApi.setHostTime) viewerApi.setHostTime(elapsed);
                 if (status !== 'playing' && status !== 'finished') {
                     // Do not include halftime or another stopped phase in the
                     // wall-clock interval used after play resumes. Otherwise
