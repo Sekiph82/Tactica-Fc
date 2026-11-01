@@ -165,6 +165,16 @@ async fn managed_team_id(state: &GameAppData) -> Option<u32> {
     *state.manager_team_id.read().await
 }
 
+fn persist_manager_world(state: &GameAppData, simulator_data: &SimulatorData) -> StatusCode {
+    match state.world_save_store.save(simulator_data) {
+        Ok(()) => StatusCode::ACCEPTED,
+        Err(error) => {
+            log::error!("failed to persist manager transfer action: {error}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
 pub async fn set_tactics_action(
     State(state): State<GameAppData>,
     Json(body): Json<TacticRequest>,
@@ -914,7 +924,7 @@ pub async fn make_transfer_offer_action(
             negotiation.open_salary_at(body.annual_wage);
         }
     }
-    StatusCode::ACCEPTED
+    persist_manager_world(&state, sim)
 }
 
 /// Let the manager respond to the engine's current negotiation stage.
@@ -1039,7 +1049,7 @@ pub async fn update_transfer_negotiation_action(
         }
         _ => return StatusCode::CONFLICT,
     }
-    StatusCode::ACCEPTED
+    persist_manager_world(&state, sim)
 }
 
 /// Queue the managed side's decision for the next ordinary transfer tick.
@@ -1099,7 +1109,7 @@ pub async fn decide_incoming_transfer_offer_action(
     if decision.is_err() {
         return StatusCode::CONFLICT;
     }
-    StatusCode::ACCEPTED
+    persist_manager_world(&state, sim)
 }
 
 #[cfg(test)]
