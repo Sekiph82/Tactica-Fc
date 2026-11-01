@@ -259,7 +259,11 @@
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             }).then(function(response) {
-                if (response.status === 202) { status.textContent = ' ' + messages.opened; return; }
+                if (response.status === 202) {
+                    status.textContent = ' ' + messages.opened;
+                    window.setTimeout(function() { window.location.reload(); }, 350);
+                    return;
+                }
                 if (response.status === 402) { throw new Error(messages.budget); }
                 if (response.status === 409) { throw new Error(messages.unavailable); }
                 if (response.status === 429) { throw new Error(messages.limit); }
@@ -288,7 +292,11 @@
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             }).then(function(response) {
-                if (response.status === 202) { status.textContent = ' ' + messages.termsSaved; return; }
+                if (response.status === 202) {
+                    status.textContent = ' ' + messages.termsSaved;
+                    window.setTimeout(function() { window.location.reload(); }, 350);
+                    return;
+                }
                 if (response.status === 402) throw new Error(messages.remainingBudget);
                 if (response.status === 409) throw new Error(messages.stageLocked);
                 if (response.status === 400) throw new Error(messages.termsInvalid);
@@ -315,6 +323,7 @@
             }).then(function(response) {
                 if (response.status === 202) {
                     status.textContent = ' ' + (accept ? messages.accepted : messages.rejected);
+                    window.setTimeout(function() { window.location.reload(); }, 350);
                     return;
                 }
                 if (response.status === 409) throw new Error(messages.alreadyChanged);

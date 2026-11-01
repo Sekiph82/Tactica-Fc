@@ -241,27 +241,27 @@ pub async fn team_transfers_action(
                         continue;
                     }
                     let status = match (is_seller_offer, negotiation.manager_seller_decision, &negotiation.status) {
-                        (true, Some(true), _) => "Kabul kararı maç gününü bekliyor",
-                        (true, Some(false), _) => "Ret kararı maç gününü bekliyor",
-                        (_, _, core::transfers::deal::negotiation::NegotiationStatus::Pending) => "Bekliyor",
-                        (_, _, core::transfers::deal::negotiation::NegotiationStatus::Countered) => "Karşı teklif var",
-                        (_, _, core::transfers::deal::negotiation::NegotiationStatus::Accepted) => "Kabul edildi",
-                        (_, _, core::transfers::deal::negotiation::NegotiationStatus::Rejected) => "Reddedildi",
-                        (_, _, core::transfers::deal::negotiation::NegotiationStatus::Expired) => "Süresi doldu",
+                        (true, Some(true), _) => i18n.t("mgr_transfer_accept_queued"),
+                        (true, Some(false), _) => i18n.t("mgr_transfer_reject_queued"),
+                        (_, _, core::transfers::deal::negotiation::NegotiationStatus::Pending) => i18n.t("mgr_transfer_pending"),
+                        (_, _, core::transfers::deal::negotiation::NegotiationStatus::Countered) => i18n.t("mgr_transfer_countered"),
+                        (_, _, core::transfers::deal::negotiation::NegotiationStatus::Accepted) => i18n.t("mgr_transfer_accepted"),
+                        (_, _, core::transfers::deal::negotiation::NegotiationStatus::Rejected) => i18n.t("mgr_transfer_rejected"),
+                        (_, _, core::transfers::deal::negotiation::NegotiationStatus::Expired) => i18n.t("mgr_transfer_expired"),
                     };
                     let phase = match &negotiation.phase {
-                        core::transfers::deal::negotiation::NegotiationPhase::InitialApproach { .. } => "İlk başvuru",
-                        core::transfers::deal::negotiation::NegotiationPhase::ClubNegotiation { .. } => "Kulüpler arası pazarlık",
-                        core::transfers::deal::negotiation::NegotiationPhase::PersonalTerms { .. } => "Oyuncu şartları",
-                        core::transfers::deal::negotiation::NegotiationPhase::MedicalAndFinalization { .. } => "Sağlık kontrolü ve tamamlama",
+                        core::transfers::deal::negotiation::NegotiationPhase::InitialApproach { .. } => i18n.t("mgr_transfer_phase_approach"),
+                        core::transfers::deal::negotiation::NegotiationPhase::ClubNegotiation { .. } => i18n.t("mgr_transfer_phase_clubs"),
+                        core::transfers::deal::negotiation::NegotiationPhase::PersonalTerms { .. } => i18n.t("mgr_transfer_phase_personal"),
+                        core::transfers::deal::negotiation::NegotiationPhase::MedicalAndFinalization { .. } => i18n.t("mgr_transfer_phase_medical"),
                     };
                     manager_negotiations.push(ManagerNegotiation {
                         negotiation_id: negotiation.id,
                         player_name: negotiation.player_name.clone(),
                         direction: if is_seller_offer {
-                            "Gelen teklif".to_string()
+                            i18n.t("mgr_transfer_incoming").to_string()
                         } else {
-                            "Alım teklifimiz".to_string()
+                            i18n.t("mgr_transfer_our_offer").to_string()
                         },
                         fee: FormattingUtils::format_money(negotiation.current_offer.base_fee.amount),
                         fee_raw: format!("{:.0}", negotiation.current_offer.base_fee.amount.max(1.0)),
