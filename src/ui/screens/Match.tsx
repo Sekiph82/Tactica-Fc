@@ -721,7 +721,16 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
       // before the viewer has displayed its opening frame.
       if (!viewerReady) { force((x) => x + 1); return; }
       if (s.phase === 'wait' && s.awayReady) { s.phase = 'countdown'; s.startAt = now + 4000; }
-      if (s.phase === 'countdown' && now >= s.startAt) s.phase = 'play';
+      if (s.phase === 'countdown' && now >= s.startAt) {
+        s.phase = 'play';
+        // Match the single-player viewer's lookahead: publish the first real
+        // engine step before releasing the shared kickoff clock.
+        if (!L.viewerPrimed && sim.moment === 0) {
+          L.viewerPrimed = true;
+          s.played = msPerMoment;
+          advRef.current(1, false);
+        }
+      }
       if (s.phase === 'half' && (now >= s.halfEnd || (s.awayTalked && talkDone(id, 'half')))) { s.phase = 'play'; setTab(L.prevTab ?? 'commentary'); }
       // udeholdet er faldet fra (intet livstegn i 30 sek.): dets assistent tager over
       if (!s.solo && s.phase === 'play' && now - s.lastPing > 30_000) { s.solo = true; sim.opts.aiSubs = [false, true]; }
