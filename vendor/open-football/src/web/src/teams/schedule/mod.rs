@@ -56,7 +56,6 @@ pub struct TeamScheduleTemplate {
     pub live_opponent_name: String,
     pub managed_league_id: Option<u32>,
     pub managed_competition_ids: String,
-    pub next_match_days: Option<u32>,
     pub active_tab: &'static str,
     pub show_finances_tab: bool,
     pub show_academy_tab: bool,
@@ -282,13 +281,6 @@ pub async fn team_schedule_get_action(
 
     // Sort all matches by date
     items.sort_by_key(|(dt, _, _)| *dt);
-    let current_date = simulator_data.date.date();
-    let next_match_days = items
-        .iter()
-        .find(|(kickoff, _, item)| item.result.is_none() && kickoff.date() >= current_date)
-        .and_then(|(kickoff, _, _)| {
-            u32::try_from((kickoff.date() - current_date).num_days().saturating_add(1)).ok()
-        });
     let seasons = SeasonStep::resolve(
         items.iter().map(|(_, season, _)| *season),
         query.season,
@@ -378,7 +370,6 @@ pub async fn team_schedule_get_action(
             .map(|id| id.to_string())
             .collect::<Vec<_>>()
             .join(","),
-        next_match_days,
         active_tab: "schedule",
         show_finances_tab: team.team_type.is_own_team(),
         show_academy_tab: team.team_type == core::TeamType::Main
