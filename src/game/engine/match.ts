@@ -455,6 +455,7 @@ export class MatchSim {
     const eventTarget = kind === 'tackle' ? actor : target;
     const actorFrom = playerPoint(before, actor.p.id);
     const actorTo = playerPoint(after, actor.p.id);
+    const carriesBallAtEnd = ['dribble', 'tackle', 'turnover', 'deflection', 'looseBall'].includes(kind);
     const action: MatchVisualAction = {
       moment: this.moment,
       minute: this.minute,
@@ -467,7 +468,7 @@ export class MatchSim {
       fromPoss,
       toPoss,
       from: actorFrom ?? before.ball ?? point(fromZone),
-      to: to ?? (kind === 'dribble' ? actorTo : undefined) ?? (eventTarget ? playerPoint(after, eventTarget.p.id) : undefined) ?? after.ball ?? point(toZone),
+      to: to ?? (carriesBallAtEnd ? actorTo : undefined) ?? (eventTarget ? playerPoint(after, eventTarget.p.id) : undefined) ?? after.ball ?? point(toZone),
       ballFrom: ballFrom ?? before.ball ?? actorFrom ?? point(fromZone),
       ballTo: to ?? after.ball ?? (eventTarget ? playerPoint(after, eventTarget.p.id) : undefined) ?? point(toZone),
       outcome,
