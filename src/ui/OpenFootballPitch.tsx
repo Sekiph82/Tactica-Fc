@@ -137,6 +137,9 @@ export function OpenFootballPitch({
             if (action.ballFrom) ballSamples.push({ moment: startMoment, point: point(action.ballFrom) });
             if (action.ballTo) ballSamples.push({ moment: window.end, point: point(action.ballTo) });
             playerSamples.push({ id: action.actor, moment: startMoment, point: point(action.from) });
+            if (action.kind === 'dribble') {
+              playerSamples.push({ id: action.actor, moment: window.end, point: point(action.to) });
+            }
             if (action.target !== undefined && ['pass', 'longBall', 'throughBall', 'cross'].includes(action.kind)) {
               playerSamples.push({ id: action.target, moment: window.end, point: point(action.to) });
             }

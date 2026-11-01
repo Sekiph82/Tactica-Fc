@@ -453,6 +453,8 @@ export class MatchSim {
     const afterHolder = kind === 'tackle' ? actor.p.id : target?.p.id ?? (toPoss === team ? actor.p.id : 0);
     const after = this.visualPositions(toZone, toPoss, afterHolder);
     const eventTarget = kind === 'tackle' ? actor : target;
+    const actorFrom = playerPoint(before, actor.p.id);
+    const actorTo = playerPoint(after, actor.p.id);
     const action: MatchVisualAction = {
       moment: this.moment,
       minute: this.minute,
@@ -464,9 +466,9 @@ export class MatchSim {
       toZone,
       fromPoss,
       toPoss,
-      from: playerPoint(before, actor.p.id) ?? before.ball ?? point(fromZone),
-      to: to ?? (eventTarget ? playerPoint(after, eventTarget.p.id) : undefined) ?? after.ball ?? point(toZone),
-      ballFrom: ballFrom ?? before.ball ?? playerPoint(before, actor.p.id) ?? point(fromZone),
+      from: actorFrom ?? before.ball ?? point(fromZone),
+      to: to ?? (kind === 'dribble' ? actorTo : undefined) ?? (eventTarget ? playerPoint(after, eventTarget.p.id) : undefined) ?? after.ball ?? point(toZone),
+      ballFrom: ballFrom ?? before.ball ?? actorFrom ?? point(fromZone),
       ballTo: to ?? after.ball ?? (eventTarget ? playerPoint(after, eventTarget.p.id) : undefined) ?? point(toZone),
       outcome,
     };
