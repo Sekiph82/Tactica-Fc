@@ -5,6 +5,8 @@ import { actionMomentWindows, OpenFootballStateTimeline, toOpenFootballRecording
 import type { OpenFootballSetup } from './openFootballSetup';
 import { OPEN_FOOTBALL_MATCH_DURATION_MS, openFootballTimestamp } from './openFootballTimeline';
 
+const VIEWER_READY_TIMEOUT_MS = 60_000;
+
 export interface OpenFootballBridge {
   push(
     snapshots: readonly MatchPitchSnapshot[],
@@ -56,23 +58,39 @@ export function OpenFootballPitch({
 
   useEffect(() => {
     let cancelled = false;
+    let settled = false;
+    let readyTimeout: number | undefined;
     let bridge: OpenFootballBridge | null = null;
     const attitudeTimeline = new OpenFootballStateTimeline();
     const progress = (event: Event) => {
-      if ((event as CustomEvent<{ phase?: string }>).detail?.phase === 'ready') { setReady(true); onReady(true); }
+      if ((event as CustomEvent<{ phase?: string }>).detail?.phase !== 'ready' || cancelled || settled) return;
+      settled = true;
+      if (readyTimeout !== undefined) window.clearTimeout(readyTimeout);
+      setReady(true);
+      onReady(true);
+    };
+    const fail = (error: unknown) => {
+      if (cancelled || settled) return;
+      settled = true;
+      if (readyTimeout !== undefined) window.clearTimeout(readyTimeout);
+      console.error('Open Football viewer failed to become ready', error);
+      onFailure();
     };
     document.addEventListener('match-viewer-progress', progress);
+    readyTimeout = window.setTimeout(() => {
+      fail(new Error(`Viewer startup exceeded ${VIEWER_READY_TIMEOUT_MS} ms`));
+    }, VIEWER_READY_TIMEOUT_MS);
     const start = async () => {
       const base = `${import.meta.env.BASE_URL}open-football-viewer/`;
       const viewer = await import(/* @vite-ignore */ `${base}match_viewer.js`) as ViewerModule;
       const wasmUrl = new URL(`${base}match_viewer_bg.wasm`, document.baseURI);
       await viewer.default(wasmUrl);
-      if (cancelled || !canvas.current) return;
+      if (cancelled || settled || !canvas.current) return;
 
       const initial = makeInitialRecording(setup.initialSnapshot);
       const config = makeConfig(initial, setup, `#tactica-of-${id}`);
       config.renderer = await preferredRenderer();
-      if (cancelled || !canvas.current) return;
+      if (cancelled || settled || !canvas.current) return;
       viewer.MatchViewer.start(JSON.stringify(config));
       viewer.MatchViewer.setHostTime(0);
 
@@ -174,9 +192,10 @@ export function OpenFootballPitch({
       bridge.setPlaying(playing);
       onBridge(bridge);
     };
-    void start().catch((error) => { console.error('Open Football viewer failed to start', error); onFailure(); });
+    void start().catch(fail);
     return () => {
       cancelled = true;
+      if (readyTimeout !== undefined) window.clearTimeout(readyTimeout);
       bridge?.setPlaying(false);
       bridgeRef.current = null;
       document.removeEventListener('match-viewer-progress', progress);
