@@ -346,8 +346,13 @@ impl Playback {
         let next_time_ms = playback.time_ms + time.delta_secs_f64() * 1000.0 * playback.speed as f64;
         if let Some(host_time_ms) = playback.host_time_ms {
             let maximum = (host_time_ms + HOST_TIME_LEAD_MS).min(playback.duration_ms);
-            if next_time_ms <= maximum {
-                playback.time_ms = next_time_ms;
+            // Keep consuming each rendered frame up to the live host's lead
+            // limit. Dropping the whole frame whenever its delta crossed the
+            // ceiling made the playhead pause at the boundary until another
+            // engine sample arrived, which looked like a hitch in streamed
+            // matches. Never rewind if a host sends a ceiling behind us.
+            if maximum > playback.time_ms {
+                playback.time_ms = next_time_ms.min(maximum);
             }
         } else {
             playback.time_ms = next_time_ms;
