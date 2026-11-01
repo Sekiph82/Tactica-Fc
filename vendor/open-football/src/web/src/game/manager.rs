@@ -244,6 +244,20 @@ pub async fn manager_mark_news_read_action(State(state): State<GameAppData>) -> 
     }
 }
 
+/// Mark the stored managed-team match reports as read without changing the
+/// authoritative match history or its replay data.
+pub async fn manager_mark_match_reports_read_action(State(state): State<GameAppData>) -> StatusCode {
+    let Some(team_id) = managed_team_id(&state).await else {
+        return StatusCode::FORBIDDEN;
+    };
+    match state.manager_career_store.update_snapshot(team_id, |snapshot| {
+        snapshot.last_read_match_reports = snapshot.match_reports.len();
+    }) {
+        Ok(_) => StatusCode::NO_CONTENT,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
 pub async fn manager_toggle_follow_league_action(
     State(state): State<GameAppData>,
     Path(league_id): Path<u32>,

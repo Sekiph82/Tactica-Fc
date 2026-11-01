@@ -1,6 +1,7 @@
 use crate::GameAppData;
 use crate::I18nManager;
 use crate::r#match::stores::MatchStore;
+use crate::game::{ManagerCareerStore, ManagerMatchReport};
 use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -88,6 +89,8 @@ pub async fn game_process_action(
         i18n: Arc::clone(&state.i18n),
         cancel_flag: Arc::clone(&state.cancel_flag),
         selected_leagues,
+        manager_team_id,
+        manager_career_store: Arc::clone(&state.manager_career_store),
         world_save_store: Arc::clone(&state.world_save_store),
         live_session: {
             let session = manager_team_id.map(|team_id| {
@@ -130,6 +133,8 @@ struct ProcessingRun {
     i18n: Arc<I18nManager>,
     cancel_flag: Arc<AtomicBool>,
     selected_leagues: HashSet<u32>,
+    manager_team_id: Option<u32>,
+    manager_career_store: Arc<ManagerCareerStore>,
     live_session: Option<Arc<LiveMatchSession>>,
     world_save_store: Arc<super::WorldSaveStore>,
 }
@@ -146,6 +151,7 @@ impl ProcessingRun {
                 break;
             }
 
+            let day = simulator_data.date.date().to_string();
             let result = self
                 .handle
                 .block_on(FootballSimulator::simulate_selected_with(
@@ -153,6 +159,33 @@ impl ProcessingRun {
                     &core::SimulatorConfig::default(),
                     &self.selected_leagues,
                 ));
+            if let Some(manager_team_id) = self.manager_team_id {
+                let reports: Vec<_> = result.match_results.iter()
+                    .filter_map(|match_result| {
+                        let is_home = match_result.home_team_id == manager_team_id;
+                        let is_away = match_result.away_team_id == manager_team_id;
+                        if !is_home && !is_away { return None; }
+                        let opponent_id = if is_home { match_result.away_team_id } else { match_result.home_team_id };
+                        let opponent = simulator_data.team(opponent_id)?.name.clone();
+                        let home_goals = match_result.score.home_team.get();
+                        let away_goals = match_result.score.away_team.get();
+                        Some(ManagerMatchReport {
+                            match_id: match_result.id.clone(),
+                            date: day.clone(),
+                            opponent,
+                            score: if is_home { format!("{home_goals}–{away_goals}") } else { format!("{away_goals}–{home_goals}") },
+                            is_home,
+                        })
+                    })
+                    .collect();
+                if !reports.is_empty() {
+                    if let Err(error) = self.manager_career_store.update_snapshot(manager_team_id, |snapshot| {
+                        for report in reports { snapshot.record_match_report(report); }
+                    }) {
+                        error!("failed to persist manager match reports: {error}");
+                    }
+                }
+            }
             if result.has_match_results() && MatchRuntime::recordings_mode() {
                 self.handle.block_on(Self::write_match_results(result));
             }

@@ -7,7 +7,7 @@ mod process;
 pub mod routes;
 
 pub use create::*;
-pub use manager_career_store::{ManagerCareerSnapshot, ManagerCareerStore};
+pub use manager_career_store::{ManagerCareerSnapshot, ManagerCareerStore, ManagerMatchReport};
 pub use world_save_store::WorldSaveStore;
 pub use live_match::{live_instruction_action, live_match_get_action, live_substitution_action};
 pub use manager::*;

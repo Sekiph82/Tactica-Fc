@@ -10,7 +10,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-const SCHEMA_VERSION: u32 = 5;
+const SCHEMA_VERSION: u32 = 6;
 const FILE_NAME: &str = "manager-career.jsonl";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -52,6 +52,22 @@ pub struct ManagerCareerSnapshot {
     /// Highest monthly edition read for each followed league.
     #[serde(default)]
     pub last_read_league_issues: HashMap<u32, u32>,
+    /// Recent managed-team match reports captured from completed simulation ticks.
+    #[serde(default)]
+    pub match_reports: Vec<ManagerMatchReport>,
+    /// Number of match reports the manager has explicitly read.
+    #[serde(default)]
+    pub last_read_match_reports: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ManagerMatchReport {
+    pub match_id: String,
+    pub date: String,
+    pub opponent: String,
+    /// Score in the managed team's home/away orientation.
+    pub score: String,
+    pub is_home: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +156,18 @@ impl ManagerCareerStore {
 }
 
 impl ManagerCareerSnapshot {
+    pub fn record_match_report(&mut self, report: ManagerMatchReport) {
+        if self.match_reports.iter().any(|existing| existing.match_id == report.match_id) {
+            return;
+        }
+        self.match_reports.push(report);
+        if self.match_reports.len() > 100 {
+            let remove_count = self.match_reports.len() - 100;
+            self.match_reports.drain(0..remove_count);
+            self.last_read_match_reports = self.last_read_match_reports.saturating_sub(remove_count);
+        }
+    }
+
     /// Reapply manager-owned choices to a freshly generated base world.
     /// Match history, calendar progress, and other clubs remain outside this overlay.
     pub fn apply_to_simulation(&self, sim: &mut core::SimulatorData, team_id: u32) -> bool {

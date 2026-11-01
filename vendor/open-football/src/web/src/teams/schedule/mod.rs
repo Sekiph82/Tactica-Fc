@@ -2,6 +2,7 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION, MATCH_VIEWER_VERSION};
 use crate::common::played_fixture::PlayedFixture;
+use crate::game::ManagerMatchReport;
 use crate::common::season_step::SeasonStep;
 use crate::leagues::address::LeagueAddress;
 use crate::teams::newspaper::NewspaperCounter;
@@ -63,6 +64,10 @@ pub struct TeamScheduleTemplate {
     pub newspaper_count: usize,
     pub unread_newspaper_count: usize,
     pub followed_league_news: Vec<FollowedLeagueNewsView>,
+    pub manager_match_reports: Vec<ManagerMatchReportView>,
+    pub unread_manager_match_reports: usize,
+    pub match_reports_heading: &'static str,
+    pub match_reports_read_label: &'static str,
     pub season_base: String,
     pub seasons: Option<SeasonStep>,
     pub items: Vec<TeamScheduleItem>,
@@ -77,6 +82,13 @@ pub struct FollowedLeagueNewsView {
     pub name: String,
     pub url: String,
     pub unread_count: usize,
+}
+
+pub struct ManagerMatchReportView {
+    pub match_id: String,
+    pub date: String,
+    pub opponent: String,
+    pub score: String,
 }
 
 pub struct TeamScheduleItem {
@@ -371,6 +383,19 @@ pub async fn team_schedule_get_action(
         })
         .collect();
     followed_league_news.sort_by(|a, b| a.name.cmp(&b.name));
+    let unread_manager_match_reports = manager_snapshot.as_ref().map_or(0, |snapshot| {
+        snapshot.match_reports.len().saturating_sub(snapshot.last_read_match_reports)
+    });
+    let manager_match_reports: Vec<_> = manager_snapshot.as_ref()
+        .into_iter()
+        .flat_map(|snapshot| snapshot.match_reports.iter().rev().take(8))
+        .map(|report: &ManagerMatchReport| ManagerMatchReportView {
+            match_id: report.match_id.clone(),
+            date: report.date.clone(),
+            opponent: report.opponent.clone(),
+            score: report.score.clone(),
+        })
+        .collect();
 
     Ok(TeamScheduleTemplate {
         css_version: CSS_VERSION,
@@ -420,6 +445,10 @@ pub async fn team_schedule_get_action(
         },
         unread_newspaper_count,
         followed_league_news,
+        manager_match_reports,
+        unread_manager_match_reports,
+        match_reports_heading: if route_params.lang.starts_with("tr") { "Menajer maç raporları" } else { "Manager match reports" },
+        match_reports_read_label: if route_params.lang.starts_with("tr") { "Tümünü okundu işaretle" } else { "Mark all as read" },
         season_base: current_path,
         seasons,
         items,

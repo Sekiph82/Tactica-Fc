@@ -23,6 +23,21 @@
             <a class="fm-button" href="/{{ lang }}/teams/{{ team_slug }}/newspaper">{{ i18n.t("news") }} · {{ unread_newspaper_count }}</a>
         </div>
         {% endif %}
+        {% if !manager_match_reports.is_empty() %}
+        <section style="margin:12px 18px;padding:12px 14px;border:1px solid #244555;border-radius:10px;background:#071925">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
+                <strong>{{ match_reports_heading }}{% if unread_manager_match_reports > 0 %} · {{ unread_manager_match_reports }}{% endif %}</strong>
+                {% if unread_manager_match_reports > 0 %}
+                <button type="button" class="fm-button" id="fm-manager-match-reports-read">{{ match_reports_read_label }}</button>
+                {% endif %}
+            </div>
+            <ul style="list-style:none;padding:0;margin:8px 0 0;display:grid;gap:6px">
+                {% for report in manager_match_reports %}
+                <li><a href="/{{ lang }}/match/{{ report.match_id }}">{{ report.date }} · {{ report.score }} vs {{ report.opponent }}</a></li>
+                {% endfor %}
+            </ul>
+        </section>
+        {% endif %}
         {% if let Some(league_id) = managed_league_id %}
         <div style="padding:12px 18px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
             <strong>{{ i18n.t("mgr_matchday_plan") }}</strong>
@@ -553,4 +568,12 @@
         {% endif %}
     </section>
 </div>
+{% if is_managed %}
+<script>
+document.getElementById('fm-manager-match-reports-read')?.addEventListener('click', async function () {
+    const response = await fetch('/api/manager/news/matches/read', { method: 'POST' });
+    if (response.ok) window.location.reload();
+});
+</script>
+{% endif %}
 {% endblock %}
