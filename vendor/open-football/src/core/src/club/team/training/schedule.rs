@@ -1,10 +1,22 @@
 use chrono::{NaiveDateTime, NaiveTime};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TrainingSchedule {
     pub morning_time: NaiveTime,
     pub evening_time: NaiveTime,
     pub is_default: bool,
+    pub manager_focus: ManagerTrainingFocus,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ManagerTrainingFocus {
+    #[default]
+    Balanced,
+    Fitness,
+    Technical,
+    Tactical,
+    SetPieces,
+    Recovery,
 }
 
 impl TrainingSchedule {
@@ -13,6 +25,7 @@ impl TrainingSchedule {
             morning_time,
             evening_time,
             is_default: true,
+            manager_focus: ManagerTrainingFocus::Balanced,
         }
     }
 

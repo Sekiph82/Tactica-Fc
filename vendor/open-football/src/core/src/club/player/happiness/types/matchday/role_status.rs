@@ -1,7 +1,7 @@
 use super::SelectionRole;
 use crate::club::player::contract::PlayerSquadStatus;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RoleStatusKind {
     RoleClarifiedByManager,
     RoleUnclear,
@@ -36,7 +36,7 @@ impl RoleStatusKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RoleStatusEventContext {
     pub kind: RoleStatusKind,
     pub previous_status: Option<PlayerSquadStatus>,

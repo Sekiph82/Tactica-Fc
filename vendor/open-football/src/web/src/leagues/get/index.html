@@ -14,8 +14,8 @@
     <div class="fm-panel d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3 p-3">
         <div>
             <strong>{% if lang == "tr" %}Maç simülasyonu ligleri{% else %}Match simulation leagues{% endif %}</strong>
-            <div class="mt-1 fw-semibold" id="simulation-league-count" style="color:#35d3c4;font-size:.95rem"></div>
-            <div class="small mt-1" style="color:#b8c9d8">{% if lang == "tr" %}Yalnızca seçilen liglerin maçları oynatılır. Tarih ilerler; diğer liglerin fikstürleri duraklatılır.{% else %}Only selected leagues play. The date advances while other league fixtures are paused.{% endif %}</div>
+            <div class="mt-2" id="simulation-league-count" role="status" aria-live="polite" style="display:inline-flex;align-items:center;min-height:30px;padding:4px 11px;border:1px solid #24cbb8;background:#073847;border-radius:999px;color:#e8fffb;font-size:.9rem;font-weight:800;letter-spacing:.01em"></div>
+            <div class="small mt-1" style="color:#b8c9d8">{% if lang == "tr" %}Yalnızca seçilen liglerin maçları oynatılır. Diğer ülkelerin günlük dünya işlemleri çalışmaya devam eder.{% else %}Only selected leagues play matches. Daily world processing continues for all other countries.{% endif %}</div>
         </div>
         <button type="button" class="btn btn-outline-info btn-sm fm-simulation-league-toggle"
                 data-league-id="{{ simulation_league_id }}"
@@ -299,8 +299,8 @@
                     ? (included ? button.dataset.removeTr : button.dataset.addTr)
                     : (included ? button.dataset.removeEn : button.dataset.addEn);
                 count.textContent = tr
-                    ? 'Seçili lig: ' + ids.length + ' · seçim bu tarayıcıda saklanır'
-                    : 'Selected leagues: ' + ids.length + ' · saved in this browser';
+                    ? 'Seçili lig sayısı: ' + ids.length
+                    : 'Selected leagues: ' + ids.length;
             };
             button.addEventListener('click', function () {
                 const id = Number(button.dataset.leagueId);

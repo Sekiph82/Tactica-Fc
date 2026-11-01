@@ -132,7 +132,7 @@ export function Landing({ onPlay, onLang, onDraft }: { onPlay: () => void; onLan
       <div className="lp-aurora" aria-hidden="true"><i /><i /><i /></div>
       <header className={`lp-nav ${scrolled ? 'solid' : ''}`}>
         <div className="lp-wrap lp-nav-in">
-          <div className="lp-brand"><img src={`${import.meta.env.BASE_URL}icon.svg`} alt="" width="28" height="28" /> <b>TACTICA</b> <span>FC</span></div>
+          <div className="lp-brand"><img src={`${import.meta.env.BASE_URL}tactica-brand/Tactica_FC_Black_Metal_32x32.png?v=25`} alt="" width="28" height="28" /> <b>TACTICA</b> <span>FC</span></div>
           <nav className="lp-links">
             <a onClick={() => go('features')}>{t('land.nav.features')}</a>
             <a onClick={() => go('screens')}>{t('land.nav.screens')}</a>

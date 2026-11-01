@@ -13,7 +13,7 @@ pub struct TeamInfo {
     pub league_slug: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PlayerStatistics {
     pub played: u16,
     pub played_subs: u16,
@@ -75,7 +75,7 @@ pub struct PlayerStatistics {
 /// cups once they're modelled — instead of collapsing into a single
 /// hardcoded row. The rolled-up [`Player::cup_statistics`] aggregate is
 /// recomputed from these, so existing aggregate readers are unaffected.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct CompetitionStatistics {
     /// Stable competition identifier — the match's `league_slug`
     /// (e.g. `"copa-libertadores"`, `"champions-league"`). The display
@@ -95,7 +95,7 @@ pub struct CompetitionStatistics {
 /// spell. The projection renders it directly for the in-progress season;
 /// the season-end snapshot freezes it into the canonical `season_ledger`
 /// like every other completed-season record.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SecondaryTeamStatistics {
     /// Season this slice belongs to (`Season::from_date(match_date)`),
     /// so a missed season-end can still freeze each slice under the right
@@ -117,7 +117,7 @@ pub struct SecondaryTeamStatistics {
 /// season-end drain touches these slices, and the club career totals —
 /// which career-apps wage clauses and favourite-club evaluation iterate
 /// — never see them.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct InternationalStatistics {
     /// `Season::from_date(match_date).start_year`. An international sits
     /// outside every domestic calendar, so the game's own Aug–Jul season

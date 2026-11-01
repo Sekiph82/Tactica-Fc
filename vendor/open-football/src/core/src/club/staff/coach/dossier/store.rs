@@ -16,7 +16,7 @@ use super::tuning::DossierTuning;
 use crate::club::mind::organs::memory::EpochDay;
 
 /// A coach's lasting records, sorted by player id.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct CoachDossierStore {
     records: Vec<PlayerDossier>,
 }

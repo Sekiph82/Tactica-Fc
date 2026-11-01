@@ -2,7 +2,25 @@ use crate::app::config::{ViewerConfig, ViewerLabels};
 use crate::recording::loader::ChunkLoader;
 use crate::recording::replay::ReplayTracks;
 use bevy::prelude::*;
+use std::cell::Cell;
 use wasm_bindgen::JsValue;
+
+thread_local! {
+    static HOST_PLAYING: Cell<Option<bool>> = const { Cell::new(None) };
+    static HOST_SPEED: Cell<Option<f32>> = const { Cell::new(None) };
+}
+
+/// Let the host manager controls pause or resume the broadcast clock.
+pub fn set_host_playing(playing: bool) {
+    HOST_PLAYING.with(|state| state.set(Some(playing)));
+}
+
+/// Set the embedded viewer's playback multiplier from its host page.
+pub fn set_host_speed(speed: f32) {
+    if speed.is_finite() {
+        HOST_SPEED.with(|state| state.set(Some(speed.clamp(0.1, 32.0))));
+    }
+}
 
 /// Which parts of the match the recording actually covers.
 ///
@@ -139,6 +157,20 @@ pub struct Playback {
 }
 
 impl Playback {
+    /// Applies one-shot transport commands queued by the embedding page.
+    pub fn apply_host_controls(mut playback: ResMut<Playback>) {
+        HOST_PLAYING.with(|state| {
+            if let Some(playing) = state.take() {
+                playback.playing = playing;
+            }
+        });
+        HOST_SPEED.with(|state| {
+            if let Some(speed) = state.take() {
+                playback.speed = speed;
+            }
+        });
+    }
+
     /// Speeds the debug overlay cycles through, slowest first.
     ///
     /// The slow half is the half that earns its keep: reading whether a

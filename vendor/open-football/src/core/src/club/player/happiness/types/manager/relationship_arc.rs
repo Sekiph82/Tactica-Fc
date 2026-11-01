@@ -16,7 +16,7 @@ use crate::club::player::contract::PlayerSquadStatus;
 /// What drove the player to formally request a private conversation
 /// with the manager. Picked at emit time so the renderer can name the
 /// core grievance rather than the generic "wanted a chat" line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PrivateTalkReason {
     /// Role / minutes — playing-time frustration is dominant.
     PlayingTime,
@@ -60,7 +60,7 @@ impl PrivateTalkReason {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PrivateTalkRequestContext {
     pub reason: PrivateTalkReason,
     /// Manager trust 0..100 at emit time — drives tone of the headline.
@@ -105,7 +105,7 @@ impl PrivateTalkRequestContext {
 
 /// Whether the club's direction signal is positive or negative. Both
 /// flavours share the same payload — only the polarity differs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ClubDirectionKind {
     /// Player is concerned about where the club is heading.
     Concern,
@@ -123,7 +123,7 @@ impl ClubDirectionKind {
 }
 
 /// Concrete evidence that triggered the club-direction event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ClubDirectionEvidence {
     /// Key player was sold without replacement.
     KeyPlayerSoldUnreplaced,
@@ -174,7 +174,7 @@ impl ClubDirectionEvidence {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ClubDirectionContext {
     pub kind: ClubDirectionKind,
     /// Net signings count this window (positive = investment, negative =
@@ -219,7 +219,7 @@ impl ClubDirectionContext {
 // ────────────────────────────────────────────────────────────────
 
 /// What flavour of "big match" the selection / drop refers to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BigMatchKind {
     Derby,
     CupFinal,
@@ -246,7 +246,7 @@ impl BigMatchKind {
 
 /// Whether the player was trusted with the start or dropped from the
 /// expected XI for the big match.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BigMatchDecision {
     StartedTrusted,
     BenchedUnexpectedly,
@@ -261,7 +261,7 @@ impl BigMatchDecision {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BigMatchSelectionContext {
     pub kind: BigMatchKind,
     pub decision: BigMatchDecision,
@@ -334,7 +334,7 @@ impl BigMatchSelectionContext {
 /// What flavour of substitution frustration drove the event. The match
 /// engine knows why a player was hooked; this enum lets the renderer
 /// describe it specifically.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SubstitutionFrustrationKind {
     /// Repeated early hooks across several recent matches.
     RepeatedEarlyHook,
@@ -363,7 +363,7 @@ impl SubstitutionFrustrationKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SubstitutionFrustrationContext {
     pub kind: SubstitutionFrustrationKind,
     /// Minute the player came off, 0–120. `None` if unknown.
@@ -416,7 +416,7 @@ impl SubstitutionFrustrationContext {
 
 /// Why a new signing is perceived as a threat. Multiple may apply at
 /// once; emit site picks the dominant one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum NewSigningThreatReason {
     /// New signing plays in the same primary position.
     SamePosition,
@@ -458,7 +458,7 @@ pub enum RivalThreatResponse {
     Mentoring,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NewSigningThreatContext {
     /// The rival player id — the renderer names him in the headline.
     pub rival_player_id: u32,

@@ -38,34 +38,63 @@ const CHUNK_COMPRESSION: Compression = Compression::best();
 pub struct MatchStore;
 
 impl MatchStore {
+    fn match_directory() -> PathBuf {
+        std::env::var_os("TACTICA_MATCH_RESULTS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                crate::game::manager_career_store::user_data_directory().join(MATCH_DIRECTORY)
+            })
+    }
+
     pub async fn get_chunk(
         league_slug: &str,
         match_id: &str,
         chunk_number: usize,
     ) -> Option<Vec<u8>> {
-        let chunk_file = PathBuf::from(MATCH_DIRECTORY)
-            .join(league_slug)
+        let relative = PathBuf::from(league_slug)
             .join(format!("{}_chunk_{}.json.gz", match_id, chunk_number));
+        let current = Self::match_directory().join(&relative);
 
-        match tokio::fs::read(&chunk_file).await {
+        match tokio::fs::read(&current).await {
             Ok(bytes) => Some(bytes),
             Err(_) => {
-                debug!("Chunk file not found: {}", chunk_file.display());
-                None
+                // Keep old project-local recordings readable after moving new
+                // saves beside the user's career data.
+                let legacy = PathBuf::from(MATCH_DIRECTORY).join(relative);
+                if legacy == current {
+                    debug!("Chunk file not found: {}", current.display());
+                    return None;
+                }
+                match tokio::fs::read(&legacy).await {
+                    Ok(bytes) => Some(bytes),
+                    Err(_) => {
+                        debug!("Chunk file not found: {}", current.display());
+                        None
+                    }
+                }
             }
         }
     }
 
     pub async fn get_metadata(league_slug: &str, match_id: &str) -> Option<serde_json::Value> {
-        let metadata_file = PathBuf::from(MATCH_DIRECTORY)
-            .join(league_slug)
-            .join(format!("{}_metadata.json", match_id));
+        let relative = PathBuf::from(league_slug).join(format!("{}_metadata.json", match_id));
+        let current = Self::match_directory().join(&relative);
 
-        let contents = match tokio::fs::read(&metadata_file).await {
+        let contents = match tokio::fs::read(&current).await {
             Ok(bytes) => bytes,
             Err(_) => {
-                debug!("Metadata file not found: {}", metadata_file.display());
-                return None; // No metadata means no chunks available
+                let legacy = PathBuf::from(MATCH_DIRECTORY).join(relative);
+                if legacy == current {
+                    debug!("Metadata file not found: {}", current.display());
+                    return None;
+                }
+                match tokio::fs::read(&legacy).await {
+                    Ok(bytes) => bytes,
+                    Err(_) => {
+                        debug!("Metadata file not found: {}", current.display());
+                        return None;
+                    }
+                }
             }
         };
 
@@ -132,7 +161,7 @@ impl MatchStore {
     /// how to say; it must not take the matchday down with it, so every step
     /// logs rather than panics.
     pub async fn write(league_slug: &str, match_id: &str, artifacts: &RecordingArtifacts) {
-        let out_dir = PathBuf::from(MATCH_DIRECTORY).join(league_slug);
+        let out_dir = Self::match_directory().join(league_slug);
 
         if let Err(e) = tokio::fs::create_dir_all(&out_dir).await {
             error!("failed to create {}: {}", out_dir.display(), e);

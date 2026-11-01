@@ -8,7 +8,7 @@
 //! - Star status (stars may resist learning — they don't "need" to)
 
 /// Languages in the football world.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Language {
     English,
     Spanish,
@@ -281,7 +281,7 @@ impl Language {
 }
 
 /// A player's proficiency in a specific language.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlayerLanguage {
     pub language: Language,
     /// 0 = no knowledge, 100 = fully fluent (native).
@@ -364,7 +364,7 @@ impl Language {
 /// players who can walk into the dressing room and be understood — the
 /// club country's own language first, the football bridge languages
 /// (English, Spanish) as a partial substitute.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct LanguageProfile {
     pub fluent_mask: u64,
     pub conversational_mask: u64,

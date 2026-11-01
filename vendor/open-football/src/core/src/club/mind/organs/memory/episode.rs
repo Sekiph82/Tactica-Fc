@@ -21,7 +21,7 @@ use super::epoch::EpochDay;
 ///
 /// Grouped by domain. The groups matter: [`EpisodeKind::domain`] drives
 /// which sub-mind claims an episode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub enum EpisodeKind {
     /// Placeholder for a default-constructed slot. Never stored.
     #[default]
@@ -619,7 +619,7 @@ impl EpisodeKind {
 }
 
 /// Packed per-episode flags.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EpisodeFlags(u8);
 
 impl EpisodeFlags {
@@ -664,7 +664,7 @@ impl EpisodeFlags {
 /// than `f32` — the accessors convert. That halves the record and costs
 /// nothing: no downstream consumer needs more than 1% resolution on how
 /// good or how vivid a memory is.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct MindEpisode {
     pub kind: EpisodeKind,
     /// Who it was about. [`ActorRef::NONE`] for situational memories.

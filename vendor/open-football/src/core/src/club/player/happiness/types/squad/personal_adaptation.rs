@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PersonalAdaptationKind {
     HomesicknessConcern,
     FamilySettled,
@@ -49,7 +49,7 @@ impl PersonalAdaptationKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PersonalAdaptationEventContext {
     pub kind: PersonalAdaptationKind,
     pub days_at_club: u32,

@@ -51,6 +51,10 @@ pub struct TeamTransfersTemplate {
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub team_slug: String,
+    pub is_managed: bool,
+    pub transfer_budget: String,
+    pub market_opportunities: Vec<MarketOpportunity>,
+    pub manager_negotiations: Vec<ManagerNegotiation>,
     pub active_tab: &'static str,
     pub show_finances_tab: bool,
     pub show_academy_tab: bool,
@@ -89,6 +93,33 @@ pub struct LoanHistoryItem {
     pub end_date: String,
 }
 
+pub struct MarketOpportunity {
+    pub player_id: u32,
+    pub player_slug: String,
+    pub player_name: String,
+    pub position: String,
+    pub selling_club: String,
+    pub asking_price: String,
+    pub asking_price_raw: String,
+    pub is_loan: bool,
+}
+
+pub struct ManagerNegotiation {
+    pub negotiation_id: u32,
+    pub player_name: String,
+    pub direction: String,
+    pub fee: String,
+    pub fee_raw: String,
+    pub annual_wage_raw: u32,
+    pub contract_years: u8,
+    pub status: String,
+    pub phase: String,
+    pub expires: String,
+    pub can_update_fee: bool,
+    pub can_update_wage: bool,
+    pub can_respond_as_seller: bool,
+}
+
 pub async fn team_transfers_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<TeamTransfersRequest>,
@@ -101,6 +132,7 @@ pub async fn team_transfers_action(
         .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
     let i18n = state.i18n.for_lang(&route_params.lang);
+    let managed_team_id = *state.manager_team_id.read().await;
 
     let indexes = simulator_data
         .indexes
@@ -113,6 +145,7 @@ pub async fn team_transfers_action(
         .ok_or_else(|| {
             ApiError::NotFound(format!("Team '{}' not found", route_params.team_slug))
         })?;
+    let is_managed = managed_team_id == Some(team_id);
 
     let team = simulator_data
         .team(team_id)
@@ -187,6 +220,136 @@ pub async fn team_transfers_action(
             })
         })
         .collect();
+
+    let transfer_budget = simulator_data
+        .club(team.club_id)
+        .and_then(|club| club.finance.transfer_budget.as_ref())
+        .map(|budget| FormattingUtils::format_money(budget.amount))
+        .unwrap_or_else(|| "—".to_string());
+    let mut manager_negotiations = Vec::new();
+    if is_managed {
+        for continent in &simulator_data.continents {
+            for country in &continent.countries {
+                for negotiation in country
+                    .transfer_market
+                    .negotiations
+                    .values()
+                {
+                    let is_buyer_offer = negotiation.buying_club_id == team.club_id;
+                    let is_seller_offer = negotiation.selling_club_id == team.club_id;
+                    if !is_buyer_offer && !is_seller_offer {
+                        continue;
+                    }
+                    let status = match (is_seller_offer, negotiation.manager_seller_decision, &negotiation.status) {
+                        (true, Some(true), _) => "Kabul kararı maç gününü bekliyor",
+                        (true, Some(false), _) => "Ret kararı maç gününü bekliyor",
+                        (_, _, core::transfers::deal::negotiation::NegotiationStatus::Pending) => "Bekliyor",
+                        (_, _, core::transfers::deal::negotiation::NegotiationStatus::Countered) => "Karşı teklif var",
+                        (_, _, core::transfers::deal::negotiation::NegotiationStatus::Accepted) => "Kabul edildi",
+                        (_, _, core::transfers::deal::negotiation::NegotiationStatus::Rejected) => "Reddedildi",
+                        (_, _, core::transfers::deal::negotiation::NegotiationStatus::Expired) => "Süresi doldu",
+                    };
+                    let phase = match &negotiation.phase {
+                        core::transfers::deal::negotiation::NegotiationPhase::InitialApproach { .. } => "İlk başvuru",
+                        core::transfers::deal::negotiation::NegotiationPhase::ClubNegotiation { .. } => "Kulüpler arası pazarlık",
+                        core::transfers::deal::negotiation::NegotiationPhase::PersonalTerms { .. } => "Oyuncu şartları",
+                        core::transfers::deal::negotiation::NegotiationPhase::MedicalAndFinalization { .. } => "Sağlık kontrolü ve tamamlama",
+                    };
+                    manager_negotiations.push(ManagerNegotiation {
+                        negotiation_id: negotiation.id,
+                        player_name: negotiation.player_name.clone(),
+                        direction: if is_seller_offer {
+                            "Gelen teklif".to_string()
+                        } else {
+                            "Alım teklifimiz".to_string()
+                        },
+                        fee: FormattingUtils::format_money(negotiation.current_offer.base_fee.amount),
+                        fee_raw: format!("{:.0}", negotiation.current_offer.base_fee.amount.max(1.0)),
+                        annual_wage_raw: negotiation.current_offer.resolved_annual_wage()
+                            .or(negotiation.offered_salary)
+                            .unwrap_or(1),
+                        contract_years: negotiation.current_offer.resolved_contract_years().unwrap_or(4),
+                        status: status.to_string(),
+                        phase: phase.to_string(),
+                        expires: negotiation.expiry_date.format("%d.%m.%Y").to_string(),
+                        can_update_fee: is_buyer_offer && matches!(
+                            &negotiation.phase,
+                            core::transfers::deal::negotiation::NegotiationPhase::ClubNegotiation { round, .. } if *round < 3
+                        ) && matches!(
+                            &negotiation.status,
+                            core::transfers::deal::negotiation::NegotiationStatus::Pending
+                                | core::transfers::deal::negotiation::NegotiationStatus::Countered
+                        ),
+                        can_update_wage: is_buyer_offer && !negotiation.is_loan && matches!(
+                            &negotiation.phase,
+                            core::transfers::deal::negotiation::NegotiationPhase::PersonalTerms { round, .. } if *round < 2
+                        ) && matches!(
+                            &negotiation.status,
+                            core::transfers::deal::negotiation::NegotiationStatus::Pending
+                                | core::transfers::deal::negotiation::NegotiationStatus::Countered
+                        ),
+                        can_respond_as_seller: is_seller_offer && matches!(
+                            &negotiation.phase,
+                            core::transfers::deal::negotiation::NegotiationPhase::ClubNegotiation { .. }
+                        ) && matches!(
+                            &negotiation.status,
+                            core::transfers::deal::negotiation::NegotiationStatus::Pending
+                                | core::transfers::deal::negotiation::NegotiationStatus::Countered
+                        ) && negotiation.manager_seller_decision.is_none(),
+                    });
+                }
+            }
+        }
+        manager_negotiations.sort_by(|a, b| a.player_name.cmp(&b.player_name));
+    }
+    let mut market_opportunities = Vec::new();
+    if is_managed {
+        for continent in &simulator_data.continents {
+            for country in &continent.countries {
+                for listing in &country.transfer_market.listings {
+                    if !matches!(
+                        listing.status,
+                        core::transfers::market::TransferListingStatus::Available
+                            | core::transfers::market::TransferListingStatus::InNegotiation
+                    ) || listing.club_id == team.club_id
+                    {
+                        continue;
+                    }
+                    let Some(player) = simulator_data.player(listing.player_id) else {
+                        continue;
+                    };
+                    let selling_club = simulator_data
+                        .club(listing.club_id)
+                        .map(|club| club.name.clone())
+                        .unwrap_or_else(|| "Unknown club".to_string());
+                    market_opportunities.push(MarketOpportunity {
+                        player_id: player.id,
+                        player_slug: player.slug(),
+                        player_name: player.full_name.to_string(),
+                        position: player.position().get_short_name().to_string(),
+                        selling_club,
+                        asking_price: FormattingUtils::format_money(listing.asking_price.amount),
+                        asking_price_raw: format!("{:.0}", listing.asking_price.amount.max(1.0)),
+                        is_loan: matches!(
+                            &listing.listing_type,
+                            core::transfers::market::TransferListingType::Loan
+                        ),
+                    });
+                }
+            }
+        }
+        market_opportunities.sort_by(|a, b| {
+            // Surface permanent-transfer targets before the usually cheaper
+            // loan listings, otherwise the 30-row cap can hide every player
+            // that accepts a wage and contract offer.
+            a.is_loan.cmp(&b.is_loan).then_with(|| {
+                let a_price = a.asking_price_raw.parse::<f64>().unwrap_or(f64::MAX);
+                let b_price = b.asking_price_raw.parse::<f64>().unwrap_or(f64::MAX);
+                a_price.total_cmp(&b_price)
+            })
+        });
+        market_opportunities.truncate(30);
+    }
 
     // Incoming/outgoing transfers: scan ALL countries because cross-country
     // transfers are recorded in the buying country's transfer_market, not the
@@ -339,6 +502,10 @@ pub async fn team_transfers_action(
             .unwrap_or_default(),
         menu_sections,
         team_slug: team.slug.clone(),
+        is_managed,
+        transfer_budget,
+        market_opportunities,
+        manager_negotiations,
         active_tab: "transfers",
         show_finances_tab: team.team_type.is_own_team(),
         show_academy_tab: team.team_type == core::TeamType::Main

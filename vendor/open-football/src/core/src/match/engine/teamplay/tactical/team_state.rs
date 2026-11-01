@@ -8,8 +8,30 @@
 //! [`phase`](super::phase), [`signals`](super::signals) and
 //! [`quality`](super::quality), and writes the result here.
 
+use crate::r#match::PlayerSide;
 use crate::r#match::engine::teamplay::tactical::inputs::TacticalRefreshInputs;
 use crate::r#match::engine::teamplay::tactical::phase::{BallSideZone, BallZone, GamePhase};
+
+fn line_progress(manager_override: Option<f32>, phase: GamePhase) -> f32 {
+    manager_override
+        .map(|progress| progress.clamp(0.0, 1.0))
+        .unwrap_or(match phase {
+            GamePhase::HighPress | GamePhase::Attack => 0.55,
+            GamePhase::AttackingTransition | GamePhase::Progression => 0.45,
+            GamePhase::BuildUp => 0.25,
+            GamePhase::MidBlock | GamePhase::DefensiveTransition => 1.0 / 3.0,
+            GamePhase::LowBlock => 0.18,
+        })
+}
+
+fn line_target_x(
+    manager_override: Option<f32>,
+    phase: GamePhase,
+    defending_side: PlayerSide,
+    field_width: f32,
+) -> f32 {
+    defending_side.x_at_progress(line_progress(manager_override, phase), field_width)
+}
 
 /// Team-level tactical context, shared across all eleven players. Cheap
 /// to copy (plain POD).
@@ -336,17 +358,21 @@ impl TeamTacticalState {
         // (also 0.333), so they only happened to agree while home was
         // Left. After the half-time swap both tables were read off the
         // wrong end.
-        let base_line_progress = |phase: GamePhase| -> f32 {
-            match phase {
-                GamePhase::HighPress | GamePhase::Attack => 0.55,
-                GamePhase::AttackingTransition | GamePhase::Progression => 0.45,
-                GamePhase::BuildUp => 0.25,
-                GamePhase::MidBlock | GamePhase::DefensiveTransition => 1.0 / 3.0,
-                GamePhase::LowBlock => 0.18,
-            }
-        };
-        let home_base_line = home_side.x_at_progress(base_line_progress(home.phase), field_width);
-        let away_base_line = away_side.x_at_progress(base_line_progress(away.phase), field_width);
+        // A manager-set line is an attacking-progress target (0 = deep,
+        // 1 = high) and overrides the phase-derived target. Keep the
+        // phase model for AI teams and saves without this optional field.
+        let home_base_line = line_target_x(
+            inputs.home_tactics.manager_line_override,
+            home.phase,
+            home_side,
+            field_width,
+        );
+        let away_base_line = line_target_x(
+            inputs.away_tactics.manager_line_override,
+            away.phase,
+            away_side,
+            field_width,
+        );
         // Defensive-quality risk drop: weak back lines lower their
         // line by up to 0.06 of the pitch so a shaky 5-rated CB pair
         // doesn't get caught chasing through-balls they can't recover.
@@ -561,5 +587,36 @@ impl TeamTacticalState {
         away.side_density_left = a_left.min(11) as u8;
         away.side_density_center = a_center.min(11) as u8;
         away.side_density_right = a_right.min(11) as u8;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{line_progress, line_target_x};
+    use crate::r#match::PlayerSide;
+    use crate::r#match::engine::teamplay::tactical::phase::GamePhase;
+
+    #[test]
+    fn manager_line_override_replaces_phase_target_and_clamps_to_pitch() {
+        assert_eq!(line_progress(Some(0.82), GamePhase::LowBlock), 0.82);
+        assert_eq!(line_progress(Some(1.4), GamePhase::LowBlock), 1.0);
+        assert_eq!(line_progress(Some(-0.2), GamePhase::Attack), 0.0);
+    }
+
+    #[test]
+    fn teams_without_a_manager_override_keep_phase_line_targets() {
+        assert_eq!(line_progress(None, GamePhase::LowBlock), 0.18);
+        assert_eq!(line_progress(None, GamePhase::Attack), 0.55);
+    }
+
+    #[test]
+    fn manager_line_target_stays_attacking_progress_after_the_sides_swap() {
+        let width = 105.0;
+        let left = line_target_x(Some(0.82), GamePhase::LowBlock, PlayerSide::Left, width);
+        let right = line_target_x(Some(0.82), GamePhase::LowBlock, PlayerSide::Right, width);
+
+        assert!((left - 86.1).abs() < 1e-4);
+        assert!((right - 18.9).abs() < 1e-4);
+        assert!((left + right - width).abs() < 1e-4);
     }
 }

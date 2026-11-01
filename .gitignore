@@ -1,5 +1,6 @@
 node_modules
 dist
+release
 data-src
 *.local
 .DS_Store
@@ -13,3 +14,4 @@ smoke-shots
 *.log
 /.github/workflows/
 **/target/
+/android/app/src/main/jniLibs/**

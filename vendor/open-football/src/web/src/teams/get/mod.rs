@@ -44,6 +44,11 @@ pub struct TeamGetTemplate {
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub team_slug: String,
+    pub team_id: u32,
+    pub can_manage: bool,
+    pub is_managed: bool,
+    pub pinned_starter_count: usize,
+    pub manager_training_focus: String,
     /// Numeric club id — the AI team-report button posts this to the agent.
     pub club_id: u32,
     /// Gates the AI report button: true only on the Main team page when an
@@ -75,6 +80,7 @@ pub struct TeamPlayer {
     pub is_loaned_out: bool,
     pub is_youth: bool,
     pub is_force_match_selection: bool,
+    pub training_focus: String,
     pub country_slug: String,
     pub country_code: String,
     pub country_name: String,
@@ -103,6 +109,7 @@ pub async fn team_get_action(
         .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
     let i18n = state.i18n.for_lang(&route_params.lang);
+    let managed_team_id = *state.manager_team_id.read().await;
 
     let indexes = simulator_data
         .indexes
@@ -179,6 +186,7 @@ pub async fn team_get_action(
                 is_loaned_out: false,
                 is_youth,
                 is_force_match_selection: p.is_force_match_selection,
+                training_focus: training_focus_key(p),
                 country_slug,
                 country_code,
                 country_name,
@@ -254,6 +262,7 @@ pub async fn team_get_action(
                             is_loaned_out: true,
                             is_youth: false,
                             is_force_match_selection: player.is_force_match_selection,
+                            training_focus: "none".to_string(),
                             country_slug,
                             country_code,
                             country_name,
@@ -318,6 +327,15 @@ pub async fn team_get_action(
         .unwrap_or_default();
 
     let club_id = team.club_id;
+    let manager_training_focus = match team.training_schedule.manager_focus {
+        core::ManagerTrainingFocus::Balanced => "balanced",
+        core::ManagerTrainingFocus::Fitness => "fitness",
+        core::ManagerTrainingFocus::Technical => "technical",
+        core::ManagerTrainingFocus::Tactical => "tactical",
+        core::ManagerTrainingFocus::SetPieces => "set_pieces",
+        core::ManagerTrainingFocus::Recovery => "recovery",
+    }
+    .to_string();
     // The AI team report is a club-level feature surfaced once, on the Main
     // team page only — not on B / reserve / youth (U18…) squads.
     let ai_enabled = team.team_type == TeamType::Main && state.ai.is_configured().await;
@@ -347,6 +365,16 @@ pub async fn team_get_action(
             .unwrap_or_default(),
         menu_sections,
         team_slug: team.slug.clone(),
+        team_id: team.id,
+        can_manage: team.team_type == TeamType::Main,
+        is_managed: managed_team_id == Some(team.id),
+        pinned_starter_count: team
+            .players
+            .players
+            .iter()
+            .filter(|player| player.is_force_match_selection)
+            .count(),
+        manager_training_focus,
         club_id,
         ai_enabled,
         active_tab: "squad",
@@ -355,6 +383,31 @@ pub async fn team_get_action(
         newspaper_count: NewspaperCounter::count(simulator_data, team),
         players,
     })
+}
+
+fn training_focus_key(player: &Player) -> String {
+    use core::{SkillType, TrainingFocus};
+    let Some(focus) = player
+        .individual_training
+        .as_ref()
+        .and_then(|plan| plan.focus_areas.first())
+    else {
+        return "none".to_string();
+    };
+    match focus {
+        TrainingFocus::FitnessBuilding => "fitness",
+        TrainingFocus::MentalDevelopment => "mental",
+        TrainingFocus::WeakFootImprovement => "weak_foot",
+        TrainingFocus::SpecificSkill(SkillType::FreeKicks) => "free_kicks",
+        TrainingFocus::SpecificSkill(SkillType::LongShots) => "long_shots",
+        TrainingFocus::SpecificSkill(SkillType::Heading) => "heading",
+        TrainingFocus::SpecificSkill(SkillType::Tackling) => "tackling",
+        TrainingFocus::SpecificSkill(SkillType::Crossing) => "crossing",
+        TrainingFocus::SpecificSkill(SkillType::Dribbling) => "dribbling",
+        TrainingFocus::SpecificSkill(SkillType::Penalties) => "penalties",
+        TrainingFocus::PositionRetraining(_) | TrainingFocus::InjuryRecovery => "none",
+    }
+    .to_string()
 }
 
 fn get_neighbor_teams(

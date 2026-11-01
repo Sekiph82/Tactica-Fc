@@ -528,7 +528,15 @@ impl SquadSelector {
         };
 
         let starting_pool = Self::starting_pool(team, &available, ctx, tactics);
-        let main_squad = scx.select_starting_eleven(team.id, &starting_pool);
+        let selected_xi = scx.select_starting_eleven(team.id, &starting_pool);
+        let main_squad = apply_manager_lineup(
+            team,
+            tactics,
+            &starting_pool,
+            selected_xi,
+            ctx.is_friendly,
+            ctx.date,
+        );
 
         let main_squad_ids: HashSet<u32> = main_squad.iter().map(|mp| mp.id).collect();
         let remaining: Vec<&Player> = available
@@ -861,6 +869,66 @@ impl SquadSelector {
             keeper_brief: None,
         }
     }
+}
+
+/// Apply the managed first team's positional lineup after the coach has
+/// selected an XI. Unassigned slots retain the coach's selection where
+/// possible; every manual pick still has to be in the engine's eligible
+/// starting pool for this fixture.
+fn apply_manager_lineup(
+    team: &Team,
+    tactics: &Tactics,
+    available: &[&Player],
+    automatic_xi: Vec<MatchPlayer>,
+    is_friendly: bool,
+    date: NaiveDate,
+) -> Vec<MatchPlayer> {
+    if team.team_type != TeamType::Main
+        || is_friendly
+        || tactics.manager_lineup.len() != tactics.positions().len()
+    {
+        return automatic_xi;
+    }
+
+    let mut used = HashSet::with_capacity(tactics.positions().len());
+    let mut result = Vec::with_capacity(tactics.positions().len());
+    for (slot_index, slot) in tactics.positions().iter().copied().enumerate() {
+        let manual_player = tactics.manager_lineup[slot_index]
+            .and_then(|player_id| available.iter().copied().find(|p| p.id == player_id))
+            .filter(|player| !used.contains(&player.id));
+        let automatic_player = automatic_xi
+            .iter()
+            .find(|player| {
+                player.tactical_position.current_position == slot && !used.contains(&player.id)
+            })
+            .and_then(|match_player| available.iter().copied().find(|p| p.id == match_player.id))
+            .or_else(|| {
+                automatic_xi
+                    .iter()
+                    .find(|player| !used.contains(&player.id))
+                    .and_then(|match_player| {
+                        available.iter().copied().find(|p| p.id == match_player.id)
+                    })
+            });
+        let chosen = manual_player.or(automatic_player).or_else(|| {
+            available
+                .iter()
+                .copied()
+                .find(|player| !used.contains(&player.id))
+        });
+
+        if let Some(player) = chosen {
+            used.insert(player.id);
+            result.push(MatchPlayer::from_player(
+                team.id,
+                player,
+                slot,
+                false,
+                Some(date),
+            ));
+        }
+    }
+    result
 }
 
 /// Helpers for deriving the soft signals fed into [`StrategyInputs`]

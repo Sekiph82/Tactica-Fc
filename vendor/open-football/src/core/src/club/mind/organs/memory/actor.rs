@@ -13,7 +13,7 @@
 /// What kind of thing a memory is about. Separated from the id because
 /// ids are only unique within a kind — staff 412 and club 412 are
 /// different actors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub enum ActorKind {
     /// No specific subject — a memory about a situation rather than a
     /// person or institution (an injury, a debut, a tournament).
@@ -66,7 +66,7 @@ impl ActorKind {
 }
 
 /// A reference to whoever a memory concerns. 8 bytes, `Copy`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub struct ActorRef {
     pub kind: ActorKind,
     /// Id within `kind`. Meaningless (and zero by convention) when

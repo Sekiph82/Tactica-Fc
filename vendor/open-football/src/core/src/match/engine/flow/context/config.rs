@@ -4,7 +4,9 @@
 use crate::r#match::engine::environment::MatchEnvironment;
 use crate::r#match::engine::referee::RefereeProfile;
 use crate::r#match::{CompetitionKind, FixtureContext};
+use crate::r#match::LiveMatchSession;
 use chrono::{NaiveDate, Utc};
+use std::sync::Arc;
 
 /// Full match-construction inputs. Replaces the loose
 /// `play_seeded(.., seed)` signature for callers that need to inject
@@ -24,6 +26,7 @@ pub struct MatchEngineConfig {
     pub competition: CompetitionKind,
     pub is_knockout: bool,
     pub match_recordings: bool,
+    pub live_session: Option<Arc<LiveMatchSession>>,
 }
 
 impl Default for MatchEngineConfig {
@@ -36,6 +39,7 @@ impl Default for MatchEngineConfig {
             competition: CompetitionKind::League,
             is_knockout: false,
             match_recordings: false,
+            live_session: None,
         }
     }
 }
@@ -52,6 +56,7 @@ impl MatchEngineConfig {
             competition: fixture.competition,
             is_knockout: fixture.knockout,
             match_recordings,
+            live_session: None,
         }
     }
 

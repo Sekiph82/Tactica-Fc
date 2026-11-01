@@ -50,7 +50,7 @@ impl GoalDomain {
 /// is the *character* of the want, and it shapes how the escalation
 /// ladder reads — a man pursuing an ambition and a man nursing a
 /// grievance behave differently even at identical strength.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum GoalOrigin {
     #[default]
     Unknown,
@@ -104,7 +104,7 @@ impl GoalOrigin {
 
 /// The concrete signals a goal latched onto. A packed bit-set so a goal
 /// stays small; every atom is a thing a renderer can name.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GoalEvidence(u64);
 
 impl GoalEvidence {
@@ -238,7 +238,7 @@ impl GoalEvidence {
 /// Why he cannot act on a goal even though he holds it. Distinct from
 /// abandoning it — a blocked goal keeps its strength and goes on
 /// colouring his mood; it simply has nowhere to go this window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum GoalBlocker {
     #[default]
     None,

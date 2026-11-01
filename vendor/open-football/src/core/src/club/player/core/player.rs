@@ -53,7 +53,7 @@ use std::fmt::{Display, Formatter, Result};
 /// A sell-on promise owed to a previous seller on the next permanent sale.
 /// Stacks: a player can accumulate multiple obligations from different past
 /// clubs. Capped at 3 to prevent unbounded growth over long careers.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SellOnObligation {
     pub beneficiary_club_id: u32,
     pub percentage: f32,
@@ -63,7 +63,7 @@ pub struct SellOnObligation {
 /// tick at the team level and read by the desire / adaptation pipeline.
 /// Cleared when the player transfers — a new club rebuilds it on its
 /// next week's pre-tick.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SquadSocialView {
     /// Number of senior squad teammates who share the player's primary
     /// nationality (country_id match). Capped at u8::MAX.
@@ -97,7 +97,7 @@ impl SquadSocialView {
 /// Cleared on transfer — a new club rebuilds it on its next weekly pass.
 ///
 /// [`AbilityEstimator::observable_level`]: crate::club::staff::perception::AbilityEstimator::observable_level
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct SquadStandingView {
     /// The man who picks the side. 0 when the bench is vacant.
     pub head_coach_id: u32,
@@ -158,7 +158,7 @@ impl SquadStandingView {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Player {
     //person data
     pub id: u32,
@@ -433,7 +433,7 @@ pub struct Player {
 /// the renderer can attribute the request to the right narrative axis,
 /// and `process_transfer_desire` keeps `Req` alive while at least one
 /// reason is unresolved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TransferRequestReason {
     /// Behaviour band crossed `is_poor` — character / discipline issues.
     PoorBehaviour,
@@ -488,7 +488,7 @@ pub enum TransferRequestReason {
 /// verifier needs to decide whether the promise was kept — most use
 /// `baseline_apps` plus a per-kind threshold, but role / positional
 /// promises read additional state at verification time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ManagerPromiseKind {
     /// "You'll play more" — kept if appearances since the promise meet
     /// the per-kind cadence (≥1 per ~10 days).
@@ -523,7 +523,7 @@ pub enum ManagerPromiseKind {
 /// during the window, and `credibility_at_creation` to scale how badly a
 /// broken promise hurts (cheap, off-the-cuff promises shouldn't tank
 /// morale the way a formal commitment does).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ManagerPromise {
     pub kind: ManagerPromiseKind,
     pub made_on: NaiveDate,
@@ -1950,7 +1950,7 @@ impl Person for Player {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum PlayerPreferredFoot {
     Left,
     Right,
@@ -1968,7 +1968,7 @@ impl PlayerPreferredFoot {
 }
 
 /// Per-foot ownership on a 0-100 scale (100 = fully natural foot).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlayerFoots {
     pub left: u8,
     pub right: u8,

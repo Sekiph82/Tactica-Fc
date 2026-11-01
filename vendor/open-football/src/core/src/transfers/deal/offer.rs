@@ -9,7 +9,7 @@ use chrono::NaiveDate;
 /// installed on the player's contract once the move closes — keeping
 /// the two sides separate avoids the wage/length numbers leaking into
 /// the seller-side acceptance maths.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TransferOffer {
     pub base_fee: CurrencyValue,
     pub clauses: Vec<TransferClause>,
@@ -43,7 +43,7 @@ pub struct TransferOffer {
 ///
 /// Fields are intentionally `Option` where they're "use the calculator
 /// default if absent" — the execution layer fills only what is staged.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersonalTermsOffer {
     /// Annual salary the buyer commits to.
     pub annual_wage: Option<u32>,
@@ -69,7 +69,7 @@ pub struct PersonalTermsOffer {
 /// A subset of [`PlayerSquadStatus`] (only the roles that come up as
 /// realistic public promises) so the negotiation can't accidentally
 /// commit to internal states like `NotYetSet` or `Invalid`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PromisedSquadStatus {
     KeyPlayer,
     FirstTeamRegular,
@@ -123,7 +123,7 @@ impl PromisedSquadStatus {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum TransferClause {
     AppearanceFee(CurrencyValue, u32),  // Money after X appearances
     GoalBonus(CurrencyValue, u32),      // Money after X goals

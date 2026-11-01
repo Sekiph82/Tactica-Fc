@@ -5,7 +5,7 @@
 //! "why" without re-deriving it.
 
 /// Which club facility a board decision targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BoardFacility {
     Training,
     Youth,

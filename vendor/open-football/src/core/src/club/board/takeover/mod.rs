@@ -12,7 +12,7 @@ use super::context::{BoardContext, FfpStatus};
 use super::decision::BoardDecision;
 use super::ownership::{OwnershipModel, OwnershipType};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum TakeoverStatus {
     #[default]
     None,
@@ -21,7 +21,7 @@ pub enum TakeoverStatus {
     Completed,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct TakeoverWatch {
     pub status: TakeoverStatus,
     /// Months the watch has spent in the current status.

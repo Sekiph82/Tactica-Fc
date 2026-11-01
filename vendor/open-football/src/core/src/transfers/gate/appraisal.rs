@@ -160,7 +160,7 @@ impl OfferView {
 /// back to a bare prestige wall.
 ///
 /// `Copy` on purpose: it rides on a negotiation and is rebuilt per round.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct PlayerStance {
     // ── Money ───────────────────────────────────────────────────
     /// What he is paid today, annual.
@@ -468,7 +468,7 @@ impl PlayerStance {
 }
 
 /// Which axis killed the deal — for the story, the census, and the trace.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TermsRefusalCause {
     /// He would go, for more money than this buyer can hold.
     WageDemand,

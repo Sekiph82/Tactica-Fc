@@ -15,6 +15,7 @@ use core::SimulatorData;
 use core::Tactics;
 use core::Team;
 use core::TeamType;
+use core::TacticalStyle;
 use serde::Deserialize;
 use std::borrow::Cow;
 
@@ -43,6 +44,11 @@ pub struct TeamTacticsTemplate {
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub team_slug: String,
+    pub is_managed: bool,
+    pub formation_key: String,
+    pub style_key: &'static str,
+    pub pressing_level: u8,
+    pub defensive_line_level: u8,
     pub active_tab: &'static str,
     pub show_finances_tab: bool,
     pub show_academy_tab: bool,
@@ -50,6 +56,8 @@ pub struct TeamTacticsTemplate {
     pub newspaper_count: usize,
     pub formation_name: String,
     pub formation_players: Vec<FormationPlayer>,
+    pub lineup_slots: Vec<LineupSlot>,
+    pub lineup_candidates: Vec<LineupCandidate>,
     /// Most recent in-match shapes the team actually used. Lets the
     /// view show "Plan: 4-3-3 — Last used: 4-5-1, 4-4-2, 4-4-2" so the
     /// user can see when the coach is shifting shape mid-match.
@@ -63,6 +71,19 @@ pub struct FormationPlayer {
     pub is_generated: bool,
     pub rating: String,
     pub css_class: String,
+}
+
+pub struct LineupSlot {
+    pub index: usize,
+    pub position_name: String,
+    /// Zero means this slot is left to the engine's automatic selection.
+    pub manual_player_id: u32,
+}
+
+pub struct LineupCandidate {
+    pub id: u32,
+    pub name: String,
+    pub positions: String,
 }
 
 pub struct RecentUsedShape {
@@ -93,6 +114,7 @@ pub async fn team_tactics_get_action(
         .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
     let i18n = state.i18n.for_lang(&route_params.lang);
+    let managed_team_id = *state.manager_team_id.read().await;
 
     let team_id = simulator_data
         .indexes
@@ -110,10 +132,52 @@ pub async fn team_tactics_get_action(
 
     let league = team.league_id.and_then(|id| simulator_data.league(id));
 
-    let last_match = LastMatchLookup::find(team);
+    let is_managed = managed_team_id == Some(team.id);
+    let last_match = if is_managed {
+        None
+    } else {
+        LastMatchLookup::find(team)
+    };
     let lineup = TacticsLineupBuilder::build(team, last_match);
     let formation_name = lineup.formation_name;
     let formation_players = lineup.players;
+    let formation_key = format!("{:?}", team.tactics().tactic_type);
+    let current_tactics = team.tactics();
+    let style_key = match current_tactics.tactical_style() {
+        TacticalStyle::Attacking => "attacking",
+        TacticalStyle::Defensive => "defensive",
+        TacticalStyle::Balanced => "balanced",
+        TacticalStyle::Possession => "possession",
+        TacticalStyle::Counterattack => "counterattack",
+        TacticalStyle::WingPlay => "wing_play",
+        TacticalStyle::WidePlay => "wide_play",
+        TacticalStyle::Compact => "compact",
+        TacticalStyle::Experimental => "experimental",
+    };
+    let lineup_slots: Vec<LineupSlot> = current_tactics
+        .positions()
+        .iter()
+        .enumerate()
+        .map(|(index, position)| LineupSlot {
+            index,
+            position_name: position.get_short_name().to_string(),
+            manual_player_id: current_tactics
+                .manager_lineup
+                .get(index)
+                .and_then(|id| *id)
+                .unwrap_or(0),
+        })
+        .collect();
+    let lineup_candidates: Vec<LineupCandidate> = team
+        .players
+        .players
+        .iter()
+        .map(|player| LineupCandidate {
+            id: player.id,
+            name: player.full_name.to_string(),
+            positions: player.positions.display_positions_compact(),
+        })
+        .collect();
 
     let recent_used_shapes = RecentShapesView::build(team, simulator_data, &i18n);
 
@@ -169,12 +233,19 @@ pub async fn team_tactics_get_action(
             .unwrap_or_default(),
         menu_sections,
         team_slug: team.slug.clone(),
+        is_managed,
+        formation_key,
+        style_key,
+        pressing_level: (current_tactics.pressing_intensity() * 10.0).round() as u8,
+        defensive_line_level: (current_tactics.defensive_line_height() * 10.0).round() as u8,
         active_tab: "tactics",
         show_finances_tab: team.team_type.is_own_team(),
         show_academy_tab: team.team_type == TeamType::Main || team.team_type == TeamType::U18,
         newspaper_count: NewspaperCounter::count(simulator_data, team),
         formation_name,
         formation_players,
+        lineup_slots,
+        lineup_candidates,
         recent_used_shapes,
     })
 }
@@ -248,14 +319,30 @@ impl TacticsLineupBuilder {
         let formation_positions = tactics.positions();
 
         let players = team.players();
+        let manual_lineup = if last_match.is_none() {
+            tactics.manager_lineup.as_slice()
+        } else {
+            &[]
+        };
         let mut recorded_pool: Vec<(u32, PlayerPositionType)> = last_match
             .map(|m| m.starting_eleven.clone())
             .unwrap_or_default();
         let mut used: Vec<u32> = Vec::new();
         let mut out: Vec<FormationPlayer> = Vec::new();
 
-        for required_pos in formation_positions.iter() {
-            let chosen = Self::take_recorded(&mut recorded_pool, required_pos, &players, &used)
+        for (slot_index, required_pos) in formation_positions.iter().enumerate() {
+            let manually_chosen = manual_lineup
+                .get(slot_index)
+                .and_then(|player_id| *player_id)
+                .and_then(|player_id| {
+                    players
+                        .iter()
+                        .find(|player| player.id == player_id && player.is_ready_for_match())
+                        .copied()
+                })
+                .filter(|player| !used.contains(&player.id));
+            let chosen = manually_chosen
+                .or_else(|| Self::take_recorded(&mut recorded_pool, required_pos, &players, &used))
                 .or_else(|| Self::pick_best(required_pos, &players, &used));
             if let Some(player) = chosen {
                 used.push(player.id);

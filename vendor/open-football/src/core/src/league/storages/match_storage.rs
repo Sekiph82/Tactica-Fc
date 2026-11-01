@@ -3,6 +3,7 @@ use chrono::Duration;
 use chrono::NaiveDate;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use serde::{Deserialize, Serialize};
 
 /// Default retention window — three completed seasons. Long enough for anyrt
 /// realistic UI lookup (historical results, head-to-head, player career
@@ -27,7 +28,7 @@ pub const DEFAULT_RETENTION_DAYS: i64 = 365 * 3 + 1;
 /// Nothing here hands out `&mut MatchResult`, so the sharing is invisible
 /// to callers: every read below still borrows, and the two mutators replace
 /// whole values.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchStorage {
     results: HashMap<String, Arc<MatchResult>>,
     /// Secondary index: date → match ids recorded that day. Used to drop

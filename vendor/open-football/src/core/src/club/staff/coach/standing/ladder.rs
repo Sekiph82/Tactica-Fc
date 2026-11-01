@@ -19,7 +19,7 @@ use chrono::NaiveDate;
 
 /// Where a player stands. Ordered from most to least favoured, so a
 /// consumer can compare two players without a lookup table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, serde::Serialize, serde::Deserialize)]
 pub enum StandingRung {
     /// He does not leave the side.
     Undroppable,
@@ -103,7 +103,7 @@ impl StandingRung {
 /// The things a coach is holding against a player right now. Distinct from
 /// the dossier's scars, which are what is left years later; these are live,
 /// and some of them override the score outright.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GrievanceFlags(u8);
 
 impl GrievanceFlags {
@@ -158,7 +158,7 @@ impl GrievanceFlags {
 /// into the dossier rather than carried around.
 ///
 /// [`CoachMemory`]: crate::club::staff::coach::CoachMemory
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct CoachStanding {
     /// −1..=1. What the evidence says.
     pub score: f32,

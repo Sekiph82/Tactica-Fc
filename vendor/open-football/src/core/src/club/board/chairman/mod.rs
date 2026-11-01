@@ -9,7 +9,7 @@
 /// Ownership personality — a simplified chairman archetype whose traits
 /// shape how the board actually exercises its powers. Two knobs, each
 /// with meaningful consequences downstream of board.simulate().
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ChairmanAmbition {
     #[default]
     Balanced,
@@ -22,7 +22,7 @@ pub enum ChairmanAmbition {
     Conservative,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ChairmanPatience {
     #[default]
     Medium,
@@ -32,7 +32,7 @@ pub enum ChairmanPatience {
     High,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ChairmanProfile {
     pub ambition: ChairmanAmbition,
     pub patience: ChairmanPatience,

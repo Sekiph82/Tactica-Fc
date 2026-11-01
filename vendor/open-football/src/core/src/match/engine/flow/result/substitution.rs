@@ -52,6 +52,8 @@ pub enum SubstitutionReason {
     /// player shrugs off.
     #[default]
     Discretionary,
+    /// Chosen directly by the human manager during a live match.
+    Manager,
     /// The side lost its goalkeeper (red card, typically) and burned a
     /// substitution to bring the bench keeper on for an outfielder.
     /// The sacrificed player is a victim of circumstance, not coach

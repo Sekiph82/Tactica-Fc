@@ -26,7 +26,7 @@ use super::store::FixedStore;
 /// Four axes, because collapsing them loses real behaviour: a player can
 /// respect a manager he dislikes, be fond of a club that treated him
 /// badly, and owe a debt to someone he does not trust.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct ActorAccount {
     pub actor: ActorRef,
     /// Will he keep his word? -100..=100. Moved almost exclusively by

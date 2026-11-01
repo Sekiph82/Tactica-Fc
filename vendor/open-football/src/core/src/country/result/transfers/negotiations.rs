@@ -323,14 +323,42 @@ impl NegotiationPass {
                     Self::resolve_initial_approach(country, neg_id, &neg_data, date, &mut outcomes);
                 }
                 NegotiationPhase::ClubNegotiation { round, .. } => {
-                    Self::resolve_club_negotiation(
-                        country,
-                        neg_id,
-                        &neg_data,
-                        round,
-                        date,
-                        &mut outcomes,
-                    );
+                    let manager_decision = country
+                        .transfer_market
+                        .negotiations
+                        .get_mut(&neg_id)
+                        .and_then(|negotiation| negotiation.manager_seller_decision.take());
+                    match manager_decision {
+                        Some(true) => {
+                            let auction = Self::auction_state(country, neg_id, neg_data.player_id);
+                            let deadline = PlanningCadence::deadline_window(country, date);
+                            Self::seller_accepts(
+                                country,
+                                &neg_data,
+                                neg_id,
+                                date,
+                                &auction,
+                                &deadline,
+                                &mut outcomes,
+                            );
+                        }
+                        Some(false) => Self::seller_rejects(
+                            country,
+                            &neg_data,
+                            neg_id,
+                            None,
+                            Some(NegotiationRejectionReason::SellerRefusedToNegotiate),
+                            &mut outcomes,
+                        ),
+                        None => Self::resolve_club_negotiation(
+                            country,
+                            neg_id,
+                            &neg_data,
+                            round,
+                            date,
+                            &mut outcomes,
+                        ),
+                    }
                 }
                 NegotiationPhase::PersonalTerms { round, .. } => {
                     Self::resolve_personal_terms(
@@ -1124,7 +1152,7 @@ impl NegotiationPass {
                 outcomes,
             );
         } else {
-            Self::seller_rejects(country, neg_data, neg_id, floor.as_ref(), outcomes);
+            Self::seller_rejects(country, neg_data, neg_id, floor.as_ref(), None, outcomes);
         }
     }
 
@@ -2255,16 +2283,19 @@ impl NegotiationPass {
         neg_data: &NegotiationData,
         neg_id: u32,
         floor: Option<&SellerFloorVerdict>,
+        reason_override: Option<NegotiationRejectionReason>,
         outcomes: &mut NegotiationOutcomes,
     ) {
         // Final round: a bid still under the seller's absolute floor is
         // rejected with the floor's own reason (PlayerTooImportant for a
         // core man), everything else as a plain price failure.
-        let reason = floor
-            .as_ref()
-            .filter(|f| neg_data.offer_amount < f.min_fee)
-            .map(|f| f.reason.clone())
-            .unwrap_or(NegotiationRejectionReason::AskingPriceTooHigh);
+        let reason = reason_override.unwrap_or_else(|| {
+            floor
+                .as_ref()
+                .filter(|f| neg_data.offer_amount < f.min_fee)
+                .map(|f| f.reason.clone())
+                .unwrap_or(NegotiationRejectionReason::AskingPriceTooHigh)
+        });
         if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
             negotiation.reject_with_reason(reason);
         }
@@ -4550,6 +4581,147 @@ mod seller_fee_floor_tests {
             neg.rejection_reason,
             Some(NegotiationRejectionReason::AskingPriceTooHigh),
             "the rejection must come from the market-value fee floor"
+        );
+    }
+
+    #[test]
+    fn an_agreed_permanent_offer_completes_and_queues_the_roster_move() {
+        let target = Ff::player(
+            100,
+            90,
+            24,
+            1000,
+            PlayerSquadStatus::NotNeeded,
+            Ff::far_contract(),
+        );
+        let mut country = Ff::country(vec![target]);
+        country.transfer_market.transfer_window_open = true;
+        country.transfer_market.listings.push(TransferListing::new(
+            100,
+            Ff::SELLER_ID,
+            Ff::SELLER_ID * 10,
+            CurrencyValue::new(500_000.0, Currency::Usd),
+            Ff::date(),
+            TransferListingType::Transfer,
+        ));
+        Ff::insert_negotiation(&mut country, 500_000.0);
+        {
+            let negotiation = country
+                .transfer_market
+                .negotiations
+                .get_mut(&Ff::NEG_ID)
+                .unwrap();
+            negotiation.advance_to_personal_terms(Ff::date());
+            negotiation.open_salary_at(50_000);
+            negotiation.advance_to_medical(Ff::date());
+        }
+        let mut neg_data = Ff::neg_data(100, 500_000.0, 500_000.0);
+        neg_data.is_unsolicited = false;
+
+        let mut summary = TransferActivitySummary::new();
+        let mut outcomes = NegotiationOutcomes {
+            deferred: Vec::new(),
+            free_agent_signings: Vec::new(),
+            free_agent_rejected_ids: Vec::new(),
+            player_signals: Vec::new(),
+        };
+        let country_id = country.id;
+        NegotiationPass::medical_passed(
+            &mut country,
+            country_id,
+            &neg_data,
+            Ff::NEG_ID,
+            Ff::date(),
+            &mut summary,
+            false,
+            false,
+            &mut outcomes,
+        );
+
+        assert_eq!(summary.completed_transfers, 1);
+        assert_eq!(country.transfer_market.transfer_history.len(), 1);
+        assert_eq!(
+            country.transfer_market.listings[0].status,
+            TransferListingStatus::Completed
+        );
+        assert_eq!(outcomes.deferred.len(), 1);
+        assert_eq!(outcomes.deferred[0].player_id, 100);
+        assert_eq!(outcomes.deferred[0].selling_club_id, Ff::SELLER_ID);
+        assert_eq!(outcomes.deferred[0].buying_club_id, Ff::BUYER_ID);
+    }
+
+    #[test]
+    fn an_agreed_loan_completes_outside_the_transfer_window_with_its_duration() {
+        let target = Ff::player(
+            100,
+            90,
+            24,
+            1000,
+            PlayerSquadStatus::NotNeeded,
+            Ff::far_contract(),
+        );
+        let mut country = Ff::country(vec![target]);
+        country.transfer_market.listings.push(TransferListing::new(
+            100,
+            Ff::SELLER_ID,
+            Ff::SELLER_ID * 10,
+            CurrencyValue::new(50_000.0, Currency::Usd),
+            Ff::date(),
+            TransferListingType::Loan,
+        ));
+        Ff::insert_negotiation(&mut country, 50_000.0);
+        {
+            let negotiation = country
+                .transfer_market
+                .negotiations
+                .get_mut(&Ff::NEG_ID)
+                .unwrap();
+            negotiation.is_loan = true;
+            negotiation.current_offer.loan_duration_months = Some(6);
+            negotiation.advance_to_personal_terms(Ff::date());
+            negotiation.advance_to_medical(Ff::date());
+        }
+        let mut neg_data = Ff::neg_data(100, 50_000.0, 50_000.0);
+        neg_data.is_loan = true;
+        neg_data.is_unsolicited = false;
+
+        let mut summary = TransferActivitySummary::new();
+        let mut outcomes = NegotiationOutcomes {
+            deferred: Vec::new(),
+            free_agent_signings: Vec::new(),
+            free_agent_rejected_ids: Vec::new(),
+            player_signals: Vec::new(),
+        };
+        let country_id = country.id;
+        NegotiationPass::medical_passed(
+            &mut country,
+            country_id,
+            &neg_data,
+            Ff::NEG_ID,
+            Ff::date(),
+            &mut summary,
+            false,
+            false,
+            &mut outcomes,
+        );
+
+        assert_eq!(summary.completed_transfers, 1);
+        assert_eq!(country.transfer_market.transfer_history.len(), 1);
+        assert_eq!(
+            country.transfer_market.listings[0].status,
+            TransferListingStatus::Completed
+        );
+        assert_eq!(outcomes.deferred.len(), 1);
+        assert_eq!(outcomes.deferred[0].player_id, 100);
+        assert!(matches!(
+            country.transfer_market.transfer_history[0].transfer_type,
+            crate::transfers::TransferType::Loan(_)
+        ));
+        assert_eq!(
+            country.transfer_market.negotiations[&Ff::NEG_ID]
+                .current_offer
+                .loan_duration_months,
+            Some(6)
         );
     }
 

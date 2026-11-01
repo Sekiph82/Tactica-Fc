@@ -17,7 +17,7 @@ use super::organs::memory::{ActorRef, EpisodeKind, FactClaim, MindEpisode};
 use super::submind::{MindOption, MindView, MoodContribution, ReasonSet, SubMind};
 
 /// His sense of what he is owed.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct FinancialMind {
     /// −100..=100. How fairly he believes he is paid: negative when he
     /// thinks he is worth more than he gets.

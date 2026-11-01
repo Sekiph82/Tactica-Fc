@@ -19,7 +19,7 @@ use chrono::NaiveDate;
 use super::advice::{KeeperAdvice, KeeperRecommendation, KeeperSuccession, KeeperTier};
 
 /// One keeper's standing in the department's plan.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct KeeperAssignment {
     pub tier: KeeperTier,
     /// When the department last committed to this standing — so a consumer
@@ -36,7 +36,7 @@ pub struct KeeperAssignment {
 /// One at a time, deliberately. A goalkeeping coach who nominates three
 /// boys at once is nominating nobody, and a selection layer that honours
 /// three nominations at once has stopped picking a team.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct KeeperNomination {
     pub player_id: u32,
     pub opened_on: NaiveDate,
@@ -58,7 +58,7 @@ impl KeeperNomination {
 }
 
 /// The department's standing view of the club's goalkeepers.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct KeeperRoomPlan {
     assignments: HashMap<u32, KeeperAssignment>,
     /// Declared order. Kept alongside the assignments so the pecking order

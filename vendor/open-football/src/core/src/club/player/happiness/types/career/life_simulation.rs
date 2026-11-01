@@ -3,7 +3,7 @@ use super::CareerDesireEvidence;
 /// Specific flavour of life-simulation request / mood. Kept closed so
 /// renderers can localise each category and tests can assert which
 /// bucket a particular detector emits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LifeSimulationDesireKind {
     /// Family hasn't settled at the new country (schools, social
     /// network, isolation). Player asks for support / time off / move.
@@ -88,7 +88,7 @@ impl LifeSimulationDesireKind {
 /// Severity tier specific to life-simulation moods. Renderer can
 /// translate to Minor/Moderate/Strong/Acute copy independent of the
 /// generic HappinessEventSeverity tier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LifeSimulationSeverity {
     Mild,
     Moderate,
@@ -110,7 +110,7 @@ impl LifeSimulationSeverity {
 /// What concretely triggered the desire/mood. Closed enum so emit
 /// sites pick the football-realistic cause. Renderer uses this for the
 /// "why now" framing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LifeSimulationTrigger {
     FamilyAbroadStress,
     SchoolingProblem,
@@ -156,7 +156,7 @@ impl LifeSimulationTrigger {
 /// Structured payload for any [`LifeSimulationDesireKind`] event. The
 /// renderer reads `kind` first, then severity / trigger / evidence to
 /// fill in the headline and reason copy.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LifeSimulationDesireContext {
     pub kind: LifeSimulationDesireKind,
     pub severity: LifeSimulationSeverity,

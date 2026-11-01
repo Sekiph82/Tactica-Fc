@@ -19,7 +19,7 @@
 //! `SimulatorData` graph is deep-cloned on every holiday publish, so this
 //! staying O(moves) rather than O(seasons) is the point.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TeamLeagueSpell {
     /// First season the side played in `league_id`, as a season START
     /// year — the same key the player history rows are filed under.
@@ -27,7 +27,7 @@ pub struct TeamLeagueSpell {
     pub league_id: u32,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct TeamLeagueHistory {
     /// Oldest first, one entry per division change.
     spells: Vec<TeamLeagueSpell>,

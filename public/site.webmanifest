@@ -1,0 +1,25 @@
+{
+  "id": "./",
+  "name": "TACTICA FC",
+  "short_name": "TACTICA FC",
+  "description": "A modern football management game.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#08090c",
+  "theme_color": "#08090c",
+  "icons": [
+    {
+      "src": "./tactica-brand/Tactica_FC_Black_Metal_192x192.png?v=25",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./tactica-brand/Tactica_FC_Black_Metal_512x512.png?v=25",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

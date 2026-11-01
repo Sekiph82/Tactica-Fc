@@ -15,7 +15,7 @@ pub use benefactor::ClubBenefactor;
 /// Who owns the club. Each archetype biases governance differently:
 /// member-owned clubs answer to supporters, state-backed owners chase
 /// trophies regardless of cash, private equity obsesses over resale.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum OwnershipType {
     /// Fan/member owned (Socios model). Reacts hardest to supporter mood,
     /// allergic to debt and unpopular sales.
@@ -121,7 +121,7 @@ impl OwnershipType {
 
 /// Persistent ownership submodel. Knobs are 0-100 so they compose into
 /// smooth multipliers rather than hard switches.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OwnershipModel {
     pub ownership_type: OwnershipType,
     /// Spending power the club's standing and its owner's archetype imply,

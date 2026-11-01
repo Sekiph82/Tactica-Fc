@@ -7,7 +7,7 @@ import { formationLayout } from '../game/match-pitch';
 const MATCH_DURATION_MS = 505_340;
 
 export interface OpenFootballBridge {
-  push(snapshots: readonly MatchPitchSnapshot[]): void;
+  push(snapshots: readonly MatchPitchSnapshot[], goals: readonly { player_id: number; time: number; is_auto_goal: boolean }[]): void;
   setPlaying(playing: boolean): void;
 }
 
@@ -76,7 +76,7 @@ export function OpenFootballPitch({
 
       let previousTime = 0;
       bridge = {
-        push(snapshots) {
+        push(snapshots, goals) {
           if (cancelled || snapshots.length === 0) return;
           const ball: number[][] = [];
           const players: Record<number, number[][]> = {};
@@ -92,7 +92,7 @@ export function OpenFootballPitch({
             }
             previousTime = time;
           }
-          if (ball.length) viewer.MatchViewer.pushRecording(JSON.stringify({ ball, players, events: [], states: {} }));
+          if (ball.length) viewer.MatchViewer.pushRecording(JSON.stringify({ ball, players, goals, events: [], states: {} }));
         },
         setPlaying(value) { viewer.MatchViewer.setPlaying(value); },
       };

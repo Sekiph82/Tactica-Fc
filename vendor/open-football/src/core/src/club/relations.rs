@@ -29,7 +29,7 @@ pub struct ChemistryContext {
 }
 
 /// Enhanced Relations system with complex relationship dynamics
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Relations {
     /// Player relationships
     players: RelationStore<PlayerRelation>,
@@ -357,7 +357,7 @@ impl Relations {
 }
 
 /// Store for relationships of a specific type
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct RelationStore<T: Relationship> {
     relations: FxHashMap<u32, T>,
 }
@@ -426,7 +426,7 @@ trait Relationship {
 }
 
 /// Player relationship details
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlayerRelation {
     /// Relationship level (-100 to 100)
     pub level: f32,
@@ -689,7 +689,7 @@ impl Relationship for PlayerRelation {
 }
 
 /// Staff relationship details
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StaffRelation {
     /// Relationship level (-100 to 100)
     pub level: f32,
@@ -827,7 +827,7 @@ impl Relationship for StaffRelation {
 
 /// Group dynamics and cliques
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct GroupDynamics {
     groups: FxHashMap<GroupId, Group>,
     entity_groups: FxHashMap<u32, FxHashSet<GroupId>>,
@@ -955,7 +955,7 @@ impl GroupDynamics {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct Group {
     id: GroupId,
     members: FxHashSet<u32>,
@@ -975,7 +975,7 @@ impl Group {
 type GroupId = u32;
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 enum GroupType {
     Nationality,
     AgeGroup,
@@ -988,7 +988,7 @@ enum GroupType {
 /// coach_relationship, group_cohesion, conflict_level, turnover_penalty)
 /// blended into a single 0..100 chemistry score that downstream systems
 /// (training, match rating, selection) can read.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct TeamChemistry {
     overall: f32,
     factors: ChemistryFactors,
@@ -1236,7 +1236,7 @@ impl RelationDecay {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ChemistryFactors {
     pub player_harmony: f32,
     pub leadership_quality: f32,
@@ -1246,7 +1246,7 @@ pub struct ChemistryFactors {
 }
 
 /// Relationship history tracking
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct RelationshipHistory {
     events: VecDeque<RelationshipEvent>,
     max_events: usize,
@@ -1274,7 +1274,7 @@ impl RelationshipHistory {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct RelationshipEvent {
     date: NaiveDate,
     subject_id: u32,
@@ -1284,7 +1284,7 @@ struct RelationshipEvent {
     new_value: f32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 enum SubjectType {
     Player,
     Staff,
@@ -1345,7 +1345,7 @@ impl RelationshipChange {
 }
 
 /// Mentorship types
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MentorshipType {
     Mentor,
     Mentee,

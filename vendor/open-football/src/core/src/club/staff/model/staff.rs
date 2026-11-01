@@ -25,13 +25,13 @@ use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use std::slice::Iter;
 use std::slice::IterMut;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StaffEvent {
     pub event_type: StaffEventType,
     pub days_ago: u16,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum StaffEventType {
     TrainingConducted,
     MatchObserved,
@@ -60,7 +60,7 @@ pub enum StaffEventType {
     BoardPresentation,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Staff {
     pub id: u32,
     pub full_name: FullName,
@@ -156,7 +156,7 @@ pub struct Staff {
     pub dossiers: CoachDossierStore,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StaffCollection {
     pub staffs: Vec<Staff>,
 
@@ -618,7 +618,7 @@ impl StaffCollection {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StaffPerformance {
     pub training_effectiveness: f32,  // 0-1 multiplier
     pub player_development_rate: f32, // 0-1 multiplier
@@ -627,7 +627,7 @@ pub struct StaffPerformance {
     pub last_evaluation_date: Option<NaiveDate>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub enum CoachingStyle {
     Authoritarian, // Strict discipline, high demands
     #[default]
@@ -1832,7 +1832,7 @@ impl StaffWeekAmongThePlayers {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum StaffLicenseType {
     ContinentalPro,
     ContinentalA,
@@ -1856,7 +1856,7 @@ impl Default for StaffPerformance {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StaffTrainingSession {
     pub session_type: TrainingType,
     pub intensity: TrainingIntensity,

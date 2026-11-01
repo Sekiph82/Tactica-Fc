@@ -14,7 +14,7 @@ use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct League {
     pub id: u32,
     pub name: String,
@@ -54,7 +54,7 @@ pub(crate) struct OpenedMatchday {
     new_season_started: bool,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct LeagueFinancials {
     pub prize_pool: i64,
     pub tv_deal_total: i64,
@@ -467,7 +467,7 @@ impl League {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct DayMonthPeriod {
     pub from_day: u8,
     pub from_month: u8,
@@ -486,7 +486,7 @@ impl DayMonthPeriod {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LeagueSettings {
     pub season_starting_half: DayMonthPeriod,
     pub season_ending_half: DayMonthPeriod,
@@ -502,7 +502,7 @@ pub struct LeagueSettings {
 }
 
 /// Identifies a league as one group within a larger competition.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LeagueGroup {
     pub name: String,
     pub competition: String,
@@ -523,7 +523,7 @@ pub struct LeagueGroup {
 
 /// Configuration for a grouped competition's end-of-season playoff. See
 /// [`crate::league::LeaguePlayoff`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LeaguePlayoffConfig {
     /// Top N of each group's table that enter the knockout bracket.
     pub qualifiers_per_group: u8,
@@ -539,7 +539,7 @@ pub struct LeaguePlayoffConfig {
 }
 
 /// Bracket shape for a grouped competition's playoff.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PlayoffFormat {
     /// Generic single-elimination: group seeds interleaved into one field,
     /// re-paired strongest-vs-weakest each round, byes to top seeds.

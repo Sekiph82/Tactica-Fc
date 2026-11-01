@@ -29,7 +29,7 @@ use chrono::{Datelike, NaiveDate};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TransferMarket {
     pub listings: Vec<TransferListing>,
     pub negotiations: HashMap<u32, TransferNegotiation>,
@@ -58,7 +58,7 @@ pub struct TransferMarket {
 /// did a quiet sell-list entry ever convert, did an agent's phone call ever
 /// start a deal. A layer that ships with its counter at zero has not landed,
 /// whatever the aggregate move totals say.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct MarketStoryCounters {
     /// Fee agreed on a player who had at least one other live bid.
     pub contested_agreements: u32,
@@ -83,7 +83,7 @@ pub struct MarketStoryCounters {
 /// `TransferClause` enum. Resolving an installment is a date check;
 /// resolving an appearance / goal / promotion bonus is a counter check
 /// the caller threads in.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PendingTransferClause {
     /// Unique id within this market — used for cancellation / debug.
     pub id: u32,
@@ -118,7 +118,7 @@ pub struct PendingTransferClause {
     pub created_on: Option<NaiveDate>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum ClauseTrigger {
     /// Fire on a specific calendar date. The settler compares
     /// `today >= scheduled_date` and `fires_so_far < max_fires`.
@@ -136,7 +136,7 @@ pub enum ClauseTrigger {
     Promotion,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TransferListing {
     pub player_id: u32,
     pub club_id: u32,
@@ -169,14 +169,14 @@ pub struct TransferListing {
     pub origin: TransferListingOrigin,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum TransferListingType {
     Transfer,
     Loan,
     EndOfContract,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TransferListingOrigin {
     /// Selling club listed the player for permanent transfer.
     SellerListed,
@@ -191,7 +191,7 @@ pub enum TransferListingOrigin {
     SyntheticUnsolicited,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum TransferListingStatus {
     Available,
     InNegotiation,

@@ -3,17 +3,17 @@ use crate::{Player, PlayerMailboxResult, PlayerResult, PlayerSquadStatus};
 use chrono::NaiveDate;
 use std::collections::VecDeque;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlayerMessage {
     pub message_type: PlayerMessageType,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum PlayerMessageType {
     ContractProposal(PlayerContractProposal),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlayerContractProposal {
     pub salary: u32,
     pub years: u8,
@@ -130,7 +130,7 @@ impl PlayerContractProposal {
 /// `desired_*` fields cover the headline terms; `demanded_*` carry the
 /// reason the player walked, so the AI can prioritise the right lever
 /// (better release clause vs. better base wage) on the next offer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlayerContractAsk {
     pub desired_salary: u32,
     pub desired_years: u8,
@@ -146,7 +146,7 @@ pub struct PlayerContractAsk {
     pub rejection_reason: Option<RejectionReason>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RejectionReason {
     LowSalary,
     ShortContract,
@@ -159,7 +159,7 @@ pub enum RejectionReason {
     WantsFirstTeamFootball,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlayerMailbox {
     messages: VecDeque<PlayerMessage>,
 }

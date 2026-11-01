@@ -16,7 +16,7 @@ use std::mem;
 use std::slice::Iter;
 use std::slice::IterMut;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TeamCollection {
     pub teams: Vec<Team>,
     /// Who was in the head-coach seat the last time the club looked.

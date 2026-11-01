@@ -37,7 +37,7 @@ use super::memory::{ActorRef, EpochDay, FactClaim, FixedStore};
 /// and neither is anything the happiness feed already carries, because
 /// the two would render side by side on the same day saying the same
 /// thing in different words.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub enum MindNoteKind {
     #[default]
     None,
@@ -133,7 +133,7 @@ impl MindNoteKind {
 }
 
 /// One dated turn. 16 bytes, `Copy`, no allocation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct MindNote {
     /// Who or where it concerns. [`ActorRef::NONE`] for the notes that
     /// are purely about him — most want notes, and self-knowledge.
@@ -188,7 +188,7 @@ impl MindNote {
 pub type MindNoteStore = FixedStore<MindNote, 12>;
 
 /// Everything he has noticed turning in himself.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct MindJournal {
     notes: MindNoteStore,
 }

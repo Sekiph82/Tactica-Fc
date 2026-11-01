@@ -27,6 +27,10 @@ pub struct MatchEventData {
     pub timestamp: u64,
     pub category: String,
     pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor_player_id: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub related_player_id: Option<u32>,
 }
 
 /// Position data item — stored in memory as full-precision values,
@@ -1182,6 +1186,30 @@ impl ResultMatchPositionData {
                 timestamp,
                 category: category.to_string(),
                 description,
+                actor_player_id: None,
+                related_player_id: None,
+            });
+        }
+    }
+
+    /// Record a gameplay event together with the players who caused it.
+    /// These IDs let live/replay presentation resolve names from the same
+    /// match roster without trying to infer participants from debug text.
+    pub fn add_match_event_with_players(
+        &mut self,
+        timestamp: u64,
+        category: &str,
+        description: String,
+        actor_player_id: Option<u32>,
+        related_player_id: Option<u32>,
+    ) {
+        if self.track_events {
+            self.events.push(MatchEventData {
+                timestamp,
+                category: category.to_string(),
+                description,
+                actor_player_id,
+                related_player_id,
             });
         }
     }

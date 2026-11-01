@@ -7,18 +7,18 @@ use crate::r#match::Score;
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use log::error;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Schedule {
     pub tours: Vec<ScheduleTour>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ScheduleTour {
     pub num: u8,
     pub items: Vec<ScheduleItem>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ScheduleItem {
     pub id: String,
 

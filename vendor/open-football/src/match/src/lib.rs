@@ -79,6 +79,22 @@ pub struct MatchViewer;
 
 #[wasm_bindgen]
 impl MatchViewer {
+    /// Append authoritative timestamped positions produced by the host engine.
+    #[wasm_bindgen(js_name = pushRecording)]
+    pub fn push_recording(json: String) {
+        crate::recording::loader::push_inline_recording(json);
+    }
+
+    #[wasm_bindgen(js_name = setPlaying)]
+    pub fn set_playing(playing: bool) {
+        crate::recording::playback::set_host_playing(playing);
+    }
+
+    #[wasm_bindgen(js_name = setSpeed)]
+    pub fn set_speed(speed: f32) {
+        crate::recording::playback::set_host_speed(speed);
+    }
+
     /// Entry point for the match page. `config` is the JSON form of
     /// [`ViewerConfig`]; the app takes over the canvas it names and runs until
     /// the page goes away.
@@ -97,6 +113,7 @@ impl MatchViewer {
         };
 
         let duration_ms = config.match_time_ms;
+        let start_time_ms = config.start_time_ms;
         let debug = config.debug;
         let instrumented = config.instrumented();
 
@@ -201,7 +218,11 @@ impl MatchViewer {
             // instrumented: the census lives in the render world and only
             // installs itself for a page that asked for the readout.
             .add_plugins(ProgramCensus)
-            .insert_resource(Playback::new(duration_ms))
+            .insert_resource({
+                let mut playback = Playback::new(duration_ms);
+                playback.time_ms = start_time_ms.clamp(0.0, duration_ms.max(0.0));
+                playback
+            })
             .init_resource::<ReplayTracks>()
             .init_resource::<ChunkLoader>()
             .init_resource::<RecordedSpans>()
@@ -516,7 +537,7 @@ impl MatchViewer {
                         // speed chip is part of the transport bar in the
                         // game too, and a button whose handler never runs is
                         // worse than no button.
-                        Timeline::handle_speed,
+                        (Timeline::handle_speed, Playback::apply_host_controls).chain(),
                         // Ahead of every camera system below, so a click on
                         // the reset chip lands on the frame it happened.
                         Timeline::handle_camera_reset,

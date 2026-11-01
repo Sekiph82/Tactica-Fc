@@ -1,6 +1,6 @@
 use crate::transfers::ScoutingRegion;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StaffAttributes {
     pub coaching: StaffCoaching,
     pub goalkeeping: StaffGoalkeeperCoaching,
@@ -10,7 +10,7 @@ pub struct StaffAttributes {
     pub medical: StaffMedical,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StaffCoaching {
     pub attacking: u8,
     pub defending: u8,
@@ -21,14 +21,14 @@ pub struct StaffCoaching {
     pub working_with_youngsters: u8,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StaffGoalkeeperCoaching {
     pub distribution: u8,
     pub handling: u8,
     pub shot_stopping: u8,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StaffMental {
     pub adaptability: u8,
     pub determination: u8,
@@ -37,7 +37,7 @@ pub struct StaffMental {
     pub motivating: u8,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StaffKnowledge {
     pub judging_player_ability: u8,
     pub judging_player_potential: u8,
@@ -64,7 +64,7 @@ pub struct StaffKnowledge {
 }
 
 /// One country a scout knows, and how well.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CountryKnowledge {
     pub country_id: u32,
     /// 0-100, on the same scale as [`RegionFamiliarity::level`].
@@ -73,7 +73,7 @@ pub struct CountryKnowledge {
     pub days_scouted: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RegionFamiliarity {
     pub region: ScoutingRegion,
     pub level: u8,
@@ -175,14 +175,14 @@ impl StaffKnowledge {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StaffDataAnalysis {
     pub judging_player_data: u8,
     pub judging_team_data: u8,
     pub presenting_data: u8,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StaffMedical {
     pub physiotherapy: u8,
     pub sports_science: u8,

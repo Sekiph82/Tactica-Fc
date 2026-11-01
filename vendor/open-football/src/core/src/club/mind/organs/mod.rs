@@ -120,7 +120,7 @@ impl SpellChange {
 /// `reflect` / `appraise` / `weigh`.
 ///
 /// [`PlayerMind`]: super::PlayerMind
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct MindOrgans {
     /// What he remembers, what he concluded, and where he stands with
     /// everyone who has mattered.

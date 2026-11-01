@@ -16,7 +16,7 @@ use super::organs::memory::{ActorKind, ActorRef, EpisodeKind, FactClaim, MindEpi
 use super::submind::{MindOption, MindView, MoodContribution, ReasonSet, SubMind};
 
 /// His read of the man picking the team.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct ProfessionalMind {
     /// Who he currently believes the manager to be. Compared against the
     /// situation each think, so a change of manager resets the read

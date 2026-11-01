@@ -22,7 +22,7 @@ use crate::club::mind::organs::memory::{
 use crate::club::mind::verdict::MoodContribution;
 
 /// Where his career is going, and how safe this job is.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct AmbitionMind {
     /// The club he currently works for, as an actor. Adopted on first
     /// contact so a manager appointed before his first think already

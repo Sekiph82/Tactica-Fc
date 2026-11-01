@@ -168,7 +168,7 @@ impl MindTickContext {
 /// `simulator_parallelization_audit`), the set is known at compile time,
 /// and an explicit fan-out costs nothing — while dynamic dispatch would
 /// cost an indirect call per faculty per player per week for no gain.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct PlayerMind {
     pub organs: MindOrgans,
 

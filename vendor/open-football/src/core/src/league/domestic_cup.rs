@@ -33,7 +33,7 @@ use std::collections::{HashMap, HashSet};
 /// intact). Powers the cup's History tab — a roll of honour of past
 /// champions. We store team ids, not names, so a club that is later
 /// renamed still resolves correctly when the page is rendered.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CupHistoryEntry {
     /// Calendar year the winning edition's round one was drawn in —
     /// the same anchor as [`DomesticCup::season_start_year`].
@@ -70,7 +70,7 @@ impl DomesticCupPrizes {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DomesticCup {
     /// The cup is run through a `League` flagged `is_cup = true`. Reusing
     /// `League` means the cup inherits match execution, result processing,

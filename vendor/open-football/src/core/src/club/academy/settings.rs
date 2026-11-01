@@ -4,7 +4,7 @@ use std::ops::Range;
 /// `players_count_range` based on academy tier and pipeline health; the
 /// intake and backfill paths read it to keep the resident squad in
 /// range.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AcademySettings {
     pub players_count_range: Range<u8>,
 }

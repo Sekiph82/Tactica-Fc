@@ -18,7 +18,7 @@
 /// every Saturday, which is what an unconstrained argmax over ability does.
 /// Ordered from most to least central so a consumer can compare standing
 /// without a lookup table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub enum KeeperTier {
     /// The number one. He plays the league.
     NumberOne,
@@ -76,7 +76,7 @@ impl KeeperTier {
 }
 
 /// One thing the goalkeeping coach has to say.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum KeeperAdvice {
     /// "He should be your number one." Raised when the department wants the
     /// declared order changed, not merely when someone scores higher this
@@ -150,7 +150,7 @@ impl KeeperAdvice {
 }
 
 /// How hard the department is pushing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum KeeperUrgency {
     /// Worth saying, no more than that.
     Noted,
@@ -161,7 +161,7 @@ pub enum KeeperUrgency {
 }
 
 /// One recommendation, with the keeper it is about.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct KeeperRecommendation {
     pub advice: KeeperAdvice,
     /// The keeper concerned. `None` for club-scoped advice about the shape
@@ -204,7 +204,7 @@ impl KeeperRecommendation {
 /// step when there is nobody in the building who could replace him. The
 /// point is that the question opens years before the answer is needed —
 /// which is exactly the part the sim was missing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, serde::Serialize, serde::Deserialize)]
 pub enum KeeperSuccession {
     /// The number one has years left and the club need not think about it.
     #[default]

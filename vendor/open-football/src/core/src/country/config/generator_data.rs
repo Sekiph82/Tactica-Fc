@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 // Update CountryGeneratorData and PeopleNameGeneratorData as per original
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct CountryGeneratorData {
     /// `Arc` so the per-tick `GlobalContext` name pools (see
     /// `CountryContext::people_names`) are shared, not deep-cloned, when
@@ -31,7 +31,7 @@ impl CountryGeneratorData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct PeopleNameGeneratorData {
     pub first_names: Vec<String>,
     pub last_names: Vec<String>,

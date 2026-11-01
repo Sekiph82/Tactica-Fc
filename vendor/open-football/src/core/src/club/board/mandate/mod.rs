@@ -28,7 +28,7 @@ pub use doctrine::{FeeEnvelope, MandateStretch, Reservation, ReservationVerdict,
 pub use ledger::{MandateExit, MandateLedger, MandateOutcome};
 
 /// The man whose shirt a request is about, when the club named one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MandateIncumbent {
     pub player_id: u32,
     pub age: u8,
@@ -36,7 +36,7 @@ pub struct MandateIncumbent {
 
 /// Who put the name in front of the board. A mandate the manager authored
 /// is one his own record is judged on when the minutes never arrive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MandateAuthor {
     Manager,
     DirectorOfFootball,
@@ -48,7 +48,7 @@ pub enum MandateAuthor {
 /// Every purpose is a claim about MINUTES — which is why the purpose and
 /// the curve below are the same decision stated twice, and why nothing
 /// downstream needs a per-purpose branch to act on one.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum MandatePurpose {
     /// Bought to be in the side now.
     Starter,
@@ -212,7 +212,7 @@ impl MandatePurpose {
 /// the man ahead of him is finished; a prospect climbs slowly and never
 /// all the way. Nothing downstream asks WHICH purpose it is looking at —
 /// it asks the curve what was promised for the season in front of it.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MinutesCurve {
     floor: f32,
     ceil: f32,
@@ -343,7 +343,7 @@ impl MinutesCurve {
 }
 
 /// What the board signed.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SigningMandate {
     pub purpose: MandatePurpose,
     /// Expected share of the club's matches per season over the deal.

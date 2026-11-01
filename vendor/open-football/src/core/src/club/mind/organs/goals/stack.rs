@@ -18,7 +18,7 @@ use std::cmp::Ordering;
 pub type GoalStore = FixedStore<MindGoal, 12>;
 
 /// The stack, plus the clock for its periodic review.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct GoalStack {
     goals: GoalStore,
     /// Last time the stack was reviewed. Review is weekly; this gates it

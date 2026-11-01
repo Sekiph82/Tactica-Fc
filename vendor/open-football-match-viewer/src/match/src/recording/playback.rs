@@ -7,12 +7,21 @@ use std::cell::Cell;
 
 thread_local! {
     static HOST_PLAYING: Cell<Option<bool>> = const { Cell::new(None) };
+    static HOST_SPEED: Cell<Option<f32>> = const { Cell::new(None) };
 }
 
 /// Let the host manager controls pause or resume the broadcast clock.
 pub fn set_host_playing(playing: bool) {
     HOST_PLAYING.with(|state| state.set(Some(playing)));
 }
+
+/// Let the host manager controls match the broadcast clock to the live engine.
+pub fn set_host_speed(speed: f32) {
+    if speed.is_finite() {
+        HOST_SPEED.with(|state| state.set(Some(speed.clamp(0.25, 25.0))));
+    }
+}
+
 
 /// Which parts of the match the recording actually covers.
 ///
@@ -156,6 +165,15 @@ impl Playback {
             }
         });
     }
+
+    pub fn apply_host_speed(mut playback: ResMut<Playback>) {
+        HOST_SPEED.with(|state| {
+            if let Some(speed) = state.take() {
+                playback.speed = speed;
+            }
+        });
+    }
+
 
     /// Speeds the debug overlay cycles through, slowest first.
     ///

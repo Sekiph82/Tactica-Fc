@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MatchPerformanceKind {
     AnsweredCriticsWithPerformance,
     CostlyErrorUnderPressure,
@@ -37,7 +37,7 @@ impl MatchPerformanceKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MatchPerformanceEvidence {
     HighRating,
     LowRating,
@@ -82,7 +82,7 @@ impl MatchPerformanceEvidence {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MatchPerformanceEventContext {
     pub kind: MatchPerformanceKind,
     pub rating: Option<f32>,

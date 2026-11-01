@@ -17,7 +17,7 @@ use crate::club::mind::organs::memory::{EpisodeKind, MindEpisode};
 use crate::club::mind::verdict::MoodContribution;
 
 /// What the job is costing him.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct WelfareMind {
     /// 0..=100: accumulated strain. Rises with load and crisis, clears
     /// slowly, and clears fastest when he is out of work.

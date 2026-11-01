@@ -1,4 +1,4 @@
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CurrencyValue {
     pub amount: f64,
     pub currency: Currency,
@@ -10,7 +10,7 @@ impl CurrencyValue {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Currency {
     Usd,
 }

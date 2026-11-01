@@ -17,7 +17,7 @@ use log::{debug, info};
 /// Approaches are stored on `SimulatorData.pending_manager_approaches`
 /// — a global registry so cascade hires (poached source club starting
 /// its own search) can see the chain.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ApproachState {
     /// The requesting club has notified the source club. Awaiting
     /// permission-to-talk + compensation demand.
@@ -40,7 +40,7 @@ pub enum ApproachState {
 /// One in-flight pursuit of an employed manager. Stored on
 /// `SimulatorData.pending_manager_approaches` and ticked daily by the
 /// world-level manager-market phase.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ManagerApproach {
     pub requesting_club_id: u32,
     pub source_club_id: u32,

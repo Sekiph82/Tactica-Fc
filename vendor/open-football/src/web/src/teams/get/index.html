@@ -2,6 +2,44 @@
 
 {% block content %}
 <div class="fm-page">
+    {% if can_manage %}
+    <section class="fm-panel" style="margin-bottom:16px;padding:16px 20px">
+        <div class="fm-panel-head"><h3>{{ i18n.t("mgr_career") }}</h3></div>
+        {% if is_managed %}
+        <p>{{ i18n.t("mgr_managing_team") }} <strong>{{ title }}</strong></p>
+        <p>{{ i18n.t("mgr_pinned_count") }} <strong>{{ pinned_starter_count }}/11</strong> <span class="fm-muted">({{ i18n.t("mgr_pinned_note") }})</span></p>
+        <span id="fm-manager-messages" hidden
+              data-saving="{{ i18n.t("mgr_training_saving") }}"
+              data-team-focus-saved="{{ i18n.t("mgr_team_focus_saved") }}"
+              data-training-save-failed="{{ i18n.t("mgr_training_save_failed") }}"
+              data-lineup-limit="{{ i18n.t("mgr_lineup_limit") }}"
+              data-player-unavailable="{{ i18n.t("mgr_player_unavailable") }}"
+              data-lineup-save-failed="{{ i18n.t("mgr_lineup_save_failed") }}"></span>
+        <span id="fm-manager-lineup-status" role="status" aria-live="polite"></span>
+        <label style="display:flex;gap:8px;align-items:center;margin:10px 0">
+            <strong>{{ i18n.t("mgr_team_training") }}</strong>
+            <select id="fm-manager-team-training" aria-label="{{ i18n.t("mgr_team_focus_aria") }}">
+                <option value="balanced"{% if manager_training_focus == "balanced" %} selected{% endif %}>{{ i18n.t("mgr_style_balanced") }}</option>
+                <option value="fitness"{% if manager_training_focus == "fitness" %} selected{% endif %}>{{ i18n.t("mgr_training_fitness") }}</option>
+                <option value="technical"{% if manager_training_focus == "technical" %} selected{% endif %}>{{ i18n.t("technical") }}</option>
+                <option value="tactical"{% if manager_training_focus == "tactical" %} selected{% endif %}>{{ i18n.t("mgr_style_tactical") }}</option>
+                <option value="set_pieces"{% if manager_training_focus == "set_pieces" %} selected{% endif %}>{{ i18n.t("mgr_training_set_pieces") }}</option>
+                <option value="recovery"{% if manager_training_focus == "recovery" %} selected{% endif %}>{{ i18n.t("mgr_training_recovery") }}</option>
+            </select>
+            <span id="fm-manager-team-training-status" role="status" aria-live="polite"></span>
+        </label>
+        <nav style="display:flex;gap:10px;flex-wrap:wrap">
+            <a class="fm-button" href="/{{ lang }}/teams/{{ team_slug }}/tactics">{{ i18n.t("mgr_tactics_and_shape") }}</a>
+            <a class="fm-button" href="/{{ lang }}/teams/{{ team_slug }}/schedule">{{ i18n.t("mgr_fixtures_replays") }}</a>
+            <a class="fm-button" href="/{{ lang }}/teams/{{ team_slug }}/transfers">{{ i18n.t("transfers") }}</a>
+        </nav>
+        {% else %}
+        <p>{{ i18n.t("mgr_choose_club") }}</p>
+        <button type="button" class="fm-button" id="fm-take-over" data-team-id="{{ team_id }}" data-failed="{{ i18n.t("mgr_takeover_failed") }}">{{ i18n.t("mgr_take_over") }}</button>
+        <span id="fm-take-over-status" role="status" aria-live="polite"></span>
+        {% endif %}
+    </section>
+    {% endif %}
     <section class="fm-panel">
         <div class="fm-panel-head">
             <h3>{{ i18n.t("squad") }}</h3>
@@ -29,6 +67,7 @@
                     <th class="sq-goals">{{ i18n.t("gls") }}</th>
                     <th class="sq-rating">{{ i18n.t("av_rat") }}</th>
                     <th class="sq-value">{{ i18n.t("value") }}</th>
+                    {% if is_managed %}<th>{{ i18n.t("mgr_management") }}</th>{% endif %}
                 </tr>
             </thead>
             <tbody>
@@ -89,6 +128,27 @@
                     <td class="sq-goals">{% if player.goals > 0 %}{{ player.goals }}{% else %}-{% endif %}</td>
                     <td class="sq-rating">{{ player.average_rating }}</td>
                     <td class="sq-value">{{ player.value }}</td>
+                    {% if is_managed %}
+                    <td class="fm-manager-actions">
+                        {% if !player.is_loaned_out && !player.is_loan %}
+                        <label class="fm-visually-hidden" for="fm-training-{{ player.id }}">{{ i18n.t("mgr_training_focus") }}: {{ player.last_name }}</label>
+                        <select class="fm-manager-training" id="fm-training-{{ player.id }}" data-player-id="{{ player.id }}" aria-label="{{ i18n.t("mgr_training_focus") }}: {{ player.last_name }}">
+                            <option value="none"{% if player.training_focus == "none" %} selected{% endif %}>{{ i18n.t("mgr_training_none") }}</option>
+                            <option value="fitness"{% if player.training_focus == "fitness" %} selected{% endif %}>{{ i18n.t("mgr_training_fitness") }}</option>
+                            <option value="mental"{% if player.training_focus == "mental" %} selected{% endif %}>{{ i18n.t("mgr_training_mental") }}</option>
+                            <option value="free_kicks"{% if player.training_focus == "free_kicks" %} selected{% endif %}>{{ i18n.t("mgr_training_free_kicks") }}</option>
+                            <option value="long_shots"{% if player.training_focus == "long_shots" %} selected{% endif %}>{{ i18n.t("mgr_training_long_shots") }}</option>
+                            <option value="heading"{% if player.training_focus == "heading" %} selected{% endif %}>{{ i18n.t("mgr_training_heading") }}</option>
+                            <option value="tackling"{% if player.training_focus == "tackling" %} selected{% endif %}>{{ i18n.t("mgr_training_tackling") }}</option>
+                            <option value="crossing"{% if player.training_focus == "crossing" %} selected{% endif %}>{{ i18n.t("mgr_training_crossing") }}</option>
+                            <option value="dribbling"{% if player.training_focus == "dribbling" %} selected{% endif %}>{{ i18n.t("mgr_training_dribbling") }}</option>
+                            <option value="weak_foot"{% if player.training_focus == "weak_foot" %} selected{% endif %}>{{ i18n.t("mgr_training_weak_foot") }}</option>
+                        </select>
+                        <button type="button" class="fm-manager-selection" data-player-id="{{ player.id }}">{% if player.is_force_match_selection %}{{ i18n.t("mgr_unpin_starter") }}{% else %}{{ i18n.t("mgr_pin_starter") }}{% endif %}</button>
+                        <button type="button" class="fm-manager-transfer" data-player-id="{{ player.id }}">{% if player.transfer_listed %}{{ i18n.t("mgr_remove_from_list") }}{% else %}{{ i18n.t("mgr_add_to_list") }}{% endif %}</button>
+                        {% else %}<span>—</span>{% endif %}
+                    </td>
+                    {% endif %}
                 </tr>
                 {% endfor %}
             </tbody>
@@ -116,12 +176,91 @@
 {% endblock %}
 
 {% block scripts %}
-{% if ai_enabled %}
 <script>
 /* Squad-page "AI" button → start a server-side agent run, then long-poll its
    progress so the tools the model calls stream into the dialog in real time.
    When the run finishes, the live tool log is hidden and the report shown. */
 (function() {
+    var takeOver = document.getElementById('fm-take-over');
+    if (takeOver) {
+        takeOver.addEventListener('click', function() {
+            takeOver.disabled = true;
+            fetch('/api/game/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ team_id: Number(takeOver.getAttribute('data-team-id')) })
+            }).then(function(response) {
+                if (!response.ok) { throw new Error('http ' + response.status); }
+                location.reload();
+            }).catch(function() {
+                takeOver.disabled = false;
+                var status = document.getElementById('fm-take-over-status');
+                if (status) { status.textContent = takeOver.dataset.failed; }
+            });
+        });
+    }
+    document.querySelectorAll('.fm-manager-training').forEach(function(select) {
+        select.addEventListener('change', function() {
+            select.disabled = true;
+            fetch('/api/manager/training/' + select.getAttribute('data-player-id'), {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ focus: select.value })
+            }).then(function(response) {
+                if (!response.ok) { throw new Error('http ' + response.status); }
+            }).catch(function() { select.value = 'none'; }).finally(function() { select.disabled = false; });
+        });
+    });
+    var teamTraining = document.getElementById('fm-manager-team-training');
+    if (teamTraining) {
+        teamTraining.addEventListener('change', function() {
+            teamTraining.disabled = true;
+            var status = document.getElementById('fm-manager-team-training-status');
+            var messages = document.getElementById('fm-manager-messages').dataset;
+            if (status) status.textContent = messages.saving;
+            fetch('/api/manager/training-focus', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ focus: teamTraining.value })
+            }).then(function(response) {
+                if (!response.ok) throw new Error('http ' + response.status);
+                if (status) status.textContent = messages.teamFocusSaved;
+            }).catch(function() {
+                if (status) status.textContent = messages.trainingSaveFailed;
+            }).finally(function() { teamTraining.disabled = false; });
+        });
+    }
+    document.querySelectorAll('.fm-manager-transfer').forEach(function(button) {
+        button.addEventListener('click', function() {
+            button.disabled = true;
+            fetch('/api/manager/transfer-list/' + button.getAttribute('data-player-id'), { method: 'POST' })
+            .then(function(response) {
+                if (!response.ok) { throw new Error('http ' + response.status); }
+                location.reload();
+            }).catch(function() { button.disabled = false; });
+        });
+    });
+    document.querySelectorAll('.fm-manager-selection').forEach(function(button) {
+        button.addEventListener('click', function() {
+            button.disabled = true;
+            fetch('/api/manager/match-selection/' + button.getAttribute('data-player-id'), { method: 'POST' })
+            .then(function(response) {
+                if (response.status === 409) { throw new Error('limit'); }
+                if (response.status === 400) { throw new Error('unavailable'); }
+                if (!response.ok) { throw new Error('http ' + response.status); }
+                location.reload();
+            }).catch(function(error) {
+                button.disabled = false;
+                var status = document.getElementById('fm-manager-lineup-status');
+                if (status) {
+                    var messages = document.getElementById('fm-manager-messages').dataset;
+                    status.textContent = error.message === 'limit'
+                        ? messages.lineupLimit
+                        : error.message === 'unavailable'
+                            ? messages.playerUnavailable
+                            : messages.lineupSaveFailed;
+                }
+            });
+        });
+    });
     var btn = document.getElementById('fm-ai-report-btn');
     var dialog = document.getElementById('fm-ai-report-dialog');
     if (!btn || !dialog) { return; }
@@ -235,5 +374,4 @@
     });
 })();
 </script>
-{% endif %}
 {% endblock %}

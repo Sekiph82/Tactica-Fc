@@ -21,7 +21,7 @@ use crate::{
 use chrono::NaiveDate;
 use std::borrow::Cow;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Team {
     pub id: u32,
     pub league_id: Option<u32>,

@@ -18,7 +18,7 @@ use super::situation::MindSituation;
 use super::submind::{MindOption, MindView, MoodContribution, ReasonSet, SubMind};
 
 /// His sense of belonging.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct SocialMind {
     /// −100..=100. How much this feels like his place.
     belonging_pct: i8,

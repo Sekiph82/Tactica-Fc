@@ -75,6 +75,59 @@ impl YouthProtection {
 pub(crate) struct Substitutions;
 
 impl Substitutions {
+    /// Apply a human manager's requested change through the same field swap,
+    /// player-stat, substitution-window, and replay-recording path as AI subs.
+    /// The command only succeeds at a settled restart and within the fixture's
+    /// normal player and stoppage allowances.
+    pub(crate) fn process_manager_request(
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        team_id: u32,
+        player_out_id: u32,
+        player_in_id: u32,
+    ) -> bool {
+        if !Self::play_is_stopped(field)
+            || !context.state.match_state.is_timed()
+            || context.goal_celebration.is_some()
+            || context.substitution_break.is_some()
+            || context.total_match_time < context.dead_ball_until_ms
+            || !context.can_substitute(team_id)
+        {
+            return false;
+        }
+        let is_home = if team_id == field.home_team_id {
+            true
+        } else if team_id == field.away_team_id {
+            false
+        } else {
+            return false;
+        };
+        let shared_window = context.substitutions.iter().any(|sub| {
+            sub.team_id == team_id && sub.match_time == context.total_match_time
+        });
+        if !context.substitution_windows.at_interval()
+            && !shared_window
+            && context.substitution_windows.spent(is_home) >= context.substitution_windows.allowance()
+        {
+            return false;
+        }
+        if !field.get_player(player_out_id).is_some_and(|player| {
+            player.team_id == team_id && !player.off_pitch
+        }) || !field.substitutes.iter().any(|player| {
+            player.id == player_in_id && player.team_id == team_id
+        }) {
+            return false;
+        }
+        Self::execute_substitution(
+            field,
+            context,
+            team_id,
+            player_out_id,
+            player_in_id,
+            SubstitutionReason::Manager,
+        )
+    }
+
     /// Process substitutions for both teams.
     ///
     /// Three strategies, in priority order:
@@ -2360,6 +2413,67 @@ mod tests {
         context.score.away_team = TeamScore::new_with_score(2, score_away);
         context.total_match_time = total_match_time;
         (field, context)
+    }
+
+    #[test]
+    fn manager_request_swaps_the_live_xi_and_records_a_manager_substitution() {
+        use crate::r#match::engine::ball::ball::{
+            AwaitedRestart, PassOriginRestart, RestartQuiet,
+        };
+        use crate::r#match::engine::state::MatchState;
+
+        let (mut field, mut context) = make_match_context(1, 0, 55 * 60_000);
+        context.state.match_state = MatchState::FirstHalf;
+        field.ball.awaiting_restart = Some(AwaitedRestart {
+            taker_id: field.players[0].id,
+            spot: field.ball.position,
+            take_from: None,
+            settled: true,
+            carrying: false,
+            origin: PassOriginRestart::ThrowIn,
+            awarded_tick: 0,
+            patience_ticks: 500,
+            settled_tick: Some(0),
+            hold: None,
+            quiet: RestartQuiet::default(),
+        });
+
+        let outgoing_id = 106; // Home midfielder in the MCL slot.
+        let incoming_id = 202; // Home central-midfield substitute.
+        let outgoing_position = field
+            .get_player(outgoing_id)
+            .expect("the outgoing player starts in the XI")
+            .tactical_position
+            .current_position;
+        assert!(Substitutions::process_manager_request(
+            &mut field,
+            &mut context,
+            1,
+            outgoing_id,
+            incoming_id,
+        ));
+
+        let active_replacement = field
+            .get_player(incoming_id)
+            .expect("the incoming player inherits the outgoing XI slot");
+        assert_eq!(active_replacement.id, incoming_id);
+        assert_eq!(active_replacement.team_id, 1);
+        assert_eq!(
+            active_replacement.tactical_position.current_position,
+            outgoing_position
+        );
+        assert!(!field.players.iter().any(|player| player.id == outgoing_id));
+        assert!(!field.substitutes.iter().any(|player| player.id == incoming_id));
+        assert!(field.departed.iter().any(|player| player.id == outgoing_id));
+        assert!(context
+            .substituted_out_stats
+            .iter()
+            .any(|(player_id, _)| *player_id == outgoing_id));
+        assert_eq!(context.substitutions.len(), 1);
+        assert!(matches!(
+            context.substitutions[0].reason,
+            SubstitutionReason::Manager
+        ));
     }
 
     #[test]

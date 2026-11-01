@@ -92,6 +92,11 @@ impl MatchViewer {
         crate::recording::playback::set_host_playing(playing);
     }
 
+    #[wasm_bindgen(js_name = setSpeed)]
+    pub fn set_speed(speed: f32) {
+        crate::recording::playback::set_host_speed(speed);
+    }
+
     /// Entry point for the match page. `config` is the JSON form of
     /// [`ViewerConfig`]; the app takes over the canvas it names and runs until
     /// the page goes away.
@@ -389,7 +394,12 @@ impl MatchViewer {
             )
             .add_systems(
                 Update,
-                Playback::apply_host_playing.before(Playback::advance),
+                (
+                    Playback::apply_host_playing,
+                    Playback::apply_host_speed,
+                )
+                    .chain()
+                    .before(Playback::advance),
             )
             // Behind everything, so the phase the page is told about is the
             // one that has just finished rather than the one about to start.

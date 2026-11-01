@@ -292,7 +292,7 @@ pub use team::{
     TacticalDecisionResult, TacticalFocus, TacticalRecommendation, TacticalStyle, Tactics,
     TacticsSelector, Team, TeamBehaviour, TeamBehaviourResult, TeamBuilder, TeamCollection,
     TeamContext, TeamReputation, TeamResult, TeamTraining, TeamTrainingResult, TeamType,
-    TechnicalGains, TrainingEffects, TrainingFacilities, TrainingFocus, TrainingIntensity,
+    TechnicalGains, TrainingEffects, TrainingFacilities, TrainingFocus, ManagerTrainingFocus, TrainingIntensity,
     TrainingIntensityPreference, TrainingSchedule, TrainingSession, TrainingType, TransferItem,
     Transfers, WeeklyTrainingPlan,
 };

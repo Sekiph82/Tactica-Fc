@@ -8,6 +8,25 @@ pub struct Tactics {
     pub tactic_type: MatchTacticType,
     pub selected_reason: TacticSelectionReason,
     pub formation_strength: f32, // 0.0 to 1.0 indicating how well this formation suits the team
+    /// Optional manager-picked player ids, ordered to match `positions()`.
+    /// Empty means the match selector chooses the XI automatically; `None`
+    /// in an individual slot leaves just that position to the selector.
+    #[serde(default)]
+    pub manager_lineup: Vec<Option<u32>>,
+    /// When true the human manager's formation choice takes precedence over
+    /// the assistant coach's automatic opponent-counter tactic.
+    #[serde(default)]
+    pub manager_controlled: bool,
+    /// Optional manager-selected team style. When absent, the formation's
+    /// built-in style continues to drive the existing coach behaviour.
+    #[serde(default)]
+    pub manager_tactical_style: Option<TacticalStyle>,
+    /// Optional manager overrides, normalized from 0.0 (minimum) to 1.0
+    /// (maximum). `None` keeps the selected style's built-in value.
+    #[serde(default)]
+    pub manager_pressing_override: Option<f32>,
+    #[serde(default)]
+    pub manager_line_override: Option<f32>,
 }
 
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize)]
@@ -25,6 +44,11 @@ impl Tactics {
             tactic_type,
             selected_reason: TacticSelectionReason::Default,
             formation_strength: 0.5,
+            manager_lineup: Vec::new(),
+            manager_controlled: false,
+            manager_tactical_style: None,
+            manager_pressing_override: None,
+            manager_line_override: None,
         }
     }
 
@@ -37,6 +61,11 @@ impl Tactics {
             tactic_type,
             selected_reason: reason,
             formation_strength: strength.clamp(0.0, 1.0),
+            manager_lineup: Vec::new(),
+            manager_controlled: false,
+            manager_tactical_style: None,
+            manager_pressing_override: None,
+            manager_line_override: None,
         }
     }
 
@@ -100,14 +129,14 @@ impl Tactics {
     }
 
     pub fn is_high_pressing(&self) -> bool {
-        matches!(
-            self.tactical_style(),
-            TacticalStyle::Attacking | TacticalStyle::Possession | TacticalStyle::Compact
-        )
+        self.pressing_intensity() >= 0.7
     }
 
     /// Returns pressing intensity from 0.0 to 1.0 based on tactical style
     pub fn pressing_intensity(&self) -> f32 {
+        if let Some(override_value) = self.manager_pressing_override {
+            return override_value.clamp(0.0, 1.0);
+        }
         match self.tactical_style() {
             TacticalStyle::Attacking | TacticalStyle::Compact => 1.0,
             TacticalStyle::Possession => 0.8,
@@ -121,6 +150,9 @@ impl Tactics {
     /// Returns defensive line height from 0.0 (deep block) to 1.0 (high line).
     /// Controls how far up the pitch defenders position themselves.
     pub fn defensive_line_height(&self) -> f32 {
+        if let Some(override_value) = self.manager_line_override {
+            return override_value.clamp(0.0, 1.0);
+        }
         match self.tactical_style() {
             TacticalStyle::Attacking => 0.8,
             TacticalStyle::Possession => 0.7,
@@ -162,6 +194,9 @@ impl Tactics {
     }
 
     pub fn tactical_style(&self) -> TacticalStyle {
+        if let Some(style) = self.manager_tactical_style {
+            return style;
+        }
         match self.tactic_type {
             MatchTacticType::T442
             | MatchTacticType::T442Diamond
@@ -261,7 +296,7 @@ impl Tactics {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 pub enum TacticalStyle {
     Attacking,
     Defensive,
@@ -1098,6 +1133,28 @@ mod tests {
     use super::*;
     use crate::PersonAttributes;
     use crate::shared::fullname::FullName;
+
+    #[test]
+    fn manager_pressing_override_drives_pressing_and_high_press_decisions() {
+        let mut tactics = Tactics::new(MatchTacticType::T442);
+        tactics.manager_pressing_override = Some(0.69);
+        assert!((tactics.pressing_intensity() - 0.69).abs() < f32::EPSILON);
+        assert!(!tactics.is_high_pressing());
+
+        tactics.manager_pressing_override = Some(0.7);
+        assert!(tactics.is_high_pressing());
+    }
+
+    #[test]
+    fn manager_defensive_line_override_is_clamped_to_normalized_pitch_range() {
+        let mut tactics = Tactics::new(MatchTacticType::T442);
+        tactics.manager_line_override = Some(0.82);
+        assert!((tactics.defensive_line_height() - 0.82).abs() < f32::EPSILON);
+
+        tactics.manager_line_override = Some(1.5);
+        assert_eq!(tactics.defensive_line_height(), 1.0);
+    }
+
     fn create_test_player(id: u32, position: PlayerPositionType, ability: u8) -> Player {
         use crate::club::player::builder::PlayerBuilder;
         use crate::club::player::*;

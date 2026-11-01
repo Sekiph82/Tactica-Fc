@@ -116,7 +116,14 @@ impl Team {
         // can be built for the default shape and then validated against a
         // late opponent-aware counter shape.
         let head_coach_tac = head_coach.staff_attributes.knowledge.tactical_knowledge;
-        let final_tactics = if let (Some(opp), true) = (ctx.opponent_tactic, head_coach_tac >= 14) {
+        let manager_tactics = self
+            .tactics
+            .as_ref()
+            .filter(|tactics| tactics.manager_controlled)
+            .cloned();
+        let final_tactics = if let Some(tactics) = manager_tactics {
+            tactics
+        } else if let (Some(opp), true) = (ctx.opponent_tactic, head_coach_tac >= 14) {
             let roster: Vec<&Player> = self.players.players();
             TacticsSelector::select_counter_tactic(&opp, &roster)
         } else {

@@ -21,7 +21,7 @@ use crate::club::mind::organs::memory::{ActorRef, EpisodeKind, FactClaim, MindEp
 use crate::club::mind::verdict::MoodContribution;
 
 /// His football, and what he is currently doing about it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct PhilosophyMind {
     /// 0..=100: how firmly he holds his idea of the game. High
     /// conviction is not a virtue here — it is a trade, and the trade is

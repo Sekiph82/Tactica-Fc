@@ -11,19 +11,22 @@ use crate::transfers::pipeline::PlayerSummary;
 use crate::utils::random::engine as rng_engine;
 use crate::{Player, Staff};
 use chrono::{Duration, NaiveDateTime};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SimulatorData {
     pub continents: Vec<Continent>,
 
     pub date: NaiveDateTime,
 
+    #[serde(skip, default)]
     pub indexes: Option<SimulatorDataIndexes>,
 
     /// Set to true whenever a transfer moves a player between clubs. Checked
     /// by the simulator to decide whether to rebuild player location indexes.
+    #[serde(skip, default)]
     pub dirty_player_index: bool,
 
     pub free_agents: Vec<Player>,
@@ -63,6 +66,7 @@ pub struct SimulatorData {
     /// cannot span the two. Cloning the whole map to bridge that — a few
     /// hundred kilobytes of sparse lists, once per country per tick — was
     /// the largest single cost the geography added to the world sim.
+    #[serde(skip, default)]
     pub market_map: Arc<MarketMap>,
 
     /// Global match result storage — all match types (league, cup, national team) write here
@@ -74,6 +78,7 @@ pub struct SimulatorData {
     /// Reset (`= None`) at the end of each `simulate_with` tick;
     /// readers fall back to a local rebuild when the cache is `None`
     /// so test paths and one-off callers still work.
+    #[serde(skip, default)]
     pub daily_world_player_pool: Option<Vec<PlayerSummary>>,
 
     /// Per-tick scratch cache: snapshot of every globally-pooled free
@@ -83,6 +88,7 @@ pub struct SimulatorData {
     /// player's `free_agent_state` (idempotent on repeat with the same
     /// date) and walks every free agent. Crate-private because the
     /// snapshot type is internal to the country/result module.
+    #[serde(skip, default)]
     pub(crate) daily_global_free_agents: Option<Vec<GlobalFreeAgentSummary>>,
 
     /// Monthly free-agent market flow counters (signed from the global
@@ -97,6 +103,19 @@ pub struct SimulatorData {
 }
 
 impl SimulatorData {
+    /// Rebuild process-local indexes and caches after a world snapshot loads.
+    /// These values are deliberately omitted from persisted saves.
+    pub fn rebuild_derived_state(&mut self) {
+        let mut indexes = SimulatorDataIndexes::new();
+        indexes.refresh(self);
+        self.indexes = Some(indexes);
+        self.dirty_player_index = false;
+        self.market_map = Arc::new(MarketMap::default());
+        self.daily_world_player_pool = None;
+        self.daily_global_free_agents = None;
+        self.rebuild_market_map();
+    }
+
     /// Build a SimulatorData with the deterministic sim RNG pinned to `seed`.
     /// Passing a non-zero seed makes the util-layer RNG stream reproducible
     /// per worker thread; Rayon scheduling still reorders draws across

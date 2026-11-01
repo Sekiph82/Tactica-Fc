@@ -13,7 +13,7 @@
 /// Which silverware the player just won. Lets the renderer pick
 /// competition-specific copy ("Won the FA Cup" vs "Won the league
 /// title") without parsing the event type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TrophyKind {
     /// League / divisional championship.
     LeagueTitle,
@@ -42,7 +42,7 @@ impl TrophyKind {
 /// Trophy-event explanation payload. All quantitative fields are
 /// `Option` so emit sites attach what they know — missing fields
 /// collapse to the trophy-kind line on the renderer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TrophyEventContext {
     pub trophy_kind: TrophyKind,
     /// Identifier of the underlying competition. For domestic cups this

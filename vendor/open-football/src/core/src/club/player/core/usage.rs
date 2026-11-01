@@ -1,7 +1,7 @@
 //! One official-match ledger for promises and the manager's minutes plan.
 use super::player::{ManagerPromise, ManagerPromiseKind, Player};
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct PlayerUsage {
     pub eligible: u16,
     pub starts: u16,

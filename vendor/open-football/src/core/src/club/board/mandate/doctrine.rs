@@ -82,7 +82,7 @@ pub struct Reservation {
 }
 
 /// What a club does with a man the market will not pay his book for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ReservationVerdict {
     /// The market clears the book, or the board will write the rest off.
     Sell,

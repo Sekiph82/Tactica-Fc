@@ -408,7 +408,7 @@ pub struct StandingReading {
 /// Measured against the DIVISION he would play in, never the club. A
 /// relegated name keeps a top-flight reputation for seasons, and a
 /// consent read off it saw a third-tier side as a top-flight one.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LevelFloor {
     pub standing: f32,
     pub tolerance: f32,

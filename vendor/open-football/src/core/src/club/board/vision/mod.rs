@@ -17,7 +17,7 @@ use crate::club::board::strategy::{
 /// take the club. Drives expectations, recruitment preferences, and
 /// manager-board friction. Each item is advisory: the manager can ignore
 /// it but the board will judge them against it at season's end.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ClubVision {
     pub playing_style: VisionPlayingStyle,
     pub youth_focus: VisionYouthFocus,
@@ -38,7 +38,7 @@ pub struct ClubVision {
     pub review_frequency: ReviewFrequency,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum VisionPlayingStyle {
     #[default]
     Balanced,
@@ -50,7 +50,7 @@ pub enum VisionPlayingStyle {
     DirectPlay,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum VisionYouthFocus {
     #[default]
     Balanced,
@@ -60,7 +60,7 @@ pub enum VisionYouthFocus {
     SignExperienced,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum SigningPreference {
     #[default]
     Anyone,
@@ -72,7 +72,7 @@ pub enum SigningPreference {
     Marquee,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum FinancialStance {
     #[default]
     Balanced,
@@ -84,7 +84,7 @@ pub enum FinancialStance {
     Austerity,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LongTermGoal {
     WinLeague,
     WinDomesticCup,

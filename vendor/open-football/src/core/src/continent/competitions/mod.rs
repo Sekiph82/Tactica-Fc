@@ -17,7 +17,7 @@ pub use types::*;
 use chrono::NaiveDate;
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ContinentalCompetitions {
     pub champions_league: ChampionsLeague,
     pub europa_league: EuropaLeague,

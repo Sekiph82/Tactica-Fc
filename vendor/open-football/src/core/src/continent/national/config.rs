@@ -4,14 +4,14 @@ use chrono::NaiveDate;
 use std::collections::HashMap;
 
 /// Scope of a national team competition
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum CompetitionScope {
     Global,
     Continental,
 }
 
 /// Runtime configuration for a national team competition, converted from database entities
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NationalCompetitionConfig {
     pub id: u32,
     pub name: String,
@@ -56,20 +56,20 @@ impl NationalCompetitionConfig {
 }
 
 /// Configuration for qualifying rounds
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct QualifyingConfig {
     pub zones: Vec<QualifyingZoneConfig>,
 }
 
 /// Which positions in a group qualify
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum QualifyingPosition {
     Winner,
     RunnerUp,
 }
 
 /// Configuration for a qualifying zone (per continent)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct QualifyingZoneConfig {
     pub continent_id: u32,
     pub spots: u32,
@@ -81,7 +81,7 @@ pub struct QualifyingZoneConfig {
 }
 
 /// Configuration for the tournament phase
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TournamentConfig {
     pub total_teams: u32,
     pub group_count: u32,
@@ -91,7 +91,7 @@ pub struct TournamentConfig {
 }
 
 /// Schedule configuration with date templates
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ScheduleConfig {
     pub qualifying_dates: Vec<ScheduleDate>,
     pub tournament_group_dates: Vec<ScheduleDate>,
@@ -99,7 +99,7 @@ pub struct ScheduleConfig {
 }
 
 /// A date template with month, day, and year offset from qualifying start year
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ScheduleDate {
     pub month: u32,
     pub day: u32,

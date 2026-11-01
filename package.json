@@ -3,13 +3,22 @@
   "private": true,
   "version": "0.11.0",
   "type": "module",
+  "main": "desktop/main.cjs",
   "scripts": {
     "dev": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-tactica-fc.ps1",
     "build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-tactica-fc.ps1",
     "test": "cargo test --manifest-path vendor/open-football/Cargo.toml -p core -j 2",
-    "open-football": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-tactica-fc.ps1"
+    "open-football": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-tactica-fc.ps1",
+    "desktop:dev": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-tactica-desktop.ps1",
+    "desktop:build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-tactica-desktop.ps1",
+    "android:engine": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-tactica-android.ps1",
+    "android:sync": "cap sync android",
+    "android:apk": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-tactica-android.ps1 -BuildApk"
   },
   "dependencies": {
+    "@capacitor/android": "8.6.0",
+    "@capacitor/core": "8.6.0",
+    "@capacitor/ios": "8.6.0",
     "@upstash/redis": "^1.39.0",
     "@vercel/blob": "^2.8.2",
     "ai": "^7.0.143",
@@ -19,15 +28,70 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@capacitor/cli": "8.6.0",
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
+    "electron": "45.2.1",
+    "electron-builder": "26.18.0",
     "playwright": "^1.64.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.4",
     "vite-plugin-pwa": "^2.0.0",
     "vitest": "^5.0.5"
+  },
+  "overrides": {
+    "@vercel/cli-config": {
+      "zod": "$zod"
+    }
+  },
+  "build": {
+    "appId": "com.tacticafc.manager",
+    "productName": "TACTICA FC",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "desktop/**/*",
+      "package.json",
+      "LICENSE",
+      "README.md"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/open-football/target/desktop/fast/open_football.exe",
+        "to": "open_football.exe"
+      },
+      {
+        "from": "public/tactica-brand/Tactica_FC_Black_Metal.ico",
+        "to": "TACTICA_FC.ico"
+      },
+      {
+        "from": "vendor/open-football/LICENSE",
+        "to": "OPEN_FOOTBALL_LICENSE.txt"
+      }
+    ],
+    "win": {
+      "icon": "public/tactica-brand/Tactica_FC_Black_Metal.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "TACTICA FC"
+    }
   }
 }

@@ -23,7 +23,7 @@ use crate::club::player::happiness::LoanSpellVerdict;
 use crate::transfers::squad::LevelBand;
 
 /// The shape of the next few seasons, as he means them to go.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CareerArc {
     /// Win the shirt at the club that owns him.
     BreakThroughHere,
@@ -110,7 +110,7 @@ impl CareerArc {
 }
 
 /// How far along the arc he is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum PlanStage {
     /// He has decided, and is giving the situation time to answer it.
     Forming,
@@ -141,7 +141,7 @@ impl PlanStage {
 
 /// The held, multi-season intention. `Copy` and fixed-size, because it
 /// rides inside [`crate::PlayerMind`] and a player is cloned constantly.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CareerPlan {
     pub arc: CareerArc,
     pub stage: PlanStage,
@@ -319,7 +319,7 @@ impl CareerPlan {
 
 /// The plan as everything outside the mind reads it — a flat, `Copy`
 /// view that carries no borrow of the mind and no way to change it.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CareerPlanView {
     pub arc: Option<CareerArc>,
     pub stage: Option<PlanStage>,

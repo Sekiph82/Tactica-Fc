@@ -10,7 +10,7 @@ use crate::utils::IntegerUtils;
 use chrono::Duration;
 use chrono::NaiveDate;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum NegotiationPhase {
     /// Selling club decides whether to engage (1-3 days)
     InitialApproach { started: NaiveDate },
@@ -24,7 +24,7 @@ pub enum NegotiationPhase {
     MedicalAndFinalization { started: NaiveDate },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum NegotiationRejectionReason {
     SellerRefusedToNegotiate,
     AskingPriceTooHigh,
@@ -47,7 +47,7 @@ pub enum NegotiationRejectionReason {
 /// Who a staged free-agent pursuit expects to sign, as the market read him
 /// the day it staged the offer. The deal completes days later, and the
 /// squad he is joining can have changed by then.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct FreeAgentArrival {
     pub group: PlayerFieldPositionGroup,
     pub ability: u8,
@@ -65,7 +65,7 @@ impl FreeAgentArrival {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
 pub enum NegotiationStatus {
     Pending,
     Accepted,
@@ -86,7 +86,7 @@ impl NegotiationStatus {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TransferNegotiation {
     pub id: u32,
     pub player_id: u32,
@@ -123,6 +123,9 @@ pub struct TransferNegotiation {
     // Phased negotiation fields
     pub phase: NegotiationPhase,
     pub phase_expiry: NaiveDate,
+    /// Manager override waiting for the normal seller-resolution tick.
+    /// `Some(true)` accepts the current fee; `Some(false)` rejects it.
+    pub manager_seller_decision: Option<bool>,
     /// Annual wage the buying club has staged for the player. None until the
     /// pipeline fills it at negotiation start.
     pub offered_salary: Option<u32>,
@@ -306,6 +309,7 @@ impl TransferNegotiation {
                 started: created_date,
             },
             phase_expiry,
+            manager_seller_decision: None,
             offered_salary: None,
             opening_salary: None,
             staged_reservation_wage: None,

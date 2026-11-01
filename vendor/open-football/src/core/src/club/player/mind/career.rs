@@ -24,7 +24,7 @@ use crate::club::player::happiness::LoanSpellVerdict;
 /// Where a player is in his working life. Held rather than derived, so
 /// it can lag the calendar — which is how people actually experience
 /// this.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, serde::Serialize, serde::Deserialize)]
 pub enum CareerStage {
     /// Still arriving.
     #[default]
@@ -63,7 +63,7 @@ impl CareerStage {
 }
 
 /// His read of his own trajectory.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct CareerMind {
     pub stage: CareerStage,
     /// Trophies, titles and continental nights he has actually had.

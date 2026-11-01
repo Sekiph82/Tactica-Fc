@@ -21,7 +21,7 @@ use crate::club::staff::coach::plan::PlannedRole;
 
 /// How a spell ended. The last thing that happened between two people, and
 /// the thing that colours everything before it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum SeparationCause {
     /// Placeholder while the spell is open.
@@ -123,7 +123,7 @@ impl SeparationCause {
 
 /// Things he did to me. Each is a sentence a real manager says about a
 /// player years later, which is the test for whether a flag belongs here.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ScarFlags(u16);
 
 impl ScarFlags {
@@ -236,7 +236,7 @@ impl ScarFlags {
 }
 
 /// Things he did for me.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MedalFlags(u16);
 
 impl MedalFlags {
@@ -315,7 +315,7 @@ impl MedalFlags {
 }
 
 /// One coach's lasting record of one player.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct PlayerDossier {
     pub player_id: u32,
     /// Where we last worked together.

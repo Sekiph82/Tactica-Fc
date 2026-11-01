@@ -42,7 +42,7 @@ use crate::{Club, Country, Player, PlayerSquadStatus};
 /// Granted once at season start from the same `benefactor × appetite ×
 /// idle × 0.35` figure the wage mandate spends; consumed by the part of an
 /// agreed wage the club's own level cannot explain.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct OwnerEnvelopes {
     granted: [f64; 3],
     consumed: [f64; 3],

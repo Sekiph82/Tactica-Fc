@@ -1,8 +1,9 @@
 use crate::transfers::market::map::CountryTransferProfile;
+use serde::{Deserialize, Serialize};
 
 /// Lightweight country info for nationality lookups.
 /// Covers ALL countries (not just simulation participants).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CountryInfo {
     pub id: u32,
     pub code: String,

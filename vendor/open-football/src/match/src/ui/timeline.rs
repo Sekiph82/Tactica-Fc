@@ -294,13 +294,13 @@ impl Timeline {
         let play_face = icons.play.clone();
 
         commands
-            .spawn(Node {
+            .spawn((Node {
                 width: percent(100),
                 height: percent(100),
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::FlexEnd,
                 ..default()
-            })
+            }, if config.embedded { Visibility::Hidden } else { Visibility::Inherited }))
             .with_children(|root| {
                 root.spawn((
                     Node {

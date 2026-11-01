@@ -578,7 +578,7 @@ impl LoanAssetGuard {
 }
 
 /// One priced (player, borrower) pair.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct LoanGuardVerdict {
     /// Player value ÷ borrower annual income.
     pub weight: f64,

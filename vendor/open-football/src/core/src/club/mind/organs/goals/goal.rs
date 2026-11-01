@@ -27,7 +27,7 @@ use crate::club::mind::organs::memory::{EpochDay, MindClock};
 /// of them.
 ///
 /// [`Active`]: GoalStatus::Active
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum GoalStatus {
     /// He feels it. It does not yet shape what he does, and nobody
     /// knows.
@@ -120,7 +120,7 @@ impl GoalStatus {
 }
 
 /// Something a player wants, carried until it resolves. 24 bytes.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct MindGoal {
     pub kind: GoalKind,
     pub origin: GoalOrigin,

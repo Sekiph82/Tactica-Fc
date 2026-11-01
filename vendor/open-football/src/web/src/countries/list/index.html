@@ -2,19 +2,93 @@
 
 {% block html_title %}{{ i18n.t("home_page_title") }} v{{ version }} | {{ i18n.t("site_name") }}{% endblock %}
 
-{% block header_center %}
-<a class="fm-download-btn" href="https://github.com/ZOXEXIVO/open-football/releases" target="_blank" rel="noopener" onclick="gtag('event', 'download')">
-    <i class="fa fa-download"></i>
-    {% if show_download %}
-    <span>{{ i18n.t("download") }}</span>
-    {% else %}
-    <span>{{ i18n.t("check_new_version") }}</span>
-    {% endif %}
-</a>
-{% endblock %}
-
 {% block content %}
 <div class="fm-page">
+    {% if let Some(career) = manager_career %}
+    <section class="tactica-career-hub">
+        <div class="tactica-career-hub-copy">
+            <span class="tactica-eyebrow">{{ i18n.t("tactica_manager_hub_label") }}</span>
+            <h2>{{ career.club_name }}</h2>
+            {% if !career.league_name.is_empty() %}<p>{{ career.league_name }}</p>{% endif %}
+        </div>
+        <nav class="tactica-career-hub-links" aria-label="{{ i18n.t("tactica_manager_hub_label") }}">
+            <a href="/{{ lang }}/teams/{{ career.team_slug }}">{{ i18n.t("tactica_manager_hub_team") }}</a>
+            <a href="/{{ lang }}/teams/{{ career.team_slug }}/tactics">{{ i18n.t("tactica_manager_hub_tactics") }}</a>
+            <a href="/{{ lang }}/teams/{{ career.team_slug }}/schedule">{{ i18n.t("tactica_manager_hub_schedule") }}</a>
+            <a href="/{{ lang }}/teams/{{ career.team_slug }}/transfers">{{ i18n.t("tactica_manager_hub_transfers") }}</a>
+        </nav>
+    </section>
+    {% endif %}
+    <section class="tactica-home-hero">
+        <img class="tactica-home-hero-art" src="/static/images/tactica-fc-manager-hero.png" alt="{{ i18n.t("mgr_home_hero_alt") }}">
+        <div class="tactica-home-hero-copy">
+            <span class="tactica-eyebrow">{{ i18n.t("tactica_home_eyebrow") }}</span>
+            <h2>{{ i18n.t("tactica_home_title") }}</h2>
+            <p>{{ i18n.t("tactica_home_intro") }}</p>
+            <a class="tactica-hero-cta" href="#tactica-clubs">{{ i18n.t("tactica_home_cta") }} <i class="fa fa-arrow-down" aria-hidden="true"></i></a>
+        </div>
+    </section>
+    {% if manager_career.is_none() %}
+    <section class="tactica-career-start">
+        <div class="tactica-career-start-copy">
+            <span class="tactica-eyebrow">{{ i18n.t("tactica_start_career_eyebrow") }}</span>
+            <h2>{{ i18n.t("tactica_start_career_title") }}</h2>
+            <p>{{ i18n.t("tactica_start_career_hint") }}</p>
+        </div>
+        <form class="tactica-career-start-form" id="tactica-career-start-form"
+              data-loading="{{ i18n.t("tactica_start_career_loading") }}"
+              data-failed="{{ i18n.t("tactica_start_career_failed") }}">
+            <label for="tactica-career-team">{{ i18n.t("tactica_start_career_team_label") }}</label>
+            <input id="tactica-career-team" name="team_search" list="tactica-career-teams" autocomplete="off"
+                   placeholder="{{ i18n.t("tactica_start_career_choose") }}" required>
+            <datalist id="tactica-career-teams">
+                {% for team in manager_teams %}
+                <option value="{{ team.label }}" data-team-id="{{ team.team_id }}" data-slug="{{ team.team_slug }}"></option>
+                {% endfor %}
+            </datalist>
+            <button class="tactica-career-start-button" type="submit">{{ i18n.t("tactica_start_career_button") }} <i class="fa fa-arrow-right" aria-hidden="true"></i></button>
+            <p class="tactica-career-start-status" id="tactica-career-start-status" role="status" aria-live="polite"></p>
+        </form>
+    </section>
+    <script>
+    (function() {
+        var form = document.getElementById('tactica-career-start-form');
+        if (!form) return;
+        var input = document.getElementById('tactica-career-team');
+        var choices = document.getElementById('tactica-career-teams');
+        var button = form.querySelector('button[type="submit"]');
+        var status = document.getElementById('tactica-career-start-status');
+        var buttonLabel = button.textContent;
+        form.addEventListener('submit', function(event) {
+            event.preventDefault();
+            var option = Array.from(choices.options).find(function(choice) { return choice.value === input.value.trim(); });
+            if (!option) {
+                input.setCustomValidity(form.dataset.failed);
+                input.reportValidity();
+                return;
+            }
+            input.setCustomValidity('');
+            button.disabled = true;
+            button.textContent = form.dataset.loading;
+            status.textContent = '';
+            fetch('/api/game/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ team_id: Number(option.dataset.teamId) })
+            }).then(function(response) {
+                if (!response.ok) throw new Error('career-create-failed');
+                return response.json();
+            }).then(function() {
+                window.location.assign('/' + document.documentElement.lang + '/teams/' + encodeURIComponent(option.dataset.slug) + '/schedule');
+            }).catch(function() {
+                status.textContent = form.dataset.failed;
+                button.disabled = false;
+                button.textContent = buttonLabel;
+            });
+        });
+    })();
+    </script>
+    {% endif %}
     <div class="fm-home-overview">
         <div class="fm-info-grid fm-info-grid-home">
             <div class="fm-info-tile fm-info-tile-machine">
@@ -315,7 +389,7 @@
     }
     </script>
     {% for continent in continents %}
-    <section class="fm-panel {% if !loop.first %}mt-3{% endif %}">
+    <section id="{% if loop.first %}tactica-clubs{% endif %}" class="fm-panel {% if !loop.first %}mt-3{% endif %}">
         <div class="fm-panel-head">
             <h3>{{ continent.name }}</h3>
             <span class="fm-panel-count">{{ continent.countries.len() }}</span>

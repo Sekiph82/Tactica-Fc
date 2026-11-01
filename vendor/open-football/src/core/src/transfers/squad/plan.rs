@@ -46,7 +46,7 @@ use crate::{Club, ClubPhilosophy, Country, PlayerFieldPositionGroup, PlayerPosit
 /// cheap. They are not club sizes — a mid-table club briefs a tier A slot
 /// when it has the money for one, and a giant briefs tier C for its third
 /// keeper.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BriefTier {
     /// Transformative: the club is shopping for a player who visibly
     /// improves its first team, and will spend most of a window on him.
@@ -446,7 +446,7 @@ impl SquadPlan {
 
 /// One shirt the club has decided to shop for, and the terms it is shopping
 /// on.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BriefSlot {
     pub position: PlayerPositionType,
     pub group: PlayerFieldPositionGroup,
@@ -523,7 +523,7 @@ impl BriefSlot {
 
 /// The club's intent for the window: which shirts it is shopping for, and
 /// what it will pay for each.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RecruitmentBrief {
     pub slots: Vec<BriefSlot>,
     pub planned_on: NaiveDate,

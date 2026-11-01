@@ -4,7 +4,7 @@ use crate::Staff;
 /// approach pipeline that operates on it; for now only `FreeAgent`
 /// is reachable, but the variant exists so callers can pattern-match
 /// without breaking when slice C lands.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CandidateSource {
     FreeAgent,
     Employed { current_club_id: u32 },
@@ -13,7 +13,7 @@ pub enum CandidateSource {
 /// A ranked entry on a club's manager shortlist. `fit_score` is the
 /// composite ranking value; `target_salary` is what the candidate
 /// would expect to be offered (the board's actual offer may flex).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ManagerCandidate {
     pub staff_id: u32,
     pub fit_score: i32,

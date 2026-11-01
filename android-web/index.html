@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#08090c" />
+    <title>TACTICA FC</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; background: #08090c; color: #f4f6f8; }
+      * { box-sizing: border-box; }
+      html, body { width: 100%; min-height: 100%; margin: 0; }
+      body { min-height: 100svh; display: grid; place-items: center; padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom)); background: radial-gradient(ellipse at 50% 35%, #251014 0, #111217 45%, #08090c 82%); }
+      main { width: min(100%, 420px); display: grid; justify-items: center; gap: 18px; text-align: center; }
+      img { width: 112px; height: 112px; object-fit: contain; }
+      h1 { margin: 0; font-size: 1.55rem; letter-spacing: .08em; }
+      p { min-height: 3.4em; margin: 0; color: #b9c0cb; line-height: 1.55; }
+      .spinner { width: 28px; height: 28px; border: 3px solid #3d3033; border-top-color: #ef343d; border-radius: 50%; animation: spin .8s linear infinite; }
+      button { min-height: 48px; padding: 0 22px; border: 1px solid #a8232d; border-radius: 12px; background: #d82935; color: #fff; font: inherit; font-weight: 700; }
+      button[hidden], .spinner[hidden] { display: none; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="tactica-icon.png" alt="" />
+      <h1>TACTICA FC</h1>
+      <p id="status" role="status" aria-live="polite">Oyun motoru başlatılıyor…</p>
+      <div id="spinner" class="spinner" aria-hidden="true"></div>
+      <button id="retry" type="button" hidden>Yeniden dene</button>
+    </main>
+    <script>
+      (() => {
+        const engineUrl = 'http://127.0.0.1:5184/tr';
+        const status = document.getElementById('status');
+        const spinner = document.getElementById('spinner');
+        const retry = document.getElementById('retry');
+        let stopped = false;
+
+        async function waitForEngine() {
+          stopped = false;
+          retry.hidden = true;
+          spinner.hidden = false;
+          status.textContent = 'Oyun motoru başlatılıyor…';
+          const deadline = Date.now() + 10 * 60 * 1000;
+          while (!stopped && Date.now() < deadline) {
+            try {
+              await fetch(engineUrl, { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(1500) });
+              location.replace(engineUrl);
+              return;
+            } catch {
+              status.textContent = 'Kariyer dünyası hazırlanıyor. Bu ilk açılış birkaç dakika sürebilir.';
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+          }
+          spinner.hidden = true;
+          retry.hidden = false;
+          status.textContent = 'Motor yerel olarak başlatılamadı. Uygulamayı tekrar açmayı deneyin.';
+        }
+
+        retry.addEventListener('click', waitForEngine);
+        waitForEngine();
+      })();
+    </script>
+  </body>
+</html>

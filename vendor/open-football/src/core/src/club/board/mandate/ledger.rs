@@ -13,7 +13,7 @@ use chrono::NaiveDate;
 use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
 
 /// How a mandate ended.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum MandateExit {
     Sold(f64),
     Loaned,
@@ -44,7 +44,7 @@ impl MandateExit {
 }
 
 /// One closed mandate.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct MandateOutcome {
     pub player_id: u32,
     pub purpose: MandatePurpose,
@@ -95,7 +95,7 @@ impl MandateOutcome {
 }
 
 /// The board's own record of what its money bought.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct MandateLedger {
     rows: Vec<MandateOutcome>,
 }

@@ -10,7 +10,7 @@ use crate::transfers::pipeline::{DetailedScoutingReport, TransferRequest};
 /// under a Russian heading. The scout verdict keeps its raw assessment
 /// rather than a rendered phrase for the same reason: the view bands and
 /// phrases it at render time, in the reader's language.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TransferReason {
     /// i18n key for the motive line ("signing_reason_depth_cover",
     /// "dec_reason_contract_expired", ...). Empty = no reason recorded.
@@ -51,7 +51,7 @@ impl TransferReason {
 /// raw assessment the report carried. The scouting page renders the same
 /// numbers directly; the transfers page bands them (see [`AbilityBand`])
 /// because a completed move is read as a story, not a table.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ScoutVerdict {
     pub recommendation: ScoutingRecommendation,
     pub assessed_ability: u8,

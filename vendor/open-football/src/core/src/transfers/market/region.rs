@@ -6,7 +6,7 @@
 /// This replaces the old `known_regions: Vec<u32>` (country IDs) system.
 use crate::transfers::market::map::RegionPrestigeTable;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ScoutingRegion {
     /// England, France, Germany, Spain, Italy, Netherlands, Belgium, Portugal, Switzerland, Austria
     WesternEurope,

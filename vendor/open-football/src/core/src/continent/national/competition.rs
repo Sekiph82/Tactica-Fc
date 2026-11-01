@@ -5,7 +5,7 @@ use super::config::*;
 use super::schedule::{NationalBookings, QualifyingSchedule};
 
 /// Phase of a national team competition cycle
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum CompetitionPhase {
     NotStarted,
     Qualifying,
@@ -29,7 +29,7 @@ impl CompetitionPhase {
 }
 
 /// A qualifying group for World Cup or European Championship qualifying
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct QualifyingGroup {
     pub id: u8,
     pub team_country_ids: Vec<u32>,
@@ -126,7 +126,7 @@ impl QualifyingGroup {
 }
 
 /// Standing of a team within a qualifying group
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GroupStanding {
     pub country_id: u32,
     pub played: u8,
@@ -158,7 +158,7 @@ impl GroupStanding {
 }
 
 /// A single fixture in a qualifying group
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GroupFixture {
     pub matchday: u8,
     pub date: NaiveDate,
@@ -168,14 +168,14 @@ pub struct GroupFixture {
 }
 
 /// Result of a group stage or qualifying fixture
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FixtureResult {
     pub home_score: u8,
     pub away_score: u8,
 }
 
 /// A knockout bracket round
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct KnockoutBracket {
     pub round: KnockoutRound,
     pub fixtures: Vec<KnockoutFixture>,
@@ -207,7 +207,7 @@ impl KnockoutBracket {
 }
 
 /// Knockout round type
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum KnockoutRound {
     RoundOf16,
     QuarterFinals,
@@ -229,7 +229,7 @@ impl KnockoutRound {
 }
 
 /// A single knockout fixture
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct KnockoutFixture {
     pub date: NaiveDate,
     pub home_country_id: u32,
@@ -238,7 +238,7 @@ pub struct KnockoutFixture {
 }
 
 /// Result of a knockout match, including potential penalty winner
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct KnockoutResult {
     pub home_score: u8,
     pub away_score: u8,
@@ -261,7 +261,7 @@ impl KnockoutResult {
 
 /// Generic national team competition replacing both WorldCupCompetition and EuropeanChampionship.
 /// Driven entirely by NationalCompetitionConfig from the database.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NationalTeamCompetition {
     pub config: NationalCompetitionConfig,
     pub cycle_year: u16,

@@ -25,7 +25,7 @@ export async function setNotify(on: boolean): Promise<boolean> {
 export function notifyUser(title: string, body: string, tag: string) {
   if (!notifyEnabled() || (document.visibilityState === 'visible' && document.hasFocus())) return;
   try {
-    const n = new Notification(title, { body, tag, icon: `${import.meta.env.BASE_URL}icon-192.png` });
+    const n = new Notification(title, { body, tag, icon: `${import.meta.env.BASE_URL}tactica-brand/Tactica_FC_Black_Metal_256x256.png?v=25` });
     n.onclick = () => { window.focus(); n.close(); };
   } catch { /* fx iOS uden PWA */ }
 }

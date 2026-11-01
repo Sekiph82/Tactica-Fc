@@ -7,7 +7,7 @@
 
 use super::scoring::BoardComponentScores;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ManagerRelationship {
     /// Trust earned through on-pitch results vs expectations.
     pub trust_results: u8,

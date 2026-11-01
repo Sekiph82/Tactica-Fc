@@ -9,6 +9,115 @@
             <h3>{{ i18n.t("formation") }}</h3>
             <span class="fm-panel-action">{{ formation_name }}</span>
         </div>
+        {% if is_managed %}
+        <div class="fm-manager-tactics" style="padding:12px 18px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+            <label for="fm-manager-formation"><strong>{{ i18n.t("mgr_match_formation") }}</strong></label>
+            <span id="fm-manager-tactics-messages" hidden
+                  data-tactics-saving="{{ i18n.t("mgr_tactics_saving") }}"
+                  data-tactics-saved="{{ i18n.t("mgr_tactics_saved") }}"
+                  data-tactics-failed="{{ i18n.t("mgr_tactics_save_failed") }}"
+                  data-duplicate="{{ i18n.t("mgr_lineup_duplicate") }}"
+                  data-saving="{{ i18n.t("mgr_lineup_saving") }}"
+                  data-saved="{{ i18n.t("mgr_lineup_saved") }}"
+                  data-unavailable="{{ i18n.t("mgr_lineup_player_invalid") }}"
+                  data-duplicate-error="{{ i18n.t("mgr_lineup_player_duplicate") }}"
+                  data-save-failed="{{ i18n.t("mgr_lineup_save_failed") }}"></span>
+            <select id="fm-manager-formation">
+                <option value="T442"{% if formation_key == "T442" %} selected{% endif %}>4-4-2</option>
+                <option value="T433"{% if formation_key == "T433" %} selected{% endif %}>4-3-3</option>
+                <option value="T451"{% if formation_key == "T451" %} selected{% endif %}>4-5-1</option>
+                <option value="T4231"{% if formation_key == "T4231" %} selected{% endif %}>4-2-3-1</option>
+                <option value="T352"{% if formation_key == "T352" %} selected{% endif %}>3-5-2</option>
+                <option value="T442Diamond"{% if formation_key == "T442Diamond" %} selected{% endif %}>{{ i18n.t("mgr_formation_diamond") }}</option>
+                <option value="T442DiamondWide"{% if formation_key == "T442DiamondWide" %} selected{% endif %}>{{ i18n.t("mgr_formation_diamond_wide") }}</option>
+                <option value="T442Narrow"{% if formation_key == "T442Narrow" %} selected{% endif %}>{{ i18n.t("mgr_formation_narrow") }}</option>
+                <option value="T4141"{% if formation_key == "T4141" %} selected{% endif %}>4-1-4-1</option>
+                <option value="T4411"{% if formation_key == "T4411" %} selected{% endif %}>4-4-1-1</option>
+                <option value="T343"{% if formation_key == "T343" %} selected{% endif %}>3-4-3</option>
+                <option value="T1333"{% if formation_key == "T1333" %} selected{% endif %}>1-3-3-3</option>
+                <option value="T4312"{% if formation_key == "T4312" %} selected{% endif %}>4-3-1-2</option>
+                <option value="T4222"{% if formation_key == "T4222" %} selected{% endif %}>4-2-2-2</option>
+            </select>
+            <label for="fm-manager-style"><strong>{{ i18n.t("mgr_team_style") }}</strong></label>
+            <select id="fm-manager-style">
+                <option value="balanced"{% if style_key == "balanced" %} selected{% endif %}>{{ i18n.t("mgr_style_balanced") }}</option>
+                <option value="attacking"{% if style_key == "attacking" %} selected{% endif %}>{{ i18n.t("mgr_style_attacking") }}</option>
+                <option value="defensive"{% if style_key == "defensive" %} selected{% endif %}>{{ i18n.t("mgr_style_defensive") }}</option>
+                <option value="possession"{% if style_key == "possession" %} selected{% endif %}>{{ i18n.t("mgr_style_possession") }}</option>
+                <option value="counterattack"{% if style_key == "counterattack" %} selected{% endif %}>{{ i18n.t("mgr_style_counterattack") }}</option>
+                <option value="wing_play"{% if style_key == "wing_play" %} selected{% endif %}>{{ i18n.t("mgr_style_wing_play") }}</option>
+                <option value="wide_play"{% if style_key == "wide_play" %} selected{% endif %}>{{ i18n.t("mgr_style_wide_play") }}</option>
+                <option value="compact"{% if style_key == "compact" %} selected{% endif %}>{{ i18n.t("mgr_style_compact") }}</option>
+                <option value="experimental"{% if style_key == "experimental" %} selected{% endif %}>{{ i18n.t("mgr_style_experimental") }}</option>
+            </select>
+            <label for="fm-manager-pressing"><strong>{{ i18n.t("mgr_pressing") }}</strong></label>
+            <input id="fm-manager-pressing" type="range" min="0" max="10" step="1" value="{{ pressing_level }}">
+            <output id="fm-manager-pressing-value" for="fm-manager-pressing">{{ pressing_level }}/10</output>
+            <label for="fm-manager-line"><strong>{{ i18n.t("mgr_defensive_line") }}</strong></label>
+            <input id="fm-manager-line" type="range" min="0" max="10" step="1" value="{{ defensive_line_level }}">
+            <output id="fm-manager-line-value" for="fm-manager-line">{{ defensive_line_level }}/10</output>
+            <span id="fm-manager-tactics-status" role="status" aria-live="polite"></span>
+        </div>
+        <p class="fm-muted" style="padding:0 18px 12px">{{ i18n.t("mgr_style_effect") }} {{ i18n.t("mgr_tactics_dials_effect") }}</p>
+        <script>
+        (function() {
+            var select = document.getElementById('fm-manager-formation');
+            var style = document.getElementById('fm-manager-style');
+            var pressing = document.getElementById('fm-manager-pressing');
+            var line = document.getElementById('fm-manager-line');
+            var status = document.getElementById('fm-manager-tactics-status');
+            var pressingValue = document.getElementById('fm-manager-pressing-value');
+            var lineValue = document.getElementById('fm-manager-line-value');
+            if (!select || !style || !pressing || !line) return;
+            var styleDefaults = {
+                balanced: [6, 5], attacking: [10, 8], defensive: [3, 3],
+                possession: [8, 7], counterattack: [4, 4], wing_play: [6, 5],
+                wide_play: [6, 5], compact: [10, 7], experimental: [5, 5]
+            };
+            function updateReadouts() {
+                pressingValue.value = pressing.value + '/10';
+                lineValue.value = line.value + '/10';
+            }
+            function saveTactics() {
+                select.disabled = true;
+                style.disabled = true;
+                pressing.disabled = true;
+                line.disabled = true;
+                updateReadouts();
+                status.textContent = document.getElementById('fm-manager-tactics-messages').dataset.tacticsSaving;
+                fetch('/api/manager/tactics', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ formation: select.value, style: style.value,
+                        pressing: Number(pressing.value), defensive_line: Number(line.value) })
+                }).then(function(response) {
+                    if (!response.ok) throw new Error('http ' + response.status);
+                    status.textContent = document.getElementById('fm-manager-tactics-messages').dataset.tacticsSaved;
+                    location.reload();
+                }).catch(function() {
+                    status.textContent = document.getElementById('fm-manager-tactics-messages').dataset.tacticsFailed;
+                }).finally(function() {
+                    select.disabled = false;
+                    style.disabled = false;
+                    pressing.disabled = false;
+                    line.disabled = false;
+                });
+            }
+            select.addEventListener('change', saveTactics);
+            style.addEventListener('change', function() {
+                var defaults = styleDefaults[style.value] || styleDefaults.balanced;
+                pressing.value = String(defaults[0]);
+                line.value = String(defaults[1]);
+                updateReadouts();
+                saveTactics();
+            });
+            pressing.addEventListener('input', updateReadouts);
+            line.addEventListener('input', updateReadouts);
+            pressing.addEventListener('change', saveTactics);
+            line.addEventListener('change', saveTactics);
+            updateReadouts();
+        })();
+        </script>
+        {% endif %}
         <div class="fm-pitch fm-tac-pitch">
             <div class="fm-pitch-surface">
                 <div class="fm-pitch-half-line"></div>
@@ -43,6 +152,63 @@
                 {% endfor %}
             </div>
         </div>
+        {% if is_managed %}
+        <section class="fm-panel" style="margin-top:14px;padding:16px 18px">
+            <div class="fm-panel-head"><h3>{{ i18n.t("mgr_lineup_positions") }}</h3></div>
+            <p class="fm-muted">{{ i18n.t("mgr_lineup_help") }}</p>
+            <div id="fm-manager-lineup-slots" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px">
+                {% for slot in lineup_slots %}
+                <label style="display:flex;gap:8px;align-items:center"><strong style="min-width:44px">{{ slot.position_name }}</strong>
+                    <select class="fm-manager-lineup-slot" data-slot-index="{{ slot.index }}">
+                        <option value="0"{% if slot.manual_player_id == 0 %} selected{% endif %}>{{ i18n.t("mgr_auto_selection") }}</option>
+                        {% for candidate in lineup_candidates %}
+                        <option value="{{ candidate.id }}"{% if candidate.id == slot.manual_player_id %} selected{% endif %}>{{ candidate.name }} · {{ candidate.positions }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                {% endfor %}
+            </div>
+            <p id="fm-manager-lineup-status" role="status" aria-live="polite"></p>
+        </section>
+        <script>
+        (function() {
+            var slots = Array.from(document.querySelectorAll('.fm-manager-lineup-slot'));
+            var status = document.getElementById('fm-manager-lineup-status');
+            if (!slots.length || !status) return;
+            slots.forEach(function(select) {
+                select.addEventListener('change', function() {
+                    var ids = slots.map(function(slot) { return slot.value === '0' ? null : Number(slot.value); });
+                    var chosen = ids.filter(function(id) { return id !== null; });
+                    if (new Set(chosen).size !== chosen.length) {
+                        status.textContent = document.getElementById('fm-manager-tactics-messages').dataset.duplicate;
+                        select.value = '0';
+                        return;
+                    }
+                    slots.forEach(function(slot) { slot.disabled = true; });
+                    status.textContent = document.getElementById('fm-manager-tactics-messages').dataset.saving;
+                    fetch('/api/manager/lineup', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ slots: ids })
+                    }).then(function(response) {
+                        if (response.status === 409) throw new Error('duplicate');
+                        if (response.status === 400) throw new Error('unavailable');
+                        if (!response.ok) throw new Error('http ' + response.status);
+                        status.textContent = document.getElementById('fm-manager-tactics-messages').dataset.saved;
+                        location.reload();
+                    }).catch(function(error) {
+                        var messages = document.getElementById('fm-manager-tactics-messages').dataset;
+                        status.textContent = error.message === 'unavailable'
+                            ? messages.unavailable
+                            : error.message === 'duplicate'
+                                ? messages.duplicateError
+                                : messages.saveFailed;
+                        window.setTimeout(function() { location.reload(); }, 1400);
+                    }).finally(function() { slots.forEach(function(slot) { slot.disabled = false; }); });
+                });
+            });
+        })();
+        </script>
+        {% endif %}
         {% if !recent_used_shapes.is_empty() %}
         <div class="fm-tac-recent">
             <span class="fm-tac-recent-label">{{ i18n.t("recently_used") }}</span>

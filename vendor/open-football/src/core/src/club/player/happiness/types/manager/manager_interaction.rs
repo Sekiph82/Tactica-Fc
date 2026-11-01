@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ManagerInteractionTopic {
     PlayingTime,
     Performance,
@@ -25,7 +25,7 @@ impl ManagerInteractionTopic {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ManagerInteractionTone {
     Calm,
     Honest,
@@ -48,7 +48,7 @@ impl ManagerInteractionTone {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PlayerAcceptance {
     Accepted,
     Resented,
@@ -69,7 +69,7 @@ impl PlayerAcceptance {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PromiseKind {
     PlayingTime,
     SquadStatus,
@@ -97,7 +97,7 @@ impl PromiseKind {
 /// "what specifically did the manager focus on" sentence per variant.
 /// `None` (i.e. legacy emit sites that haven't picked one) keeps the
 /// renderer on the topic + tone fallback.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ManagerCriticismReason {
     /// Player ignored a specific tactical assignment (didn't track a
     /// runner, drifted out of position).
@@ -165,7 +165,7 @@ impl ManagerCriticismReason {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ManagerInteractionEventContext {
     pub topic: ManagerInteractionTopic,
     pub tone: ManagerInteractionTone,

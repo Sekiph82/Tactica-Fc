@@ -31,6 +31,7 @@ pub use settings::Settings;
 
 pub use ai::{AiConfig, AiJobs, LlmSettings};
 pub use error::{ApiError, ApiResult};
+pub use game::{ManagerCareerSnapshot, ManagerCareerStore, WorldSaveStore};
 pub use i18n::events::{EventI18n, EventI18nManager};
 pub use i18n::news::{NewsI18n, NewsI18nManager};
 pub use i18n::{I18n, I18nManager};
@@ -77,7 +78,11 @@ impl FootballSimulatorServer {
             .ok()
             .and_then(|value| value.parse::<u16>().ok())
             .unwrap_or(5184);
-        let addr = SocketAddr::from(([0, 0, 0, 0], port));
+        let bind_ip = std::env::var("TACTICA_BIND_ADDRESS")
+            .ok()
+            .and_then(|value| value.parse::<std::net::IpAddr>().ok())
+            .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+        let addr = SocketAddr::from((bind_ip, port));
 
         let listener = match TcpListener::bind(addr).await {
             Ok(listener) => listener,
@@ -99,6 +104,19 @@ impl FootballSimulatorServer {
 pub struct GameAppData {
     pub database: Arc<DatabaseEntity>,
     pub data: Arc<RwLock<Option<Arc<SimulatorData>>>>,
+    /// The single local manager career currently attached to this server.
+    /// The selected team ID is restored from `manager_career_store`; the
+    /// full simulator world is restored from `world_save_store` when valid.
+    pub manager_team_id: Arc<RwLock<Option<u32>>>,
+    /// Append-only local persistence for the selected manager team. This is
+    /// separate from, and does not persist, the simulator world graph.
+    pub manager_career_store: Arc<game::ManagerCareerStore>,
+    /// Compressed snapshots of the authoritative world, flushed after each
+    /// processed day so results, transfers and calendar progress resume.
+    pub world_save_store: Arc<game::WorldSaveStore>,
+    /// Active or most recent managed fixture snapshot. Readable by the match
+    /// controls while the world's day-processing task runs in the background.
+    pub live_match_session: Arc<RwLock<Option<Arc<core::r#match::LiveMatchSession>>>>,
     pub process_lock: Arc<Mutex<()>>,
     pub cancel_flag: Arc<AtomicBool>,
     pub i18n: Arc<I18nManager>,
@@ -124,6 +142,10 @@ impl Clone for GameAppData {
         GameAppData {
             database: Arc::clone(&self.database),
             data: Arc::clone(&self.data),
+            manager_team_id: Arc::clone(&self.manager_team_id),
+            manager_career_store: Arc::clone(&self.manager_career_store),
+            world_save_store: Arc::clone(&self.world_save_store),
+            live_match_session: Arc::clone(&self.live_match_session),
             process_lock: Arc::clone(&self.process_lock),
             cancel_flag: Arc::clone(&self.cancel_flag),
             i18n: Arc::clone(&self.i18n),

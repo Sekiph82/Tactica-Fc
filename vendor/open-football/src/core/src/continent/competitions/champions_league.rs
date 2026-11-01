@@ -19,7 +19,7 @@ pub const CHAMPIONS_LEAGUE_SLUG: &str = "champions-league";
 
 // ─── Main Champions League struct ───────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ChampionsLeague {
     pub participating_clubs: Vec<u32>,
     pub current_stage: CompetitionStage,

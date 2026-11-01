@@ -31,7 +31,7 @@ use crate::club::mind::organs::memory::{
 use crate::club::mind::verdict::MoodContribution;
 
 /// His read of the people he picks.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct JudgementMind {
     /// −100..=100: how long he gives a player before writing him off.
     /// Starts neutral and moves with the verdicts — a coach who has been

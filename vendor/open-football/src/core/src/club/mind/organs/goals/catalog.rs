@@ -17,7 +17,7 @@ use super::evidence::GoalDomain;
 
 /// What a player wants. Closed catalog so every renderer, escalation
 /// rule and test keys off the variant by name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub enum GoalKind {
     /// Placeholder for a default-constructed slot. Never stored.
     #[default]

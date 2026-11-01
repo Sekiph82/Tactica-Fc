@@ -13,11 +13,37 @@
 use std::cmp::Ordering;
 use std::slice::{Iter, IterMut};
 
+mod fixed_array_serde {
+    use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<T: Serialize, S: Serializer, const N: usize>(
+        value: &[T; N],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        value.as_slice().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, T: Deserialize<'de>, D: Deserializer<'de>, const N: usize>(
+        deserializer: D,
+    ) -> Result<[T; N], D::Error> {
+        let values = Vec::<T>::deserialize(deserializer)?;
+        let actual_len = values.len();
+        values
+            .try_into()
+            .map_err(|_| D::Error::invalid_length(actual_len, &"a fixed-capacity array"))
+    }
+}
+
 /// A bounded array-backed collection with `push`, iteration and
 /// weakest-first eviction. Order is insertion order; callers that need
 /// ranking sort a borrowed view rather than keeping the store sorted.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(bound(
+    serialize = "T: serde::Serialize",
+    deserialize = "T: serde::Deserialize<'de>"
+))]
 pub struct FixedStore<T: Copy + Default, const N: usize> {
+    #[serde(with = "fixed_array_serde")]
     items: [T; N],
     len: u8,
 }

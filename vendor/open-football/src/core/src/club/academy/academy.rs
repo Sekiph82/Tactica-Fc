@@ -9,7 +9,7 @@ use crate::{
 use chrono::{Datelike, NaiveDate};
 use std::cmp::Reverse;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AcademyDevelopmentIdentity {
     Balanced,
     TechnicalSchool,
@@ -73,7 +73,7 @@ pub enum AcademyCallUpMode {
     Emergency,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AcademyPathwayPolicy {
     pub min_graduation_age: u8,
     /// 0..100 readiness threshold — see `pathway_readiness_score` for the
@@ -134,7 +134,7 @@ pub struct AcademyPipelineHealth {
     pub years_since_last_graduate: u16,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ClubAcademy {
     pub(super) settings: AcademySettings,
     pub(super) tuning: AcademyTuning,

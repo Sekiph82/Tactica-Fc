@@ -9,6 +9,492 @@
             <h3>{{ i18n.t("schedule") }}</h3>
             {% include "common/_seasonstep.html" %}
         </div>
+        {% if is_managed %}
+        {% if let Some(league_id) = managed_league_id %}
+        <div style="padding:12px 18px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+            <strong>{{ i18n.t("mgr_matchday_plan") }}</strong>
+            <span id="fm-manager-schedule-messages" hidden
+                  data-unsaved="{{ i18n.t("mgr_unsaved_tactics") }}"
+                  data-saving="{{ i18n.t("mgr_save_matchday_tactics") }}"
+                  data-save-failed="{{ i18n.t("mgr_matchday_tactic_save_failed") }}"
+                  data-saved="{{ i18n.t("mgr_next_match_tactics_saved") }}"
+                  data-processing="{{ i18n.t("mgr_processing_matchday") }}"
+                  data-refreshing="{{ i18n.t("mgr_refreshing_fixtures") }}"
+                  data-processing-failed="{{ i18n.t("mgr_processing_status_failed") }}"
+                  data-one-day="{{ i18n.t("mgr_one_day_starting") }}"
+                  data-days="{{ i18n.t("mgr_days_starting") }}"
+                  data-advance-failed="{{ i18n.t("mgr_advance_failed") }}"></span>
+            <label>{{ i18n.t("mgr_match_formation") }}
+                <select id="fm-matchday-formation">
+                    <option value="T442"{% if managed_formation_key == "T442" %} selected{% endif %}>4-4-2</option><option value="T433"{% if managed_formation_key == "T433" %} selected{% endif %}>4-3-3</option><option value="T451"{% if managed_formation_key == "T451" %} selected{% endif %}>4-5-1</option><option value="T4231"{% if managed_formation_key == "T4231" %} selected{% endif %}>4-2-3-1</option><option value="T352"{% if managed_formation_key == "T352" %} selected{% endif %}>3-5-2</option><option value="T442Diamond"{% if managed_formation_key == "T442Diamond" %} selected{% endif %}>{{ i18n.t("mgr_formation_diamond") }}</option><option value="T442DiamondWide"{% if managed_formation_key == "T442DiamondWide" %} selected{% endif %}>{{ i18n.t("mgr_formation_diamond_wide") }}</option><option value="T442Narrow"{% if managed_formation_key == "T442Narrow" %} selected{% endif %}>{{ i18n.t("mgr_formation_narrow") }}</option><option value="T4141"{% if managed_formation_key == "T4141" %} selected{% endif %}>4-1-4-1</option><option value="T4411"{% if managed_formation_key == "T4411" %} selected{% endif %}>4-4-1-1</option><option value="T343"{% if managed_formation_key == "T343" %} selected{% endif %}>3-4-3</option><option value="T1333"{% if managed_formation_key == "T1333" %} selected{% endif %}>1-3-3-3</option><option value="T4312"{% if managed_formation_key == "T4312" %} selected{% endif %}>4-3-1-2</option><option value="T4222"{% if managed_formation_key == "T4222" %} selected{% endif %}>4-2-2-2</option>
+                </select>
+            </label>
+            <label>{{ i18n.t("mgr_playing_style") }}
+                <select id="fm-matchday-style">
+                    <option value="balanced"{% if managed_style_key == "balanced" %} selected{% endif %}>{{ i18n.t("mgr_style_balanced") }}</option><option value="attacking"{% if managed_style_key == "attacking" %} selected{% endif %}>{{ i18n.t("mgr_style_attacking") }}</option><option value="defensive"{% if managed_style_key == "defensive" %} selected{% endif %}>{{ i18n.t("mgr_style_defensive") }}</option><option value="possession"{% if managed_style_key == "possession" %} selected{% endif %}>{{ i18n.t("mgr_style_possession") }}</option><option value="counterattack"{% if managed_style_key == "counterattack" %} selected{% endif %}>{{ i18n.t("mgr_style_counterattack") }}</option><option value="wing_play"{% if managed_style_key == "wing_play" %} selected{% endif %}>{{ i18n.t("mgr_style_wing_play") }}</option><option value="wide_play"{% if managed_style_key == "wide_play" %} selected{% endif %}>{{ i18n.t("mgr_style_wide_play") }}</option><option value="compact"{% if managed_style_key == "compact" %} selected{% endif %}>{{ i18n.t("mgr_style_compact") }}</option><option value="experimental"{% if managed_style_key == "experimental" %} selected{% endif %}>{{ i18n.t("mgr_style_experimental") }}</option>
+                </select>
+            </label>
+            <a class="fm-button" href="/{{ lang }}/teams/{{ team_slug }}/tactics">{{ i18n.t("mgr_lineup_positions_link") }}</a>
+            <button type="button" class="fm-button" id="fm-matchday-save">{{ i18n.t("mgr_save_tactics") }}</button>
+            <span id="fm-matchday-tactics-status" role="status" aria-live="polite">{{ i18n.t("mgr_matchday_plan_note") }}</span>
+        </div>
+        <div style="padding:12px 18px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+            <button type="button" class="fm-button fm-manager-advance" data-days="1" data-competition-ids="{{ managed_competition_ids }}">{{ i18n.t("mgr_advance_one_day") }}</button>
+            {% if let Some(days) = next_match_days %}
+            <button type="button" class="fm-button fm-manager-advance" data-days="{{ days }}" data-competition-ids="{{ managed_competition_ids }}">{{ i18n.t("mgr_advance_next_match") }} · {{ days }} {{ i18n.t("mgr_days") }}</button>
+            {% endif %}
+            <span id="fm-manager-advance-status" role="status" aria-live="polite">{{ i18n.t("mgr_advance_help") }}</span>
+        </div>
+        <section id="fm-live-match" style="margin:0 18px 16px;padding:14px;border:1px solid #2d5960;border-radius:10px;background:#071925" data-team-name="{{ title }}" data-team-color="{{ header_color }}" data-team-text="{{ foreground_color }}" data-opponent-name="{{ live_opponent_name }}" data-status-waiting="{{ i18n.t("mgr_live_waiting") }}" data-status-playing="{{ i18n.t("mgr_live_playing") }}" data-status-finished="{{ i18n.t("mgr_live_finished") }}" data-status-no-match="{{ i18n.t("mgr_live_no_match") }}" data-status-viewer-loading="{{ i18n.t("mgr_live_viewer_loading") }}" data-viewer-failed="{{ i18n.t("mgr_live_viewer_failed") }}" data-command-sent="{{ i18n.t("mgr_live_command_sent") }}" data-command-failed="{{ i18n.t("mgr_live_command_failed") }}" data-sub-queued="{{ i18n.t("mgr_live_sub_queued") }}" data-sub-applied="{{ i18n.t("mgr_live_sub_applied") }}" data-sub-rejected="{{ i18n.t("mgr_live_sub_rejected") }}" data-event-goal="{{ i18n.t("mgr_live_event_goal") }}" data-event-assist="{{ i18n.t("mgr_live_event_assist") }}" data-event-shot="{{ i18n.t("mgr_live_event_shot") }}" data-event-save="{{ i18n.t("mgr_live_event_save") }}" data-event-block="{{ i18n.t("mgr_live_event_block") }}" data-event-post="{{ i18n.t("mgr_live_event_post") }}" data-event-offside="{{ i18n.t("mgr_live_event_offside") }}" data-event-foul="{{ i18n.t("mgr_live_event_foul") }}" data-event-card="{{ i18n.t("mgr_live_event_card") }}" data-event-pass="{{ i18n.t("mgr_live_event_pass") }}" data-event-tackle="{{ i18n.t("mgr_live_event_tackle") }}" data-event-clearance="{{ i18n.t("mgr_live_event_clearance") }}" data-event-interception="{{ i18n.t("mgr_live_event_interception") }}">
+            <strong>{{ i18n.t("mgr_live_title") }}</strong>
+            <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;margin-top:8px">
+                <div style="min-width:0;border:1px solid #2d5960;border-radius:10px;overflow:hidden;background:#06131d"><canvas id="fm-live-viewer-canvas" aria-label="Open Football live match viewer" style="display:block;width:100%;height:min(55vw,520px);min-height:320px;touch-action:none"></canvas></div>
+                <div style="min-width:170px;text-align:center"><div id="fm-live-clock" style="font-size:24px;font-weight:800;color:#54e0cc">—</div><div id="fm-live-score" style="font-size:20px;font-weight:800">—</div><div id="fm-live-state" role="status" aria-live="polite">{{ i18n.t("mgr_live_waiting") }}</div></div>
+            </div>
+            <div style="margin-top:10px;padding:8px 12px;border:1px solid #1a3a49;border-radius:8px;background:#06131d"><strong>{{ i18n.t("mgr_live_events_title") }}</strong><ol id="fm-live-commentary" aria-live="polite" style="display:flex;gap:20px;flex-wrap:wrap;margin:6px 0 0;padding-left:20px"></ol></div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px"><span>{{ i18n.t("mgr_live_instruction") }}:</span>
+                <button type="button" class="fm-button fm-live-command" data-instruction="normal">{{ i18n.t("mgr_live_normal") }}</button>
+                <button type="button" class="fm-button fm-live-command" data-instruction="slow_down">{{ i18n.t("mgr_live_slow_down") }}</button>
+                <button type="button" class="fm-button fm-live-command" data-instruction="push_forward">{{ i18n.t("mgr_live_push_forward") }}</button>
+                <button type="button" class="fm-button fm-live-command" data-instruction="all_out_attack">{{ i18n.t("mgr_live_all_out_attack") }}</button>
+                <button type="button" class="fm-button fm-live-command" data-instruction="waste_time">{{ i18n.t("mgr_live_waste_time") }}</button>
+                <button type="button" class="fm-button fm-live-command" data-instruction="park_the_bus">{{ i18n.t("mgr_live_park_the_bus") }}</button>
+            </div>
+            <template id="fm-manager-roster-options">{% for player in managed_players %}<option value="{{ player.id }}">{{ player.name }}</option>{% endfor %}</template>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+                <label>{{ i18n.t("mgr_live_sub_out") }} <select id="fm-live-sub-out"><option value="">—</option></select></label>
+                <label>{{ i18n.t("mgr_live_sub_in") }} <select id="fm-live-sub-in"><option value="">—</option></select></label>
+                <button type="button" class="fm-button" id="fm-live-sub-submit" disabled>{{ i18n.t("mgr_live_sub_button") }}</button>
+            </div>
+        </section>
+        <script>
+        (function() {
+            var buttons = Array.from(document.querySelectorAll('.fm-manager-advance'));
+            var status = document.getElementById('fm-manager-advance-status');
+            var formation = document.getElementById('fm-matchday-formation');
+            var style = document.getElementById('fm-matchday-style');
+            var saveButton = document.getElementById('fm-matchday-save');
+            var tacticsStatus = document.getElementById('fm-matchday-tactics-status');
+            var livePanel = document.getElementById('fm-live-match');
+            var liveClock = document.getElementById('fm-live-clock');
+            var liveScore = document.getElementById('fm-live-score');
+            var liveState = document.getElementById('fm-live-state');
+            var liveButtons = Array.from(document.querySelectorAll('.fm-live-command'));
+            var substitutionOut = document.getElementById('fm-live-sub-out');
+            var substitutionIn = document.getElementById('fm-live-sub-in');
+            var substitutionButton = document.getElementById('fm-live-sub-submit');
+            var rosterOptions = Array.from(document.querySelectorAll('#fm-manager-roster-options option')).map(function(option) {
+                return { id: option.value, name: option.textContent };
+            });
+            var currentLiveView = null;
+            var currentLiveSessionId = null;
+            var lastLiveSequence = 0;
+            var lastLiveEventSequence = 0;
+            var lastLiveElapsedMs = -1;
+            var recentLiveEvents = [];
+            var viewerApi = null;
+            var viewerPromise = null;
+            var viewerSessionId = null;
+            var viewerBaseElapsedMs = 0;
+            var viewerLastSequence = 0;
+            var viewerGoalCount = 0;
+            var viewerLastPlaying = null;
+            var viewerPendingFrames = [];
+            var viewerFailed = false;
+            var viewerRateSampleAt = null;
+            var viewerRateSampleElapsedMs = null;
+            // The manager match advances 500 ms of match time per 20 ms of
+            // wall time, so the embedded viewer starts at the matching 25x.
+            var viewerPlaybackSpeed = 25.0;
+
+            function setViewerPlaying(playing) {
+                if (!viewerApi || viewerLastPlaying === playing) return;
+                viewerLastPlaying = playing;
+                viewerApi.setPlaying(playing);
+            }
+
+            function syncViewerPlayback(frame, status) {
+                var now = performance.now();
+                var elapsed = Number(frame.elapsed_ms) || 0;
+                if (viewerRateSampleAt === null || viewerRateSampleElapsedMs === null) {
+                    viewerRateSampleAt = now;
+                    viewerRateSampleElapsedMs = elapsed;
+                    if (status !== 'playing') setViewerPlaying(false);
+                    return;
+                }
+                var wallDelta = now - viewerRateSampleAt;
+                if (wallDelta < 250) {
+                    if (status !== 'playing') setViewerPlaying(false);
+                    return;
+                }
+                var matchDelta = elapsed - viewerRateSampleElapsedMs;
+                viewerRateSampleAt = now;
+                viewerRateSampleElapsedMs = elapsed;
+                if (status !== 'playing' || matchDelta <= 0) {
+                    setViewerPlaying(false);
+                    return;
+                }
+                // Both values are elapsed milliseconds; this ratio therefore
+                // matches the engine's accelerated live clock (about 25x).
+                var measuredSpeed = Math.max(0.25, Math.min(25, matchDelta / wallDelta));
+                viewerPlaybackSpeed = viewerPlaybackSpeed * 0.3 + measuredSpeed * 0.7;
+                if (viewerApi) viewerApi.setSpeed(viewerPlaybackSpeed);
+                setViewerPlaying(true);
+            }
+
+            function viewerPlayer(player, frame, activeIds, managerTeamId) {
+                var isHome = Number(player.team_id) === Number(frame.home_team_id);
+                var managed = String(player.team_id) === String(managerTeamId);
+                var rosterPlayer = managed && rosterOptions.find(function(option) { return option.id === String(player.id); });
+                var playerName = String(player.name || (rosterPlayer && rosterPlayer.name) || '').trim();
+                var splitName = playerName ? playerName.split(/\s+/) : [];
+                return {
+                    id: Number(player.id),
+                    shirt_number: 0,
+                    first_name: splitName.slice(0, -1).join(' '),
+                    last_name: splitName.slice(-1)[0] || '',
+                    position: player.goalkeeper ? 'GK' : 'MC',
+                    is_home: isHome,
+                    starting: activeIds.has(String(player.id))
+                };
+            }
+
+            function framePayload(frame, goals) {
+                var timestamp = Math.max(0, Number(frame.elapsed_ms));
+                var players = {};
+                frame.players.forEach(function(player) {
+                    players[String(player.id)] = [[timestamp, player.x, player.y]];
+                });
+                return {
+                    ball: [[timestamp, frame.ball_x, frame.ball_y, frame.ball_z || 0]],
+                    players: players,
+                    goals: goals || [],
+                    events: (frame.events || []).map(function(event) {
+                        return {
+                            timestamp: Math.max(0, Number(event.timestamp)),
+                            category: String(event.category || ''),
+                            description: String(event.description || '')
+                        };
+                    }),
+                    states: {}
+                };
+            }
+
+            function describeLiveEvent(event) {
+                var description = String(event.description || '');
+                if (description.indexOf('REFUSED ') === 0) description = description.slice(8);
+                var kind = description.split(/[({]/, 1)[0].trim();
+                if (event.category === 'player' && (kind === 'Goal' || kind === 'Assist')) return '';
+                var key = null;
+                if (kind === 'Goal' || kind === 'Assist') key = 'eventGoal';
+                else if (kind === 'Shoot' || kind === 'RequestShot') key = 'eventShot';
+                else if (kind === 'CaughtBall' || kind === 'ParriedBall' || kind === 'Howler') key = 'eventSave';
+                else if (kind === 'Blocked') key = 'eventBlock';
+                else if (kind === 'HitFrame') key = 'eventPost';
+                else if (kind === 'Offside') key = 'eventOffside';
+                else if (kind === 'Foul' || kind === 'Handball') key = 'eventFoul';
+                else if (kind === 'Caution') key = 'eventCard';
+                else if (kind === 'PassCompleted') key = 'eventPass';
+                else if (kind === 'TacklingBall' || kind === 'Dispossessed') key = 'eventTackle';
+                else if (kind === 'HeadedClear' || kind === 'ClearBall') key = 'eventClearance';
+                else if (kind === 'Intercepted') key = 'eventInterception';
+                if (!key) return '';
+                var label = livePanel.dataset[key];
+                var actor = String(event.actor_name || '').trim();
+                var related = String(event.related_player_name || '').trim();
+                if (!actor) return label;
+                if (related && (kind === 'PassTo' || kind === 'PassCompleted')) {
+                    return actor + ' → ' + related + ' · ' + label;
+                }
+                if (related && kind === 'Goal') {
+                    return actor + ' · ' + label + ' · ' + livePanel.dataset.eventAssist + ' ' + related;
+                }
+                return actor + ' · ' + label;
+            }
+
+            function renderLiveEvents(events) {
+                (events || []).forEach(function(event) {
+                    var sequence = Number(event.sequence) || 0;
+                    if (sequence <= lastLiveEventSequence) return;
+                    lastLiveEventSequence = sequence;
+                    var label = describeLiveEvent(event);
+                    if (!label) return;
+                    var key = String(event.timestamp) + ':' + label;
+                    if (recentLiveEvents.some(function(item) { return item.key === key; })) return;
+                    recentLiveEvents.push({ key: key, minute: Math.floor(Number(event.timestamp) / 60000), label: label });
+                    if (recentLiveEvents.length > 4) recentLiveEvents.shift();
+                });
+                var list = document.getElementById('fm-live-commentary');
+                if (!list) return;
+                list.replaceChildren();
+                recentLiveEvents.slice().reverse().forEach(function(item) {
+                    var entry = document.createElement('li');
+                    entry.textContent = item.minute + "' " + item.label;
+                    list.appendChild(entry);
+                });
+            }
+
+            function appendViewerFrame(frame) {
+                if (!viewerApi || !frame || frame.sequence <= viewerLastSequence) return;
+                viewerLastSequence = frame.sequence;
+                var newGoals = (frame.goals || []).slice(viewerGoalCount).map(function(goal) {
+                    return {
+                        player_id: Number(goal.player_id),
+                        time: Math.max(0, Number(goal.time)),
+                        is_auto_goal: !!goal.is_auto_goal
+                    };
+                });
+                viewerGoalCount = (frame.goals || []).length;
+                viewerApi.pushRecording(JSON.stringify(framePayload(frame, newGoals)));
+            }
+
+            function startViewer(view, firstFrame) {
+                if (viewerPromise || !firstFrame) return;
+                viewerSessionId = view.session_id;
+                viewerBaseElapsedMs = Number(firstFrame.elapsed_ms) || 0;
+                viewerLastSequence = firstFrame.sequence;
+                viewerGoalCount = (firstFrame.goals || []).length;
+                var activeIds = new Set(firstFrame.players.map(function(player) { return String(player.id); }));
+                var teamPlayers = firstFrame.players.concat(firstFrame.substitutes || []);
+                var players = teamPlayers.map(function(player) {
+                    return viewerPlayer(player, firstFrame, activeIds, view.manager_team_id);
+                });
+                var managerIsHome = Number(view.manager_team_id) === Number(firstFrame.home_team_id);
+                var managerColor = livePanel.dataset.teamColor || '#b20d22';
+                var managerText = livePanel.dataset.teamText || '#ffffff';
+                var opponentName = livePanel.dataset.opponentName || '';
+                var initialRecording = framePayload(firstFrame, []);
+                var config = {
+                    canvas: '#fm-live-viewer-canvas',
+                    api_base: '',
+                    inline_recording: JSON.stringify(initialRecording),
+                    embedded: true,
+                    lineup: false,
+                    fps_cap: 60,
+                    match_time_ms: 5700000,
+                    start_time_ms: viewerBaseElapsedMs,
+                    home: {
+                        background: managerIsHome ? managerColor : '#1b263b',
+                        foreground: managerIsHome ? managerText : '#ffffff'
+                    },
+                    away: {
+                        background: managerIsHome ? '#1b263b' : managerColor,
+                        foreground: managerIsHome ? '#ffffff' : managerText
+                    },
+                    home_name: managerIsHome ? livePanel.dataset.teamName : opponentName,
+                    away_name: managerIsHome ? opponentName : livePanel.dataset.teamName,
+                    players: players,
+                    goals: [],
+                    debug: false
+                };
+                liveState.textContent = livePanel.dataset.statusViewerLoading || livePanel.dataset.statusPlaying;
+                viewerPromise = import('/static/viewer/match_viewer.js?v={{ match_viewer_version }}')
+                    .then(function(module) {
+                        // wasm-bindgen's generated initializer has no implicit
+                        // Wasm URL here; the replay page supplies the response
+                        // explicitly too. Without it, instantiate(undefined)
+                        // rejects and the manager's live pitch never starts.
+                        return module.default({
+                            module_or_path: fetch('/static/viewer/match_viewer_bg.wasm?v={{ match_viewer_version }}')
+                        }).then(function() { return module.MatchViewer; });
+                    })
+                    .then(function(api) {
+                        viewerApi = api;
+                        viewerApi.start(JSON.stringify(config));
+                        viewerApi.setSpeed(viewerPlaybackSpeed);
+                        setViewerPlaying(!!currentLiveView && currentLiveView.status === 'playing');
+                        viewerPendingFrames.forEach(appendViewerFrame);
+                        viewerPendingFrames = [];
+                    })
+                    .catch(function(error) {
+                        viewerFailed = true;
+                        console.error('Open Football live viewer failed to start', error);
+                        liveState.textContent = livePanel.dataset.viewerFailed || livePanel.dataset.commandFailed;
+                    });
+            }
+            function updateSubstitutionButton(view) {
+                if (arguments.length) currentLiveView = view;
+                if (!substitutionButton) return;
+                var playersSelected = substitutionOut.value && substitutionIn.value && substitutionOut.value !== substitutionIn.value;
+                substitutionButton.disabled = !currentLiveView || currentLiveView.status !== 'playing' || !!currentLiveView.pending_substitution || !playersSelected;
+            }
+            function refillSelect(select, ids) {
+                var current = select.value;
+                select.replaceChildren(new Option('—', ''));
+                ids.forEach(function(id) {
+                    var player = rosterOptions.find(function(option) { return option.id === String(id); });
+                    if (player) select.add(new Option(player.name, player.id));
+                });
+                if (Array.from(select.options).some(function(option) { return option.value === current; })) select.value = current;
+            }
+            function refreshLiveMatch() {
+                return fetch('/api/game/live-match?after_event=' + encodeURIComponent(lastLiveEventSequence) + '&after_frame=' + encodeURIComponent(lastLiveSequence)).then(function(response) { return response.json(); }).then(function(view) {
+                    // A command-triggered refresh can overlap a poll. Ignore a
+                    // late response from a previous fixture session entirely.
+                    if (view && currentLiveSessionId !== null && view.session_id < currentLiveSessionId) return;
+                    liveButtons.forEach(function(button) { button.disabled = !view || view.status !== 'playing'; });
+                    updateSubstitutionButton(view);
+                    if (!view) { liveState.textContent = livePanel.dataset.statusWaiting; return; }
+                    if (currentLiveSessionId !== view.session_id) {
+                        currentLiveSessionId = view.session_id;
+                        lastLiveSequence = 0;
+                        lastLiveElapsedMs = -1;
+                        lastLiveEventSequence = 0;
+                        recentLiveEvents = [];
+                    }
+                    var eventSequenceBeforePoll = lastLiveEventSequence;
+                    renderLiveEvents(view.events || []);
+                    var normalizedStatus = view.status.replace(/_([a-z])/g, function(_, letter) { return letter.toUpperCase(); });
+                    var statusKey = 'status' + normalizedStatus.charAt(0).toUpperCase() + normalizedStatus.slice(1);
+                    liveState.textContent = livePanel.dataset[statusKey] || livePanel.dataset.statusWaiting;
+                    if (view.status !== 'playing') setViewerPlaying(false);
+                    if (viewerFailed) liveState.textContent = livePanel.dataset.viewerFailed || livePanel.dataset.commandFailed;
+                    if (!view.frame) return;
+                    var frame = view.frame;
+                    var managedTeamId = String(view.manager_team_id);
+                    refillSelect(substitutionOut, frame.players.filter(function(player) { return String(player.team_id) === managedTeamId; }).map(function(player) { return player.id; }));
+                    refillSelect(substitutionIn, frame.substitutes.filter(function(player) { return String(player.team_id) === managedTeamId; }).map(function(player) { return player.id; }));
+                    updateSubstitutionButton(view);
+                    // Keep the scoreboard current, but stream every sampled engine
+                    // position to the viewer in sequence instead of jumping straight
+                    // to the newest frame after a slow request.
+                    var incomingFrames = Array.isArray(view.frames) ? view.frames.slice() : [];
+                    if (!incomingFrames.length || Number(incomingFrames[incomingFrames.length - 1].sequence) < Number(frame.sequence)) incomingFrames.push(frame);
+                    incomingFrames = incomingFrames.filter(function(candidate, index) {
+                        return Number(candidate.sequence) > lastLiveSequence
+                            && (index === 0 || Number(candidate.elapsed_ms) >= lastLiveElapsedMs);
+                    });
+                    var viewerEvents = (view.events || []).filter(function(event) {
+                        return Number(event.sequence) > eventSequenceBeforePoll;
+                    });
+                    if (incomingFrames.length) incomingFrames[incomingFrames.length - 1].events = viewerEvents;
+                    incomingFrames.forEach(function(candidate) {
+                        // Responses can race; only advance the feed cursor.
+                        if (candidate.sequence <= lastLiveSequence || candidate.elapsed_ms < lastLiveElapsedMs) return;
+                        lastLiveSequence = candidate.sequence;
+                        lastLiveElapsedMs = candidate.elapsed_ms;
+                        if (!viewerPromise) startViewer(view, candidate);
+                        else if (viewerSessionId === view.session_id && viewerApi) appendViewerFrame(candidate);
+                        else if (viewerSessionId === view.session_id) viewerPendingFrames.push(candidate);
+                    });
+                    if (view.last_substitution) {
+                        var subStatus = view.last_substitution.status;
+                        if (subStatus === 'queued' || subStatus === 'applied' || subStatus === 'rejected') {
+                            liveState.textContent = livePanel.dataset['sub' + subStatus.charAt(0).toUpperCase() + subStatus.slice(1)];
+                        }
+                    }
+                    liveClock.textContent = Math.floor(frame.elapsed_ms / 60000) + "'";
+                    liveScore.textContent = frame.home_score + ' – ' + frame.away_score;
+                    syncViewerPlayback(frame, view.status);
+                }).catch(function(error) {
+                    liveState.textContent = livePanel.dataset.viewerFailed || livePanel.dataset.commandFailed;
+                    console.error('Unable to read the managed live match frame', error);
+                });
+            }
+            function pollLiveMatch() {
+                refreshLiveMatch().finally(function() {
+                    // Match the engine's 20ms live-frame cadence while visible.
+                    // A hidden browser tab can use a slower poll without wasting
+                    // JSON serialization and render time.
+                    var delay = document.hidden ? 250 : (currentLiveView && currentLiveView.status === 'playing' ? 20 : 300);
+                    window.setTimeout(pollLiveMatch, delay);
+                });
+            }
+            substitutionOut.addEventListener('change', function() { updateSubstitutionButton(); });
+            substitutionIn.addEventListener('change', function() { updateSubstitutionButton(); });
+            liveButtons.forEach(function(button) {
+                button.addEventListener('click', function() {
+                    button.disabled = true;
+                    fetch('/api/manager/live-instruction', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instruction: button.dataset.instruction }) })
+                    .then(function(response) { liveState.textContent = response.ok ? livePanel.dataset.commandSent : livePanel.dataset.commandFailed; })
+                    .catch(function() { liveState.textContent = livePanel.dataset.commandFailed; })
+                    .finally(refreshLiveMatch);
+                });
+            });
+            substitutionButton.addEventListener('click', function() {
+                var outgoing = Number(substitutionOut.value);
+                var incoming = Number(substitutionIn.value);
+                if (!outgoing || !incoming || outgoing === incoming) return;
+                substitutionButton.disabled = true;
+                fetch('/api/manager/live-substitution', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ outgoing_player_id: outgoing, incoming_player_id: incoming })
+                }).then(function(response) {
+                    liveState.textContent = response.ok ? livePanel.dataset.subQueued : livePanel.dataset.commandFailed;
+                    if (response.ok) refreshLiveMatch();
+                }).catch(function() { liveState.textContent = livePanel.dataset.commandFailed; })
+                .finally(refreshLiveMatch);
+            });
+            pollLiveMatch();
+            if (!buttons.length || !status) return;
+            var tacticsDirty = false;
+            [formation, style].forEach(function(select) {
+                select.addEventListener('change', function() {
+                    tacticsDirty = true;
+                    tacticsStatus.textContent = document.getElementById('fm-manager-schedule-messages').dataset.unsaved;
+                });
+            });
+            function saveTactics() {
+                if (!tacticsDirty) return Promise.resolve();
+                saveButton.disabled = true;
+                var messages = document.getElementById('fm-manager-schedule-messages').dataset;
+                tacticsStatus.textContent = messages.saving;
+                return fetch('/api/manager/tactics', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ formation: formation.value, style: style.value })
+                }).then(function(response) {
+                    if (!response.ok) throw new Error(messages.saveFailed);
+                    tacticsDirty = false;
+                    tacticsStatus.textContent = messages.saved;
+                }).finally(function() { saveButton.disabled = false; });
+            }
+            saveButton.addEventListener('click', function() {
+                saveTactics().catch(function(error) { tacticsStatus.textContent = error.message; });
+            });
+            function waitUntilDone() {
+                fetch('/api/game/processing').then(function(response) { return response.json(); })
+                .then(function(data) {
+                    if (data.processing) {
+                        status.textContent = document.getElementById('fm-manager-schedule-messages').dataset.processing;
+                        window.setTimeout(waitUntilDone, 700);
+                    } else {
+                        status.textContent = document.getElementById('fm-manager-schedule-messages').dataset.refreshing;
+                        location.reload();
+                    }
+                }).catch(function() {
+                    status.textContent = document.getElementById('fm-manager-schedule-messages').dataset.processingFailed;
+                    buttons.forEach(function(button) { button.disabled = false; });
+                });
+            }
+            buttons.forEach(function(button) {
+                button.addEventListener('click', function() {
+                    buttons.forEach(function(action) { action.disabled = true; });
+                    saveButton.disabled = true;
+                    var days = Number(button.getAttribute('data-days'));
+                    var messages = document.getElementById('fm-manager-schedule-messages').dataset;
+                    status.textContent = days === 1 ? messages.oneDay : messages.days.replace('{days}', days);
+                    saveTactics().then(function() {
+                        formation.disabled = true;
+                        style.disabled = true;
+                        saveButton.disabled = true;
+                        return fetch('/api/game/process?days=' + days + '&league_ids=' + encodeURIComponent(button.getAttribute('data-competition-ids')), { method: 'POST' });
+                    })
+                    .then(function(response) {
+                        if (!response.ok) throw new Error('http ' + response.status);
+                        waitUntilDone();
+                    }).catch(function() {
+                        status.textContent = document.getElementById('fm-manager-schedule-messages').dataset.advanceFailed;
+                        buttons.forEach(function(action) { action.disabled = false; });
+                        formation.disabled = false;
+                        style.disabled = false;
+                        saveButton.disabled = false;
+                    });
+                });
+            });
+        })();
+        </script>
+        {% endif %}
+        {% endif %}
         {% if items.is_empty() %}
         <div class="fm-empty">{{ i18n.t("no_schedule") }}</div>
         {% else %}
@@ -39,8 +525,8 @@
                     <td class="sch-result">
                         {% if let Some(result) = item.result %}
                         {% if !result.match_id.is_empty() %}
-                        <a href="/{{ lang }}/match/{{ result.match_id }}" class="fm-result">
-                            {{ result.home_goals }} – {{ result.away_goals }}
+                        <a href="/{{ lang }}/match/{{ result.match_id }}" class="fm-result" title="{{ i18n.t("mgr_open_replay") }}">
+                            {{ result.home_goals }} – {{ result.away_goals }}{% if is_managed %} · {{ i18n.t("mgr_watch_match") }}{% endif %}
                         </a>
                         {% else %}
                         <span class="fm-result">{{ result.home_goals }} – {{ result.away_goals }}</span>

@@ -10,6 +10,16 @@ pub struct ViewerConfig {
     pub canvas: String,
     /// Prefix shared by the recording endpoints, e.g. `/api/match/1234`.
     pub api_base: String,
+    /// Optional self-contained position batch supplied by a host manager app.
+    /// When present, the viewer does not request the upstream replay API.
+    #[serde(default)]
+    pub inline_recording: Option<String>,
+    /// The host owns the match clock, score and controls when embedded.
+    #[serde(default)]
+    pub embedded: bool,
+    /// Starting point for a live feed that joins an already-running match.
+    #[serde(default)]
+    pub start_time_ms: f64,
     /// Full-time timestamp of the recording, in milliseconds.
     pub match_time_ms: f64,
     pub home: TeamColors,
@@ -459,6 +469,9 @@ impl ViewerConfig {
         ViewerConfig {
             canvas: String::new(),
             api_base: String::new(),
+            inline_recording: None,
+            embedded: false,
+            start_time_ms: 0.0,
             match_time_ms: 0.0,
             home: TeamColors {
                 background: "#ffffff".to_string(),

@@ -173,6 +173,7 @@ impl Scoreboard {
                     ..default()
                 },
                 BackgroundColor(Self::PANEL),
+                if config.embedded { Visibility::Hidden } else { Visibility::Inherited },
             ))
             .with_children(|line| {
                 // **The two figures meet in the middle**, with a club's name on
@@ -288,6 +289,9 @@ impl Scoreboard {
             &mut BackgroundColor,
         )>,
     ) {
+        if config.embedded {
+            return;
+        }
         // Whenever a card has the picture, the corner is quiet: the team sheets
         // over the walk-out and the full-time card both name the two clubs
         // larger than the bug does, and a second naming of the same fixture
@@ -915,6 +919,7 @@ impl FullTime {
     pub fn follow_playhead(
         time: Res<Time>,
         playback: Res<Playback>,
+        config: Res<ViewerConfig>,
         mut card: ResMut<FullTime>,
         veil: Single<&mut Visibility, With<FullTimeVeil>>,
         screen: Single<
@@ -925,6 +930,9 @@ impl FullTime {
         mut inks: Query<(&FullTimeInk, &mut TextColor)>,
         mut edges: Query<&mut BorderColor, With<FullTimeEdge>>,
     ) {
+        if config.embedded {
+            return;
+        }
         let wanted = if playback.at_full_time() { 1.0 } else { 0.0 };
         // Cut rather than walked across a scrub: the card the playhead landed
         // in is the one to be in, which is the rule every written shot in

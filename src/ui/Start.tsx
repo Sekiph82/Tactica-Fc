@@ -42,6 +42,7 @@ export function Start({ onLang, onHome }: { onLang: (l: Lang) => void; onHome?: 
       <div className="start-box">
         <div className="logo">
           {view === 'menu' && <div className="start-pill"><span className="start-live" />{t('start.pill')}</div>}
+          {view === 'menu' && <img className="start-brand-icon" src={`${import.meta.env.BASE_URL}tactica-brand/Tactica_FC_Black_Metal_128x128.png?v=25`} alt="TACTICA FC" width="128" height="128" />}
           <h1>TACTICA <span>FC</span></h1>
           <p>{t('start.subtitle')}</p>
         </div>

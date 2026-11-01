@@ -38,7 +38,7 @@ use crate::transfers::market::affinity::MarketAffinity;
 use crate::transfers::market::map::MarketMap;
 
 /// One country a club has done business in.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MarketLedgerEntry {
     pub country_id: u32,
     /// Signings made from this market, including the day-0 bootstrap from
@@ -61,7 +61,7 @@ pub struct MarketLedgerEntry {
 }
 
 /// A club's memory of the markets it works in.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ClubMarketLedger {
     entries: Vec<MarketLedgerEntry>,
 }
@@ -161,7 +161,7 @@ impl ClubMarketLedger {
 /// imports are — placing a boy in Belgium is not knowing Portugal — and
 /// the volume, decay and outcome arithmetic is the same memory, so it is
 /// the same type underneath.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct LoanPlacementLedger {
     countries: ClubMarketLedger,
 }

@@ -25,7 +25,7 @@ use crate::club::mind::organs::memory::{ActorRef, EpochDay, MindClock};
 /// `Open` until the player's career settles the question — which for a
 /// young player is years after the coach first formed a view, and that
 /// delay is exactly what makes the verdict worth anything.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum JudgementOutcome {
     /// Not yet settled.
     #[default]
@@ -53,7 +53,7 @@ impl JudgementOutcome {
 }
 
 /// What a coach thinks of a player.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct PlayerJudgement {
     /// Who this is about. Always [`ActorRef::player`].
     pub player: ActorRef,

@@ -1,3 +1,4 @@
+use super::schedule::ManagerTrainingFocus;
 use crate::club::player::language::Language;
 use crate::club::player::training::result::PlayerTrainingResult;
 use crate::club::staff::CoachPlayerBond;
@@ -140,7 +141,7 @@ impl TeamTraining {
         } else {
             Self::matches_last_7_days(team, date)
         };
-        let weekly_plan = WeeklyTrainingPlan::generate_for_date(
+        let mut weekly_plan = WeeklyTrainingPlan::generate_for_date(
             today,
             prev_match_date,
             next_match_date,
@@ -148,6 +149,12 @@ impl TeamTraining {
             phase,
             &Self::get_coach_philosophy(coach),
         );
+
+        // A human manager can set the team's weekly emphasis. Fixture-aware
+        // recovery, rest, and match-preparation sessions remain engine-owned;
+        // the selected focus reshapes the other sessions before they execute.
+        let manager_focus = team.training_schedule.manager_focus;
+        Self::apply_manager_training_focus(&mut weekly_plan, manager_focus);
 
         // Execute today's training sessions
         if let Some(sessions) = weekly_plan.sessions.get(&current_weekday) {
@@ -162,6 +169,50 @@ impl TeamTraining {
         Self::apply_team_cohesion_effects(team, &result, date.date());
 
         result
+    }
+
+    fn apply_manager_training_focus(
+        weekly_plan: &mut WeeklyTrainingPlan,
+        manager_focus: ManagerTrainingFocus,
+    ) {
+        if manager_focus != ManagerTrainingFocus::Balanced {
+            for sessions in weekly_plan.sessions.values_mut() {
+                for session in sessions {
+                    let protected = matches!(
+                        session.session_type,
+                        TrainingType::RestDay
+                            | TrainingType::Recovery
+                            | TrainingType::LightRecovery
+                            | TrainingType::Rehabilitation
+                            | TrainingType::MatchPreparation
+                            | TrainingType::OpponentSpecific
+                            | TrainingType::VideoAnalysis
+                    );
+                    if protected {
+                        continue;
+                    }
+                    match manager_focus {
+                        ManagerTrainingFocus::Balanced => {}
+                        ManagerTrainingFocus::Fitness => {
+                            session.session_type = TrainingType::Endurance;
+                        }
+                        ManagerTrainingFocus::Technical => {
+                            session.session_type = TrainingType::Passing;
+                        }
+                        ManagerTrainingFocus::Tactical => {
+                            session.session_type = TrainingType::TeamShape;
+                        }
+                        ManagerTrainingFocus::SetPieces => {
+                            session.session_type = TrainingType::SetPieces;
+                        }
+                        ManagerTrainingFocus::Recovery => {
+                            session.session_type = TrainingType::Recovery;
+                            session.intensity = TrainingIntensity::VeryLight;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Run one session. The coach is resolved per participant rather than
@@ -780,7 +831,7 @@ impl TeamTraining {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub enum TrainingType {
     // Physical Training
     #[default]
@@ -832,7 +883,7 @@ pub struct TrainingSession {
     pub participants: Vec<u32>, // Player IDs
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum TrainingIntensity {
     VeryLight, // 20-40% max effort - recovery sessions
     Light,     // 40-60% max effort - technical work
@@ -1581,7 +1632,7 @@ impl GoalkeepingGains {
 
 // ============== Individual Player Training Plans ==============
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IndividualTrainingPlan {
     pub player_id: u32,
     pub focus_areas: Vec<TrainingFocus>,
@@ -1593,7 +1644,7 @@ pub struct IndividualTrainingPlan {
     pub started: Option<NaiveDate>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum TrainingFocus {
     WeakFootImprovement,
     PositionRetraining(PlayerPositionType),
@@ -1603,7 +1654,7 @@ pub enum TrainingFocus {
     MentalDevelopment,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum SkillType {
     FreeKicks,
     Penalties,
@@ -1614,7 +1665,7 @@ pub enum SkillType {
     Dribbling,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum SpecialInstruction {
     ExtraGymWork,
     DietProgram,
@@ -1734,6 +1785,103 @@ impl TrainingFacilities {
         let sports_science_bonus = if self.has_sports_science { 0.15 } else { 0.0 };
 
         base + pool_bonus + sports_science_bonus
+    }
+}
+
+#[cfg(test)]
+mod manager_training_focus_tests {
+    use super::*;
+
+    fn plan() -> WeeklyTrainingPlan {
+        WeeklyTrainingPlan {
+            sessions: HashMap::from([(
+                Weekday::Tue,
+                vec![
+                    TrainingSession {
+                        session_type: TrainingType::Passing,
+                        intensity: TrainingIntensity::High,
+                        duration_minutes: 60,
+                        focus_positions: Vec::new(),
+                        participants: Vec::new(),
+                    },
+                    TrainingSession {
+                        session_type: TrainingType::MatchPreparation,
+                        intensity: TrainingIntensity::Light,
+                        duration_minutes: 30,
+                        focus_positions: Vec::new(),
+                        participants: Vec::new(),
+                    },
+                    TrainingSession {
+                        session_type: TrainingType::OpponentSpecific,
+                        intensity: TrainingIntensity::Moderate,
+                        duration_minutes: 30,
+                        focus_positions: Vec::new(),
+                        participants: Vec::new(),
+                    },
+                ],
+            )]),
+            match_days: vec![Weekday::Sat],
+            periodization_phase: PeriodizationPhase::EarlySeason,
+        }
+    }
+
+    #[test]
+    fn manager_focus_changes_engine_sessions_and_preserves_fixture_work() {
+        let focus_sessions = [
+            (ManagerTrainingFocus::Fitness, TrainingType::Endurance),
+            (ManagerTrainingFocus::Technical, TrainingType::Passing),
+            (ManagerTrainingFocus::Tactical, TrainingType::TeamShape),
+            (ManagerTrainingFocus::SetPieces, TrainingType::SetPieces),
+            (ManagerTrainingFocus::Recovery, TrainingType::Recovery),
+        ];
+
+        for (focus, expected_type) in focus_sessions {
+            let mut weekly_plan = plan();
+            TeamTraining::apply_manager_training_focus(&mut weekly_plan, focus);
+            let sessions = &weekly_plan.sessions[&Weekday::Tue];
+            assert_eq!(
+                std::mem::discriminant(&sessions[0].session_type),
+                std::mem::discriminant(&expected_type),
+                "focus {focus:?} should produce {expected_type:?}, got {:?}",
+                sessions[0].session_type
+            );
+            assert!(matches!(
+                sessions[1].session_type,
+                TrainingType::MatchPreparation
+            ));
+            assert!(matches!(
+                sessions[2].session_type,
+                TrainingType::OpponentSpecific
+            ));
+            if focus == ManagerTrainingFocus::Recovery {
+                assert!(matches!(
+                    sessions[0].intensity,
+                    TrainingIntensity::VeryLight
+                ));
+            } else {
+                assert!(matches!(sessions[0].intensity, TrainingIntensity::High));
+            }
+        }
+    }
+
+    #[test]
+    fn balanced_manager_focus_keeps_coach_plan_unchanged() {
+        let mut weekly_plan = plan();
+        TeamTraining::apply_manager_training_focus(
+            &mut weekly_plan,
+            ManagerTrainingFocus::Balanced,
+        );
+        let sessions = &weekly_plan.sessions[&Weekday::Tue];
+        assert!(matches!(sessions[0].session_type, TrainingType::Passing));
+        assert!(matches!(
+            sessions[1].session_type,
+            TrainingType::MatchPreparation
+        ));
+        assert!(matches!(
+            sessions[2].session_type,
+            TrainingType::OpponentSpecific
+        ));
+        assert!(matches!(sessions[0].intensity, TrainingIntensity::High));
     }
 }
 

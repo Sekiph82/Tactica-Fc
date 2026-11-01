@@ -2,7 +2,7 @@ use crate::context::GlobalContext;
 use crate::league::{League, LeagueResult};
 use crate::{Club, Logging};
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct LeagueCollection {
     pub leagues: Vec<League>,
 }

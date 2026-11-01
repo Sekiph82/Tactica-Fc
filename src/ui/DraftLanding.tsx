@@ -65,7 +65,7 @@ export function DraftLanding({ onCreate, onBack, onLang }: { onCreate: () => voi
       <div className="lp-aurora" aria-hidden="true"><i /><i /><i /></div>
       <header className="lp-nav solid">
         <div className="lp-wrap lp-nav-in">
-          <a className="lp-brand" onClick={onBack} style={{ cursor: 'pointer' }}><img src={`${import.meta.env.BASE_URL}icon.svg`} alt="" width="28" height="28" /> <b>TACTICA</b> <span>FC</span> <em className="dl-badge">Draft</em></a>
+          <a className="lp-brand" onClick={onBack} style={{ cursor: 'pointer' }}><img src={`${import.meta.env.BASE_URL}tactica-brand/Tactica_FC_Black_Metal_32x32.png?v=25`} alt="" width="28" height="28" /> <b>TACTICA</b> <span>FC</span> <em className="dl-badge">Draft</em></a>
           <nav className="lp-links">
             <a onClick={() => go('how')}>{t('dl.nav.how')}</a>
             <a onClick={() => go('fun')}>{t('dl.nav.fun')}</a>

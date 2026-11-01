@@ -1,6 +1,6 @@
 /// Football-realistic reason a training session swung positively or
 /// negatively. Closed enum so renderer copy stays bounded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TrainingEventReason {
     SharpAfterBeingLeftOut,
     RespondedToCriticism,
@@ -43,7 +43,7 @@ impl TrainingEventReason {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TrainingEventEvidence {
     HighSessionPerformance,
     LowSessionPerformance,
@@ -116,7 +116,7 @@ impl TrainingEventEvidence {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TrainingEventContext {
     pub reason: TrainingEventReason,
     pub session_performance: f32,

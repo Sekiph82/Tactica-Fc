@@ -13,7 +13,7 @@ use std::cmp::Ordering;
 /// `HeadToHead` is reserved as a public hook: a future implementation
 /// may carry the per-pair record on the table itself; for now the
 /// comparator returns `Ordering::Equal` so the chain falls through.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TieBreakRule {
     Points,
     GoalDifference,
@@ -23,7 +23,7 @@ pub enum TieBreakRule {
     TeamId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TieBreakPolicy {
     pub rules: Vec<TieBreakRule>,
 }
@@ -68,7 +68,7 @@ impl Default for TieBreakPolicy {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct LeagueTable {
     pub rows: Vec<LeagueTableRow>,
     pub tie_break: TieBreakPolicy,
@@ -227,7 +227,7 @@ impl LeagueTable {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LeagueTableRow {
     pub team_id: u32,
     pub played: u8,

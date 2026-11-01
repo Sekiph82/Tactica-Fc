@@ -225,7 +225,7 @@ impl PlayerPositionType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlayerPositions {
     pub positions: Vec<PlayerPosition>,
 }
@@ -668,7 +668,7 @@ impl PlayerPositions {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlayerPosition {
     pub position: PlayerPositionType,
     pub level: u8,

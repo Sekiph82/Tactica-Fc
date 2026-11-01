@@ -15394,3 +15394,263 @@ a.np-prose-link.np-mark:focus-visible,
         font-size: 14px;
     }
 }
+
+/* TACTICA FC identity: graphite, brushed silver and stadium red. */
+:root {
+    --tactica-black: #08090c;
+    --tactica-graphite: #111318;
+    --tactica-panel: #191b20;
+    --tactica-panel-raised: #22252b;
+    --tactica-silver: #d8d9dc;
+    --tactica-muted: #9b9da4;
+    --tactica-red: #e32832;
+    --tactica-red-deep: #a70e19;
+    --tactica-border: rgba(216, 217, 220, .15);
+}
+
+html, body { background: var(--tactica-black); color: var(--tactica-silver); }
+body { background-image: radial-gradient(ellipse at 78% 0%, rgba(150, 18, 28, .12), transparent 34rem); }
+.fm-sidebar { background: #0c0d11; border-right-color: var(--tactica-border); }
+.tactica-sidebar-brand {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 92px; margin: 0 14px 10px; border-bottom: 1px solid var(--tactica-border);
+}
+.tactica-sidebar-brand img { display: block; width: 160px; max-width: 100%; height: 78px; object-fit: contain; }
+.fm-nav-section li a { color: #b8bac0; }
+.fm-nav-section li a:hover, .fm-nav-section li.active a {
+    color: #fff; background: linear-gradient(90deg, rgba(227,40,50,.22), rgba(227,40,50,.04));
+}
+.fm-nav-section li.active a { border-left-color: var(--tactica-red); }
+.fm-nav-section li a i, .fm-sidebar-lang-toggle .flag { filter: saturate(.82); }
+.fm-header { background: rgba(12,13,17,.97) !important; border-bottom: 1px solid rgba(227,40,50,.56); color: var(--tactica-silver); }
+.fm-header-title h1 { color: #f0f0f1; }
+.fm-header-sub, .fm-header-sub a { color: #b6b7bd; }
+.fm-header-actions .fm-ai-icon { color: #bfc0c5; }
+.fm-header-actions .fm-ai-icon:hover { color: #fff; background: rgba(227,40,50,.18); }
+.fm-header-actions .fm-process-btn { background: linear-gradient(135deg, #ed3943, #ad111d); color: #fff; }
+.fm-submenu, .fm-tabs, .fm-tab-bar { border-color: var(--tactica-border); }
+.fm-submenu a.active, .fm-submenu a:hover, .fm-tabs a.active, .fm-tabs a:hover { color: #fff; border-color: var(--tactica-red); }
+.fm-page { color: var(--tactica-silver); }
+.fm-page h1, .fm-page h2, .fm-page h3, .fm-page h4 { color: #e8e8ea; }
+.fm-panel, .fm-card, .fm-info-tile, .fm-table-wrap, .fm-worker-card, .fm-worker-dialog,
+.fm-home-overview, .fm-country-section, .fm-content-card {
+    background-color: var(--tactica-panel); border-color: var(--tactica-border); color: var(--tactica-silver);
+}
+.fm-panel-header, .fm-card-header, .fm-table thead, .fm-country-section-header { background: #202228; border-color: var(--tactica-border); }
+.fm-table tbody tr:nth-child(odd), .fm-list-row:nth-child(odd) { background: rgba(255,255,255,.025); }
+.fm-table tbody tr:hover, .fm-list-row:hover { background: rgba(227,40,50,.08); }
+.fm-table th, .fm-panel-label, .fm-info-tile-label { color: #a4a6ac; }
+a { color: #e3e3e5; }
+a:hover { color: #ff6169; }
+button, .fm-btn, .btn, input[type="submit"] { border-color: rgba(227,40,50,.55); }
+.fm-btn-primary, .btn-primary, .fm-ai-btn, .fm-holiday-btn, .tactica-hero-cta {
+    background: linear-gradient(135deg, #ed3943, #a90d18); border-color: #f0525b; color: #fff;
+}
+.fm-btn-primary:hover, .btn-primary:hover, .fm-ai-btn:hover, .fm-holiday-btn:hover, .tactica-hero-cta:hover {
+    background: linear-gradient(135deg, #fa4c55, #bd1420); color: #fff;
+}
+input, select, textarea, .form-control { background-color: #101116; border-color: #45474e; color: #e4e4e6; }
+input:focus, select:focus, textarea:focus, .form-control:focus { border-color: var(--tactica-red); box-shadow: 0 0 0 .18rem rgba(227,40,50,.18); }
+.fm-info-tile-icon { background: rgba(227,40,50,.12); color: #ef4b54; }
+.fm-info-tile { border-top: 1px solid rgba(227,40,50,.38); }
+.tactica-home-hero {
+    position: relative; min-height: clamp(280px, 34vw, 470px); overflow: hidden; display: flex;
+    align-items: end; margin: 22px 0 26px; border: 1px solid rgba(216,217,220,.2); border-radius: 16px;
+    background: #08090c; box-shadow: 0 18px 50px rgba(0,0,0,.3);
+}
+.tactica-career-hub {
+    display: flex; align-items: center; justify-content: space-between; gap: 22px; flex-wrap: wrap;
+    margin: 20px 0 12px; padding: 20px 24px; border: 1px solid rgba(227,40,50,.45);
+    border-radius: 12px; background: linear-gradient(110deg, #25262b, #111216 70%);
+    box-shadow: inset 3px 0 0 var(--tactica-red), 0 12px 35px rgba(0,0,0,.2);
+}
+.tactica-career-hub-copy h2 { margin: 5px 0 2px; color: #f1f1f2; font-size: 1.55rem; }
+.tactica-career-hub-copy p { margin: 0; color: var(--tactica-muted); }
+.tactica-career-hub-links { display: flex; gap: 8px; flex-wrap: wrap; }
+.tactica-career-hub-links a { padding: 9px 12px; border: 1px solid var(--tactica-border); border-radius: 7px; background: rgba(255,255,255,.035); color: #e2e2e4; text-decoration: none; font-weight: 700; }
+.tactica-career-hub-links a:hover { border-color: var(--tactica-red); background: rgba(227,40,50,.15); color: #fff; }
+.tactica-career-start {
+    display: grid; grid-template-columns: minmax(220px, .9fr) minmax(320px, 1.1fr); gap: 24px; align-items: center;
+    margin: 18px 0 26px; padding: 22px 24px; border: 1px solid rgba(227,40,50,.38); border-radius: 12px;
+    background: linear-gradient(110deg, rgba(227,40,50,.11), #14151a 55%, #111216); box-shadow: 0 12px 35px rgba(0,0,0,.2);
+}
+.tactica-career-start-copy h2 { margin: 6px 0; color: #f1f1f2; font-size: 1.4rem; }
+.tactica-career-start-copy p { margin: 0; color: var(--tactica-muted); }
+.tactica-career-start-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 10px; align-items: center; }
+.tactica-career-start-form label { grid-column: 1 / -1; color: #d6d6d9; font-size: .86rem; font-weight: 700; }
+.tactica-career-start-form input { min-width: 0; min-height: 46px; padding: 8px 12px; border: 1px solid var(--tactica-border); border-radius: 7px; background: #101115; color: #f1f1f2; }
+.tactica-career-start-button { min-height: 46px; padding: 0 16px; border: 1px solid #f0525b; border-radius: 7px; background: #d92e39; color: #fff; font-weight: 800; white-space: nowrap; }
+.tactica-career-start-button:hover { background: #ed3d48; }
+.tactica-career-start-button:disabled { cursor: wait; opacity: .72; }
+.tactica-career-start-status { grid-column: 1 / -1; min-height: 1.25em; margin: 0; color: #ff8b91; font-size: .9rem; }
+.tactica-home-hero-art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center 39%; }
+.tactica-home-hero::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(5,6,9,.92) 0%, rgba(5,6,9,.64) 39%, rgba(5,6,9,.04) 82%), linear-gradient(0deg, rgba(5,6,9,.45), transparent 45%); }
+.tactica-home-hero-copy { position: relative; z-index: 1; width: min(620px, 62%); padding: clamp(24px, 4vw, 54px); }
+.tactica-eyebrow { display: inline-block; color: #ff6970; font-size: .76rem; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+.tactica-home-hero h2 { max-width: 620px; margin: 12px 0; color: #f6f5f5; font-size: clamp(2rem, 4vw, 3.6rem); font-weight: 800; line-height: 1.02; }
+.tactica-home-hero p { max-width: 550px; color: #d2d1d3; font-size: 1.05rem; line-height: 1.55; }
+.tactica-hero-cta, .tactica-about-github { display: inline-flex; align-items: center; gap: 10px; padding: 11px 17px; border: 1px solid #f0525b; border-radius: 7px; text-decoration: none; font-weight: 750; }
+.tactica-about-page { max-width: 1240px; margin: 0 auto; padding-top: 32px; }
+.tactica-about { padding: clamp(20px, 4vw, 46px); border: 1px solid var(--tactica-border); border-top: 3px solid var(--tactica-red); border-radius: 14px; background: linear-gradient(145deg, #1d1f24, #101115 72%); }
+.tactica-about-hero { display: grid; grid-template-columns: minmax(130px, 250px) 1fr; align-items: center; gap: clamp(20px, 4vw, 54px); padding-bottom: 28px; border-bottom: 1px solid var(--tactica-border); }
+.tactica-about-logo { display: block; width: 100%; max-height: 180px; object-fit: contain; border-radius: 10px; }
+.tactica-about-hero h2 { max-width: 790px; margin: 10px 0 0; color: #eeeef0; font-size: clamp(1.45rem, 3vw, 2.5rem); line-height: 1.18; }
+.tactica-about-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 16px; padding: 25px 0; }
+.tactica-about-card { padding: 22px; border: 1px solid var(--tactica-border); border-radius: 10px; background: rgba(255,255,255,.025); }
+.tactica-about-icon { color: #f14a54; font-size: 1.3rem; }
+.tactica-about-card h3, .tactica-about-footer h3 { margin: 10px 0 7px; color: #eeeef0; }
+.tactica-about-card p, .tactica-about-footer p { margin: 0; color: #bfc0c5; line-height: 1.65; }
+.tactica-about-footer { display: flex; align-items: end; justify-content: space-between; gap: 24px; padding-top: 22px; border-top: 1px solid var(--tactica-border); }
+.tactica-about-license { margin-top: 10px !important; font-size: .9rem; color: #a4a5ab !important; }
+.tactica-about-github { flex: 0 0 auto; }
+@media (max-width: 700px) {
+    .tactica-career-start { grid-template-columns: 1fr; padding: 18px; }
+    .tactica-career-start-form { grid-template-columns: 1fr; }
+    .tactica-career-start-form label, .tactica-career-start-status { grid-column: 1; }
+    .tactica-home-hero { min-height: 420px; align-items: end; }
+    .tactica-home-hero-art { object-position: 58% center; }
+    .tactica-home-hero::after { background: linear-gradient(0deg, rgba(5,6,9,.96), rgba(5,6,9,.36) 75%, rgba(5,6,9,.08)); }
+    .tactica-home-hero-copy { width: 100%; padding: 24px; }
+    .tactica-about-hero { grid-template-columns: 1fr; }
+    .tactica-about-logo { width: min(230px, 80%); margin: 0 auto; }
+    .tactica-about-grid { grid-template-columns: 1fr; }
+    .tactica-about-footer { align-items: stretch; flex-direction: column; }
+}
+
+/* Tactica theme completion: selection and competition pages still inherit
+   gradients and green accents from the upstream football-manager skin. */
+.fm-header-actions { gap: 8px; }
+.fm-header-actions .tactica-back-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    width: auto;
+    min-width: 42px;
+    padding: 0 12px;
+    border: 1px solid rgba(216,217,220,.22);
+    border-radius: 7px;
+    background: linear-gradient(145deg, #25272d, #15161a);
+    color: #ececef;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+}
+.fm-header-actions .tactica-back-button:hover,
+.fm-header-actions .tactica-back-button:focus-visible {
+    border-color: var(--tactica-red);
+    background: linear-gradient(145deg, #3a1c20, #1b1518);
+    color: #fff;
+    outline: none;
+}
+.fm-header-actions .tactica-back-button i { font-size: 14px; }
+.fm-header-actions .tactica-back-button span { font-size: 12px; white-space: nowrap; }
+
+.fm-tabbar {
+    background: #121318 !important;
+    border-bottom: 1px solid rgba(227,40,50,.42) !important;
+}
+.fm-tabbar .fm-tab { color: #b9bac0 !important; }
+.fm-tabbar .fm-tab:hover {
+    color: #fff !important;
+    background: rgba(227,40,50,.1) !important;
+}
+.fm-tabbar .fm-tab.active {
+    color: #fff !important;
+    border-bottom-color: var(--tactica-red) !important;
+}
+
+.fm-page .fm-panel,
+.fm-page .fm-card,
+.fm-page .fm-table-wrap,
+.fm-page .fm-country-section,
+.fm-page .fm-content-card,
+.fm-page .fm-home-overview {
+    background: linear-gradient(145deg, #1c1e23, #141519 78%) !important;
+    border: 1px solid var(--tactica-border) !important;
+    color: var(--tactica-silver) !important;
+    box-shadow: 0 10px 28px rgba(0,0,0,.16);
+}
+.fm-page .fm-panel-head,
+.fm-page .fm-panel-header,
+.fm-page .fm-card-header,
+.fm-page .fm-country-section-header {
+    background: linear-gradient(90deg, #25272d, #1b1c21) !important;
+    border-color: var(--tactica-border) !important;
+    color: #d8d9dc !important;
+}
+.fm-page .fm-panel-head h3,
+.fm-page .fm-panel-head .fm-panel-count { color: #e5e5e7 !important; }
+.fm-page .fm-panel-head .fm-panel-count { color: #ff6870 !important; }
+
+.fm-country-grid { background: transparent !important; }
+.fm-country-item,
+.fm-league-item,
+.fm-search-item,
+.fm-list-row,
+.fm-fixture {
+    color: #d8d9dc !important;
+    border-color: rgba(216,217,220,.09) !important;
+}
+.fm-country-item,
+.fm-league-item {
+    background: transparent !important;
+    border-left: 2px solid transparent;
+    text-decoration: none;
+}
+.fm-country-item:hover,
+.fm-league-item:hover,
+.fm-search-item:hover,
+.fm-list-row:hover {
+    background: linear-gradient(90deg, rgba(227,40,50,.16), rgba(227,40,50,.035)) !important;
+    border-left-color: var(--tactica-red) !important;
+    color: #fff !important;
+}
+.fm-league-group-hd { color: #ff7279 !important; border-color: rgba(227,40,50,.2) !important; }
+.fm-league-item i { color: #e34a53 !important; }
+.fm-country-item .flag { box-shadow: 0 0 0 1px rgba(255,255,255,.12); }
+
+.fm-page .fm-info-tile,
+.fm-page .fm-worker-card {
+    background: linear-gradient(145deg, #22242a, #17181d) !important;
+    border-color: var(--tactica-border) !important;
+    color: #e2e2e4 !important;
+}
+.fm-page .fm-info-tile-icon { background: rgba(227,40,50,.14) !important; color: #ff5b65 !important; }
+.fm-page .fm-btn-primary,
+.fm-page .btn-primary,
+.fm-page .fm-ai-btn,
+.fm-page .fm-holiday-btn,
+.fm-page .tactica-hero-cta,
+.fm-page .tactica-career-start-button {
+    background: linear-gradient(135deg, #ed3943, #a90d18) !important;
+    border-color: #f0525b !important;
+    color: #fff !important;
+}
+.fm-page .btn-outline-info,
+.fm-page .fm-simulation-league-toggle {
+    border-color: #e3424c !important;
+    background: rgba(227,40,50,.08) !important;
+    color: #ff7b82 !important;
+}
+.fm-page .btn-outline-info:hover,
+.fm-page .fm-simulation-league-toggle:hover {
+    background: rgba(227,40,50,.2) !important;
+    color: #fff !important;
+}
+.fm-page input,
+.fm-page select,
+.fm-page textarea,
+.fm-page .form-control {
+    background: #101116 !important;
+    border-color: #45474e !important;
+    color: #e4e4e6 !important;
+}
+.fm-page input::placeholder,
+.fm-page textarea::placeholder { color: #92949b !important; }
+
+@media (max-width: 900px) {
+    .fm-header-actions { gap: 4px; }
+    .fm-header-actions .tactica-back-button { padding: 0 9px; }
+    .fm-header-actions .tactica-back-button span { display: none; }
+}

@@ -22,7 +22,8 @@ impl Settings {
     pub fn from_env() -> Self {
         let args: Vec<String> = env::args().collect();
 
-        let match_events = args.iter().any(|arg| arg == "--match-events");
+        let match_events = args.iter().any(|arg| arg == "--match-events")
+            || env::var("MATCH_EVENTS").is_ok_and(|value| value == "true" || value == "1");
 
         // On by default, and the flag is now the opt-OUT. It used to cost a
         // full ninety minutes of samples per match, which is why it was

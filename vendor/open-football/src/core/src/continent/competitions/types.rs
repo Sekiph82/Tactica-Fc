@@ -8,7 +8,7 @@ pub const EUROPA_LEAGUE_ID: u32 = 900_000_002;
 pub const CONFERENCE_LEAGUE_ID: u32 = 900_000_003;
 pub const COPA_LIBERTADORES_ID: u32 = 900_000_004;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum CompetitionStage {
     NotStarted,
     Qualifying,
@@ -48,7 +48,7 @@ impl CompetitionStage {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ContinentalMatch {
     pub home_team: u32,
     pub away_team: u32,
@@ -98,12 +98,12 @@ impl CompetitionTier {
 
 // ─── Shared group / knockout types for all continental competitions ──
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct GroupTable {
     pub rows: Vec<GroupRow>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GroupRow {
     pub team_id: u32,
     pub played: u8,
@@ -195,7 +195,7 @@ impl GroupTable {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct KnockoutTie {
     pub home_team: u32,
     pub away_team: u32,

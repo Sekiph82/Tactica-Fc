@@ -292,7 +292,7 @@ impl<'gc> GlobalContext<'gc> {
 /// Empty (the default) means nobody has published a calendar this tick;
 /// callers then keep whatever their country says, which is the old
 /// behaviour and the correct one for a native.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct TournamentClocks {
     by_continent: Arc<HashMap<u32, u8>>,
 }
@@ -332,7 +332,7 @@ impl TournamentClocks {
 /// This is a league-reputation lookup, not a list: no country is named
 /// anywhere, and a league that rises or falls moves its own countrymen
 /// with it (memory `feedback_balance_system_not_cases`).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct HomeLeagueTable {
     by_country: Arc<HashMap<u32, u16>>,
 }

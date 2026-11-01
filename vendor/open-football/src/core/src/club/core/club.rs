@@ -11,7 +11,7 @@ use crate::transfers::market::knowledge::{ClubMarketLedger, LoanPlacementLedger}
 use crate::transfers::pipeline::ClubTransferPlan;
 use chrono::NaiveDate;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ClubPhilosophy {
     /// Develop youth and sell for profit (Ajax, Benfica, Dortmund)
     DevelopAndSell,
@@ -61,7 +61,7 @@ impl ClubPhilosophy {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ClubColors {
     pub background: String,
     pub foreground: String,
@@ -76,7 +76,7 @@ impl Default for ClubColors {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Club {
     pub id: u32,
     pub name: String,

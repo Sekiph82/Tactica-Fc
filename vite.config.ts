@@ -9,18 +9,26 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['icon.svg', 'icon-192.png', 'icon-512.png'],
+      includeAssets: [
+        'favicon.ico',
+        'tactica-brand/Tactica_FC_Black_Metal.ico',
+        'tactica-brand/Tactica_FC_Black_Metal_16x16.png',
+        'tactica-brand/Tactica_FC_Black_Metal_32x32.png',
+        'tactica-brand/Tactica_FC_Black_Metal_48x48.png',
+        'tactica-brand/Tactica_FC_Black_Metal_180x180.png',
+        'tactica-brand/Tactica_FC_Black_Metal_192x192.png',
+        'tactica-brand/Tactica_FC_Black_Metal_512x512.png',
+      ],
       manifest: {
         name: 'TACTICA FC',
         short_name: 'TACTICA FC',
         description: 'Football management. Your club. Your tactics. Your story.',
-        theme_color: '#070b16',
-        background_color: '#070b16',
+        theme_color: '#08090c',
+        background_color: '#08090c',
         display: 'standalone',
         icons: [
-          { src: 'icon-192.png', sizes: '192x192', type: 'image/png' },
-          { src: 'icon-512.png', sizes: '512x512', type: 'image/png' },
-          { src: 'icon.svg', sizes: 'any', type: 'image/svg+xml' },
+          { src: 'tactica-brand/Tactica_FC_Black_Metal_192x192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: 'tactica-brand/Tactica_FC_Black_Metal_512x512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
         ],
       },
       workbox: {

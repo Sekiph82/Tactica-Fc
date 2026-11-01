@@ -4,6 +4,71 @@
 
 {% block content %}
 <div class="fm-page">
+    {% if is_managed %}
+    <span id="fm-manager-transfer-messages" hidden
+          data-sending="{{ i18n.t("mgr_offer_sending") }}"
+          data-opened="{{ i18n.t("mgr_negotiation_opened") }}"
+          data-budget="{{ i18n.t("mgr_offer_over_budget") }}"
+          data-unavailable="{{ i18n.t("mgr_negotiation_unavailable") }}"
+          data-limit="{{ i18n.t("mgr_negotiation_limit") }}"
+          data-failed="{{ i18n.t("mgr_offer_failed") }}"
+          data-terms-saved="{{ i18n.t("mgr_new_terms_saved") }}"
+          data-remaining-budget="{{ i18n.t("mgr_remaining_budget_exceeded") }}"
+          data-stage-locked="{{ i18n.t("mgr_negotiation_stage_locked") }}"
+          data-terms-invalid="{{ i18n.t("mgr_terms_invalid") }}"
+          data-update-failed="{{ i18n.t("mgr_update_failed") }}"
+          data-decision-saving="{{ i18n.t("mgr_decision_saving") }}"
+          data-accepted="{{ i18n.t("mgr_acceptance_queued") }}"
+          data-rejected="{{ i18n.t("mgr_rejection_queued") }}"
+          data-already-changed="{{ i18n.t("mgr_offer_already_changed") }}"
+          data-decision-failed="{{ i18n.t("mgr_decision_failed") }}"></span>
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("mgr_transfer_market") }}</h3>
+            <span class="fm-panel-action">{{ i18n.t("mgr_available_budget") }} {{ transfer_budget }}</span>
+        </div>
+        {% if market_opportunities.is_empty() %}
+        <div class="fm-empty">{{ i18n.t("mgr_no_market_players") }}</div>
+        {% else %}
+        <div class="fm-table-scroll">
+            <table class="fm-squad">
+                <thead><tr><th>{{ i18n.t("player") }}</th><th>{{ i18n.t("mgr_position") }}</th><th>{{ i18n.t("mgr_current_club") }}</th><th>{{ i18n.t("mgr_asking_price") }}</th><th>{{ i18n.t("mgr_offer_fee") }}</th><th>{{ i18n.t("mgr_annual_wage") }}</th><th>{{ i18n.t("mgr_contract_length") }}</th><th></th></tr></thead>
+                <tbody>
+                    {% for item in market_opportunities %}
+                    <tr>
+                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_slug }}">{{ item.player_name }}</a></td>
+                        <td>{{ item.position }}</td><td>{{ item.selling_club }}</td><td>{{ item.asking_price }}</td>
+                        <td><input class="fm-offer-fee" type="number" min="1" step="1000" value="{{ item.asking_price_raw }}" aria-label="{{ item.player_name }} — {{ i18n.t("mgr_offer_fee") }}"></td>
+                        <td>{% if item.is_loan %}<span>{{ i18n.t("mgr_current_contract") }}</span>{% else %}<input class="fm-offer-wage" type="number" min="1" step="1000" value="1000000" aria-label="{{ item.player_name }} — {{ i18n.t("mgr_annual_wage") }}">{% endif %}</td>
+                        <td>{% if item.is_loan %}<select class="fm-offer-loan-months" aria-label="{{ item.player_name }} — {{ i18n.t("mgr_contract_length") }}"><option value="3">3 {{ i18n.t("mgr_month_unit") }}</option><option value="6" selected>6 {{ i18n.t("mgr_month_unit") }}</option><option value="12">12 {{ i18n.t("mgr_month_unit") }}</option></select>{% else %}<select class="fm-offer-years" aria-label="{{ item.player_name }} — {{ i18n.t("mgr_contract_length") }}"><option>2</option><option>3</option><option selected>4</option><option>5</option><option>6</option></select>{% endif %}</td>
+                        <td><button type="button" class="fm-manager-make-offer" data-player-id="{{ item.player_id }}" data-loan="{{ item.is_loan }}">{% if item.is_loan %}{{ i18n.t("mgr_make_loan_offer") }}{% else %}{{ i18n.t("mgr_make_offer") }}{% endif %}</button><span class="fm-offer-status" role="status" aria-live="polite"></span></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+    </section>
+    {% endif %}
+    {% if is_managed && !manager_negotiations.is_empty() %}
+    <section class="fm-panel">
+        <div class="fm-panel-head"><h3>{{ i18n.t("mgr_active_negotiations") }}</h3><span class="fm-panel-count">{{ manager_negotiations.len() }}</span></div>
+        <table class="fm-squad"><thead><tr><th>{{ i18n.t("player") }}</th><th>{{ i18n.t("mgr_direction") }}</th><th>{{ i18n.t("fee") }}</th><th>{{ i18n.t("mgr_negotiation_stage") }}</th><th>{{ i18n.t("mgr_status") }}</th><th>{{ i18n.t("mgr_deadline") }}</th><th>{{ i18n.t("mgr_action") }}</th></tr></thead>
+            <tbody>{% for deal in manager_negotiations %}<tr>
+                <td class="sq-name">{{ deal.player_name }}</td><td>{{ deal.direction }}</td><td>{{ deal.fee }}</td><td>{{ deal.phase }}</td><td>{{ deal.status }}</td><td>{{ deal.expires }}</td>
+                <td>
+                    {% if deal.can_respond_as_seller %}<button type="button" class="fm-seller-response" data-negotiation-id="{{ deal.negotiation_id }}" data-accept="true">{{ i18n.t("mgr_accept_offer") }}</button><button type="button" class="fm-seller-response" data-negotiation-id="{{ deal.negotiation_id }}" data-accept="false">{{ i18n.t("mgr_reject_offer") }}</button><span class="fm-offer-status" role="status" aria-live="polite"></span>{% endif %}
+                    {% if deal.can_update_fee %}<input class="fm-negotiation-fee" type="number" min="1" step="1000" value="{{ deal.fee_raw }}" aria-label="{{ deal.player_name }} — {{ i18n.t("mgr_offer_fee") }}">{% endif %}
+                    {% if deal.can_update_wage %}<input class="fm-negotiation-wage" type="number" min="1" step="1000" value="{{ deal.annual_wage_raw }}" aria-label="{{ deal.player_name }} — {{ i18n.t("mgr_annual_wage") }}">{% endif %}
+                    {% if deal.can_update_fee || deal.can_update_wage %}
+                    <select class="fm-negotiation-years" aria-label="{{ deal.player_name }} — {{ i18n.t("mgr_contract_length") }}"><option value="2"{% if deal.contract_years == 2 %} selected{% endif %}>2 {{ i18n.t("mgr_year_unit") }}</option><option value="3"{% if deal.contract_years == 3 %} selected{% endif %}>3 {{ i18n.t("mgr_year_unit") }}</option><option value="4"{% if deal.contract_years == 4 %} selected{% endif %}>4 {{ i18n.t("mgr_year_unit") }}</option><option value="5"{% if deal.contract_years == 5 %} selected{% endif %}>5 {{ i18n.t("mgr_year_unit") }}</option><option value="6"{% if deal.contract_years == 6 %} selected{% endif %}>6 {{ i18n.t("mgr_year_unit") }}</option></select>
+                    <button type="button" class="fm-negotiation-update" data-negotiation-id="{{ deal.negotiation_id }}">{{ i18n.t("mgr_send") }}</button><span class="fm-offer-status" role="status" aria-live="polite"></span>
+                    {% else %}{% if !deal.can_respond_as_seller %}{% if !deal.can_update_fee && !deal.can_update_wage %}<span>{{ i18n.t("mgr_waiting_response") }}</span>{% endif %}{% endif %}{% endif %}
+                </td>
+            </tr>{% endfor %}</tbody>
+        </table>
+    </section>
+    {% endif %}
     <section class="fm-panel">
         <div class="fm-panel-head">
             <h3>{{ i18n.t("transfer_list") }}</h3>
@@ -170,4 +235,97 @@
         </section>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+{% if is_managed %}
+<script>
+(function() {
+    var messages = document.getElementById('fm-manager-transfer-messages').dataset;
+    document.querySelectorAll('.fm-manager-make-offer').forEach(function(button) {
+        button.addEventListener('click', function() {
+            var row = button.closest('tr');
+            var status = row.querySelector('.fm-offer-status');
+            button.disabled = true;
+            status.textContent = ' ' + messages.sending;
+            var payload = {
+                player_id: Number(button.getAttribute('data-player-id')),
+                fee: Number(row.querySelector('.fm-offer-fee').value),
+                annual_wage: row.querySelector('.fm-offer-wage') ? Number(row.querySelector('.fm-offer-wage').value) : 0,
+                contract_years: row.querySelector('.fm-offer-years') ? Number(row.querySelector('.fm-offer-years').value) : 1,
+                loan_duration_months: row.querySelector('.fm-offer-loan-months') ? Number(row.querySelector('.fm-offer-loan-months').value) : null
+            };
+            fetch('/api/manager/transfer-offer', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            }).then(function(response) {
+                if (response.status === 202) { status.textContent = ' ' + messages.opened; return; }
+                if (response.status === 402) { throw new Error(messages.budget); }
+                if (response.status === 409) { throw new Error(messages.unavailable); }
+                if (response.status === 429) { throw new Error(messages.limit); }
+                if (!response.ok) { throw new Error(messages.failed); }
+                status.textContent = ' ' + messages.opened;
+            }).catch(function(error) {
+                status.textContent = ' ' + error.message;
+            }).finally(function() { button.disabled = false; });
+        });
+    });
+    document.querySelectorAll('.fm-negotiation-update').forEach(function(button) {
+        button.addEventListener('click', function() {
+            var row = button.closest('tr');
+            var status = row.querySelector('.fm-offer-status');
+            var fee = row.querySelector('.fm-negotiation-fee');
+            var wage = row.querySelector('.fm-negotiation-wage');
+            var payload = {
+                negotiation_id: Number(button.getAttribute('data-negotiation-id')),
+                contract_years: Number(row.querySelector('.fm-negotiation-years').value)
+            };
+            if (fee) payload.fee = Number(fee.value);
+            if (wage) payload.annual_wage = Number(wage.value);
+            button.disabled = true;
+            status.textContent = ' ' + messages.sending;
+            fetch('/api/manager/transfer-negotiation', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            }).then(function(response) {
+                if (response.status === 202) { status.textContent = ' ' + messages.termsSaved; return; }
+                if (response.status === 402) throw new Error(messages.remainingBudget);
+                if (response.status === 409) throw new Error(messages.stageLocked);
+                if (response.status === 400) throw new Error(messages.termsInvalid);
+                if (!response.ok) throw new Error(messages.updateFailed);
+                status.textContent = ' ' + messages.termsSaved;
+            }).catch(function(error) {
+                status.textContent = ' ' + error.message;
+            }).finally(function() { button.disabled = false; });
+        });
+    });
+    document.querySelectorAll('.fm-seller-response').forEach(function(button) {
+        button.addEventListener('click', function() {
+            var row = button.closest('tr');
+            var status = row.querySelector('.fm-offer-status');
+            var accept = button.getAttribute('data-accept') === 'true';
+            row.querySelectorAll('.fm-seller-response').forEach(function(action) { action.disabled = true; });
+            status.textContent = ' ' + messages.decisionSaving;
+            fetch('/api/manager/transfer-response', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    negotiation_id: Number(button.getAttribute('data-negotiation-id')),
+                    accept: accept
+                })
+            }).then(function(response) {
+                if (response.status === 202) {
+                    status.textContent = ' ' + (accept ? messages.accepted : messages.rejected);
+                    return;
+                }
+                if (response.status === 409) throw new Error(messages.alreadyChanged);
+                if (!response.ok) throw new Error(messages.decisionFailed);
+            }).catch(function(error) {
+                status.textContent = ' ' + error.message;
+                row.querySelectorAll('.fm-seller-response').forEach(function(action) { action.disabled = false; });
+            });
+        });
+    });
+})();
+</script>
+{% endif %}
 {% endblock %}

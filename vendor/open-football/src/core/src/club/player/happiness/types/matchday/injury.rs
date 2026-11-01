@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum InjuryRecoveryStage {
     ReturnedToFullTraining,
     FirstMinutesAfterInjury,
@@ -21,7 +21,7 @@ impl InjuryRecoveryStage {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum InjuryRecoveryEvidence {
     LongTermLayoff,
     ShortTermLayoff,
@@ -52,7 +52,7 @@ impl InjuryRecoveryEvidence {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct InjuryRecoveryEventContext {
     pub stage: InjuryRecoveryStage,
     pub recovery_days_total: u16,

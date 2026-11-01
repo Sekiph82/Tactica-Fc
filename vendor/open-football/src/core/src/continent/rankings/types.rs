@@ -1,7 +1,7 @@
 use crate::continent::CompetitionTier;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ContinentalRankings {
     pub country_rankings: Vec<(u32, f32)>, // country_id, coefficient
     pub club_rankings: Vec<(u32, f32)>,    // club_id, points
@@ -75,7 +75,7 @@ impl ContinentalRankings {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct QualificationSpots {
     pub champions_league: u8,
     pub europa_league: u8,

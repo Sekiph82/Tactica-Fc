@@ -35,6 +35,8 @@ pub struct CountryListTemplate {
     pub i18n: I18n,
     pub lang: String,
     pub continents: Vec<ContinentDto>,
+    pub manager_career: Option<ManagerCareerHome>,
+    pub manager_teams: Vec<ManagerClubChoice>,
     pub version: &'static str,
     pub total_countries: usize,
     pub total_clubs: usize,
@@ -55,6 +57,18 @@ pub struct CountryListTemplate {
     pub ai_base_url: String,
     pub ai_model: String,
     pub ai_api_key: String,
+}
+
+pub struct ManagerCareerHome {
+    pub team_slug: String,
+    pub club_name: String,
+    pub league_name: String,
+}
+
+pub struct ManagerClubChoice {
+    pub team_id: u32,
+    pub team_slug: String,
+    pub label: String,
 }
 
 pub struct ContinentDto {
@@ -132,6 +146,45 @@ pub async fn country_list_action(
         .collect();
 
     let total_countries = continents.iter().map(|c| c.countries.len()).sum();
+    let manager_team_id = *state.manager_team_id.read().await;
+    let manager_career = manager_team_id
+        .and_then(|team_id| simulator_data.team(team_id))
+        .filter(|team| team.team_type == core::TeamType::Main)
+        .map(|team| ManagerCareerHome {
+            team_slug: team.slug.clone(),
+            club_name: simulator_data
+                .club(team.club_id)
+                .map(|club| club.name.clone())
+                .unwrap_or_else(|| team.name.clone()),
+            league_name: team
+                .league_id
+                .and_then(|league_id| simulator_data.league(league_id))
+                .map(|league| league.name.clone())
+                .unwrap_or_default(),
+        });
+    let mut manager_teams = Vec::new();
+    for continent in &simulator_data.continents {
+        for country in &continent.countries {
+            for club in &country.clubs {
+                for team in &club.teams.teams {
+                    if team.team_type != core::TeamType::Main || team.league_id.is_none() {
+                        continue;
+                    }
+                    let league_name = team
+                        .league_id
+                        .and_then(|league_id| simulator_data.league(league_id))
+                        .map(|league| league.name.as_str())
+                        .unwrap_or("");
+                    manager_teams.push(ManagerClubChoice {
+                        team_id: team.id,
+                        team_slug: team.slug.clone(),
+                        label: format!("{} · {} · {}", club.name, league_name, country.name),
+                    });
+                }
+            }
+        }
+    }
+    manager_teams.sort_by(|a, b| a.label.cmp(&b.label));
     let mut total_clubs = 0usize;
     let mut total_players = 0usize;
     for continent in &simulator_data.continents {
@@ -179,6 +232,8 @@ pub async fn country_list_action(
         lang: route_params.lang,
         i18n,
         continents,
+        manager_career,
+        manager_teams,
         version: env!("CARGO_PKG_VERSION"),
         total_countries,
         total_clubs,

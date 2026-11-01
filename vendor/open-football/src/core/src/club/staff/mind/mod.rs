@@ -174,7 +174,7 @@ impl StaffTickContext {
 
 /// The global mind: shared organs, one organ of its own, and the five
 /// faculties that reason over them.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct StaffMind {
     pub organs: StaffOrgans,
 

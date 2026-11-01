@@ -1,7 +1,7 @@
 use crate::league::DayMonthPeriod;
 use chrono::{Datelike, Duration, NaiveDate};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Season {
     pub display: String,
     pub start_year: u16,

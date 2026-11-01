@@ -8,7 +8,7 @@ import { humanManager, isHumanClub } from '../../game/humans';
 import { isBotClub } from '../../game/bots';
 import { session, skippedMatches, type LiveCmd } from '../../online/client';
 import { fixturesOn, gs, notify, squad } from '../../game/state';
-import type { MatchPitchSnapshot, MatchReport, OppInstructions, OppKind } from '../../game/types';
+import type { MatchPitchSnapshot, MatchReport, MatchVisualAction, OppInstructions, OppKind } from '../../game/types';
 import { hasVisualQueueCapacity, pairVisualActionsWithSnapshot, type MatchVisualFrame } from '../../game/match-visual';
 import { t } from '../../i18n';
 import { Bar, ClubLink, Crest, Panel, Pct, PlayerLink, posStr, Rating, Tabs } from '../components';
@@ -66,7 +66,7 @@ export function statColors(home: number, away: number, me: number): [string, str
   return me === 0 ? [own, pick] : [pick, own];
 }
 
-let live: { fixture: number; sim: MatchSim; lines: { text: string; cls: string; m: number; k?: string }[]; consumed: number; visualQueue: MatchVisualFrame[]; visualSeen: number; viewer?: OpenFootballBridge; halfShown?: boolean; shotsSeen?: number; cornersSeen?: number; h2hInit?: boolean; evSeen?: number; h2h?: H2hState; ldSeen?: number; prevTab?: string } | null = null;
+let live: { fixture: number; sim: MatchSim; lines: { text: string; cls: string; m: number; k?: string }[]; consumed: number; visualQueue: MatchVisualFrame[]; visualSeen: number; viewerEventsSeen?: number; viewer?: OpenFootballBridge; halfShown?: boolean; shotsSeen?: number; cornersSeen?: number; h2hInit?: boolean; evSeen?: number; h2h?: H2hState; ldSeen?: number; prevTab?: string } | null = null;
 
 export function MatchScreen({ id }: { id: number }) {
   const g = useGame()!;
@@ -411,6 +411,7 @@ function LiveMatch({ id }: { id: number }) {
   const advance = (maxMoments: number, untilLine = true) => {
     const before = sim.commentary.length;
     const viewerSnapshots: MatchPitchSnapshot[] = [];
+    const viewerActions: MatchVisualAction[] = [];
     // straffesparkskonkurrencen: højst ét spark ad gangen
     const soBefore = sim.shootout?.kicks.length ?? -1;
     let n = 0;
@@ -423,6 +424,7 @@ function LiveMatch({ id }: { id: number }) {
       if (L.viewer) viewerSnapshots.push(pitchSnapshot);
       const timeline = sim.visualTimeline ?? [];
       const freshVisual = timeline.slice(L.visualSeen);
+      if (L.viewer) viewerActions.push(...freshVisual);
       if (!h2h && freshVisual.length) {
         const paired = pairVisualActionsWithSnapshot(freshVisual, pitchSnapshot);
         if (!L.viewer) L.visualQueue.push(...paired);
@@ -432,7 +434,14 @@ function LiveMatch({ id }: { id: number }) {
     }
     const linesBefore = L.lines.length;
     pull();
-    if (L.viewer && viewerSnapshots.length) L.viewer.push(viewerSnapshots);
+    if (L.viewer && viewerSnapshots.length) {
+      const goals = sim.events.slice(L.viewerEventsSeen ?? 0).filter((event) => event.k === 'goal' && event.p !== undefined).map((event) => {
+        const shot = viewerActions.find((action) => action.kind === 'shot' && action.outcome === 'goal' && action.team === event.t && action.actor === event.p && action.minute === event.m);
+        return { player_id: event.p!, time: shot ? Math.round(shot.moment / Math.max(sim.totalMoments, 1) * 505_340) : Math.round(event.m / 90 * 505_340), is_auto_goal: false };
+      });
+      L.viewerEventsSeen = sim.events.length;
+      L.viewer.push(viewerSnapshots, goals);
+    }
     // store chancer og mål afspilles på 2D-banen (kampen venter imens)
     const seen = L.shotsSeen ?? 0;
     const fresh = sim.shots.slice(seen);
@@ -594,8 +603,7 @@ function LiveMatch({ id }: { id: number }) {
 
   useEffect(() => {
     if (h2h) return; // fast tempo – styres ovenfor
-    if (paused || report || hl) return;
-    if (viewerBridge && !viewerReady && !viewerFailed) return;
+    if (paused || report || hl || (!viewerReady && !viewerFailed)) return;
     const useViewer = !!viewerBridge && viewerReady && !viewerFailed;
     const ms = useViewer
       ? Math.max(30, Math.round(505_340 / sim.totalMoments / speed))
@@ -727,7 +735,7 @@ function LiveMatch({ id }: { id: number }) {
 
   return (
     <div className="match-screen">
-      <div className="match-brandline"><strong>TACTICA <span>FC</span></strong><span>{g.comps[f.comp]?.name} · {stageLabel(f)}</span></div>
+      <div className="match-brandline"><img src={`${import.meta.env.BASE_URL}tactica-brand/Tactica_FC_Black_Metal_32x32.png?v=25`} alt="" width="32" height="32" /><strong>TACTICA <span>FC</span></strong><span>{g.comps[f.comp]?.name} · {stageLabel(f)}</span></div>
       <Head title={`${g.comps[f.comp]?.name} – ${stageLabel(f)}`}>
         {!report && h2h && <H2hSpeed mine={hs.homeSpeed} theirs={hs.awaySpeed} name={humanManager(f.away)?.name ?? ''} onPick={(v) => { hs.homeSpeed = v; force((x) => x + 1); }} />}
         {!report && !h2h && <>

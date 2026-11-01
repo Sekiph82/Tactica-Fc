@@ -3,7 +3,7 @@ use rustc_hash::FxHashSet;
 
 const DEFAULT_TRANSFER_LIST_SIZE: usize = 10;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Transfers {
     items: Vec<TransferItem>,
 }
@@ -65,7 +65,7 @@ impl Transfers {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TransferItem {
     pub player_id: u32,
     pub amount: CurrencyValue,

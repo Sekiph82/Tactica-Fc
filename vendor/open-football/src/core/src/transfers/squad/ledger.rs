@@ -36,7 +36,7 @@ use crate::{ClubPhilosophy, PathwayStage, PlayerFieldPositionGroup};
 /// Why a club would sell a player. Ordered by how loudly it says so, which
 /// is only used to name the strongest motive on an entry — the score itself
 /// is the sum of all of them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SellMotive {
     /// He is at the top of his value and the curve goes down from here.
     PeakValue,
@@ -169,7 +169,7 @@ pub struct LedgerContext {
 }
 
 /// One player the club would sell, at a price.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SellListEntry {
     pub player_id: u32,
     /// What the club would want for him — the board's reservation, which

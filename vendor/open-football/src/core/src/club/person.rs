@@ -80,7 +80,7 @@ pub struct PersonAttributes {
     pub dirtiness: f32,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersonBehaviour {
     pub state: PersonBehaviourState,
 }
@@ -111,7 +111,7 @@ impl PersonBehaviour {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Default)]
+#[derive(Copy, Clone, Debug, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub enum PersonBehaviourState {
     Poor,
     #[default]

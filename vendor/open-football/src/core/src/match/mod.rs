@@ -7,6 +7,7 @@ pub mod engine;
 
 pub mod fixture;
 pub mod game;
+pub mod live_session;
 
 pub mod pool;
 
@@ -20,6 +21,7 @@ pub use dispatch::*;
 pub use engine::*;
 pub use fixture::*;
 pub use game::*;
+pub use live_session::*;
 pub use pool::*;
 
 pub use result::*;

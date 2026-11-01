@@ -254,7 +254,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
             match state {
                 MatchState::PenaltyShootout => Self::run_penalty_shootout(&mut field, &mut context),
-                _ => Self::play_inner(&mut field, &mut context, &mut match_position_data),
+                _ => Self::play_inner(
+                    &mut field,
+                    &mut context,
+                    &mut match_position_data,
+                    config.live_session.as_deref(),
+                ),
             }
 
             StateManager::handle_state_finish(&mut context, &mut field);
@@ -268,6 +273,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         crate::r#match::TransitionGraph::note_final_states(field.players.iter().map(|p| p.state));
 
         let result = Self::build_result(field, context, match_position_data);
+        if let Some(session) = &config.live_session {
+            session.finish();
+        }
         if PhaseProf::enabled() {
             PhaseProf::report_and_reset("match");
         }
@@ -293,6 +301,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         field: &mut MatchField,
         context: &mut MatchContext,
         match_data: &mut ResultMatchPositionData,
+        live_session: Option<&crate::r#match::LiveMatchSession>,
     ) {
         let prof_on = PhaseProf::enabled();
 
@@ -339,6 +348,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             .and_then(|id| field.players.iter().find(|p| p.id == id).map(|p| p.team_id));
         let mut last_home_score: u8 = context.score.home_team.get();
         let mut last_away_score: u8 = context.score.away_team.get();
+        let mut live_goals = Vec::new();
+        let mut next_live_event_index = match_data.match_events().len();
         let mut last_home_instruction = context.coach_home.instruction;
         let mut last_away_instruction = context.coach_away.instruction;
         let mut last_home_zone = context.tactical_home.ball_zone;
@@ -353,6 +364,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let mut next_position_record_ms: u64 =
             (initial_t / Self::POSITION_RECORD_INTERVAL_MS + 1) * Self::POSITION_RECORD_INTERVAL_MS;
         let track_positions = match_data.is_tracking_positions();
+        let mut next_live_sample_ms = context.total_match_time;
 
         // **The interval.**
         //
@@ -375,6 +387,108 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // The clock running out does not end a period while a penalty is
         // still to be taken or still travelling — the laws extend it.
         while context.increment_time() || field.ball.penalty_in_progress(context.current_tick()) {
+            if let Some(session) = live_session {
+                if context.total_match_time >= next_live_sample_ms {
+                    if Substitutions::play_is_stopped(field)
+                        && context.goal_celebration.is_none()
+                        && context.substitution_break.is_none()
+                        && context.total_match_time >= context.dead_ball_until_ms
+                    {
+                        if let Some(command) = session.take_substitution() {
+                            let applied = Substitutions::process_manager_request(
+                                field,
+                                context,
+                                session.manager_team_id(),
+                                command.outgoing_player_id,
+                                command.incoming_player_id,
+                            );
+                            session.resolve_substitution(
+                                command,
+                                applied,
+                                (context.total_match_time / 60_000) as u32,
+                            );
+                            if applied {
+                                match_data.mark_substitution(context.total_match_time);
+                            }
+                        }
+                    }
+                    if let Some(instruction) = session.take_instruction() {
+                        if session.manager_team_id() == context.field_home_team_id {
+                            context.coach_home.manager_instruction_override = Some(instruction);
+                            context.coach_home.instruction = instruction;
+                        } else if session.manager_team_id() == context.field_away_team_id {
+                            context.coach_away.manager_instruction_override = Some(instruction);
+                            context.coach_away.instruction = instruction;
+                        }
+                    }
+                    let instruction = if session.manager_team_id() == context.field_home_team_id {
+                        context.coach_home.instruction
+                    } else {
+                        context.coach_away.instruction
+                    };
+                    let recorded_events = match_data.match_events();
+                    let live_events = recorded_events
+                        .get(next_live_event_index..)
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|event| crate::r#match::LiveMatchEventFrame {
+                            sequence: 0,
+                            timestamp: event.timestamp,
+                            category: event.category.clone(),
+                            description: event.description.clone(),
+                            actor_player_id: event.actor_player_id,
+                            related_player_id: event.related_player_id,
+                            actor_name: None,
+                            related_player_name: None,
+                        })
+                        .collect();
+                    next_live_event_index = recorded_events.len();
+                    session.publish(crate::r#match::LiveMatchFrame {
+                        sequence: 0,
+                        home_team_id: context.field_home_team_id,
+                        away_team_id: context.field_away_team_id,
+                        elapsed_ms: context.total_match_time,
+                        minute: (context.total_match_time / 60_000) as u32,
+                        home_score: context.score.home_team.get(),
+                        away_score: context.score.away_team.get(),
+                        ball_x: field.ball.position.x,
+                        ball_y: field.ball.position.y,
+                        ball_z: field.ball.position.z,
+                        instruction: crate::r#match::instruction_key(instruction).to_string(),
+                        events: live_events,
+                        goals: live_goals.clone(),
+                        players: field
+                            .players
+                            .iter()
+                            .filter(|player| !player.off_pitch)
+                            .map(|player| crate::r#match::LivePlayerFrame {
+                                id: player.id,
+                                team_id: player.team_id,
+                                name: String::new(),
+                                x: player.position.x,
+                                y: player.position.y,
+                                goalkeeper: player.tactical_position.current_position.is_goalkeeper(),
+                            })
+                            .collect(),
+                        substitutes: field.substitutes.iter()
+                            .map(|player| crate::r#match::LivePlayerFrame {
+                                id: player.id,
+                                team_id: player.team_id,
+                                name: String::new(),
+                                x: player.position.x,
+                                y: player.position.y,
+                                goalkeeper: player.tactical_position.current_position.is_goalkeeper(),
+                            })
+                            .collect(),
+                    });
+                    next_live_sample_ms = context.total_match_time.saturating_add(500);
+                    // Give the browser a short window to receive and display
+                    // each authoritative frame and accept manager input. At
+                    // 20 ms per half simulated second, a normal 90-minute
+                    // match takes about three minutes of wall time.
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            }
             // Post-goal dead time. No ball physics, no AI, no events, no
             // coach evals — see `MatchContext::dead_ball_until_ms` for why
             // the pause is load-bearing (it consumed the post-goal hot
@@ -526,6 +640,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     last_possession_team = current_owner_team;
                 }
                 if score_changed {
+                    if let Some(goal) = field.ball.in_net {
+                        live_goals.push(crate::r#match::LiveGoalFrame {
+                            player_id: goal.scorer_id,
+                            time: context.total_match_time as f64,
+                            is_auto_goal: goal.auto_goal,
+                        });
+                    }
                     last_home_score = home_score_now;
                     last_away_score = away_score_now;
                 }

@@ -27,7 +27,7 @@ use crate::{Player, Staff, TeamType};
 use chrono::NaiveDate;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CoachDecisionState {
     pub profile: CoachProfile,
     pub impressions: HashMap<u32, PlayerImpression>,

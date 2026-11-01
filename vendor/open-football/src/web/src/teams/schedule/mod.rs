@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION, MATCH_VIEWER_VERSION};
 use crate::common::played_fixture::PlayedFixture;
 use crate::common::season_step::SeasonStep;
 use crate::leagues::address::LeagueAddress;
@@ -12,7 +12,10 @@ use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
 use chrono::{NaiveDate, NaiveDateTime};
 use core::league::season::{LeagueSeason, Season};
-use core::SimulatorData;
+use core::continent::{
+    CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, COPA_LIBERTADORES_ID, EUROPA_LEAGUE_ID,
+};
+use core::{SimulatorData, TacticalStyle};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -30,6 +33,7 @@ pub struct TeamScheduleQuery {
 #[template(path = "teams/schedule/index.html")]
 pub struct TeamScheduleTemplate {
     pub css_version: &'static str,
+    pub match_viewer_version: &'static str,
     pub computer_name: &'static str,
     pub cpu_brand: &'static str,
     pub cores_count: usize,
@@ -45,6 +49,14 @@ pub struct TeamScheduleTemplate {
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub team_slug: String,
+    pub is_managed: bool,
+    pub managed_formation_key: String,
+    pub managed_style_key: &'static str,
+    pub managed_players: Vec<ManagerRosterOption>,
+    pub live_opponent_name: String,
+    pub managed_league_id: Option<u32>,
+    pub managed_competition_ids: String,
+    pub next_match_days: Option<u32>,
     pub active_tab: &'static str,
     pub show_finances_tab: bool,
     pub show_academy_tab: bool,
@@ -53,6 +65,11 @@ pub struct TeamScheduleTemplate {
     pub season_base: String,
     pub seasons: Option<SeasonStep>,
     pub items: Vec<TeamScheduleItem>,
+}
+
+pub struct ManagerRosterOption {
+    pub id: u32,
+    pub name: String,
 }
 
 pub struct TeamScheduleItem {
@@ -83,6 +100,7 @@ pub async fn team_schedule_get_action(
         .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
     let i18n = state.i18n.for_lang(&route_params.lang);
+    let managed_team_id = *state.manager_team_id.read().await;
 
     let team_id = simulator_data
         .indexes
@@ -150,6 +168,26 @@ pub async fn team_schedule_get_action(
         })
         .collect();
 
+    // Manager day advances play the competitions the managed club can enter,
+    // while the daily transfer/training/economic passes still process all countries.
+    let mut managed_competition_ids = Vec::new();
+    if let Some(league_id) = team.league_id {
+        managed_competition_ids.push(league_id);
+    }
+    if let Some(country) = simulator_data.country_by_club(team.club_id) {
+        if let Some(cup) = country.domestic_cup.as_ref() {
+            managed_competition_ids.push(cup.league.id);
+        }
+        for playoff in &country.playoffs {
+            if team
+                .league_id
+                .is_some_and(|league_id| playoff.group_league_ids.contains(&league_id))
+            {
+                managed_competition_ids.push(playoff.league.id);
+            }
+        }
+    }
+
     // The domestic cup and the playoffs are stored apart from `leagues`, but
     // for listing a team's fixtures they are all just competitions.
     let competitions = simulator_data
@@ -206,6 +244,14 @@ pub async fn team_schedule_get_action(
         if match_result.is_some() {
             continue;
         }
+        let competition_id = match comp_key {
+            "champions_league" => CHAMPIONS_LEAGUE_ID,
+            "europa_league" => EUROPA_LEAGUE_ID,
+            "conference_league" => CONFERENCE_LEAGUE_ID,
+            "copa_libertadores" => COPA_LIBERTADORES_ID,
+            _ => continue,
+        };
+        managed_competition_ids.push(competition_id);
         let is_home = home_club_id == team.club_id;
         let opponent_club_id = if is_home { away_club_id } else { home_club_id };
 
@@ -236,6 +282,13 @@ pub async fn team_schedule_get_action(
 
     // Sort all matches by date
     items.sort_by_key(|(dt, _, _)| *dt);
+    let current_date = simulator_data.date.date();
+    let next_match_days = items
+        .iter()
+        .find(|(kickoff, _, item)| item.result.is_none() && kickoff.date() >= current_date)
+        .and_then(|(kickoff, _, _)| {
+            u32::try_from((kickoff.date() - current_date).num_days().saturating_add(1)).ok()
+        });
     let seasons = SeasonStep::resolve(
         items.iter().map(|(_, season, _)| *season),
         query.season,
@@ -245,7 +298,13 @@ pub async fn team_schedule_get_action(
         items.retain(|(_, season, _)| season.opening_year == step.selected);
     }
     let items: Vec<TeamScheduleItem> = items.into_iter().map(|(_, _, item)| item).collect();
-
+    let live_opponent_name = items
+        .iter()
+        .find(|item| item.result.is_none())
+        .map(|item| item.opponent_name.clone())
+        .unwrap_or_default();
+    managed_competition_ids.sort_unstable();
+    managed_competition_ids.dedup();
     let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
     let current_path = format!("/{}/teams/{}/schedule", route_params.lang, team.slug);
     let menu_params = views::MenuParams {
@@ -260,9 +319,31 @@ pub async fn team_schedule_get_action(
     let league_title = league
         .map(|l| views::league_display_name(l, &i18n, simulator_data))
         .unwrap_or_default();
+    let current_tactics = team.tactics();
+    let managed_formation_key = format!("{:?}", current_tactics.tactic_type);
+    let managed_style_key = match current_tactics.tactical_style() {
+        TacticalStyle::Attacking => "attacking",
+        TacticalStyle::Defensive => "defensive",
+        TacticalStyle::Balanced => "balanced",
+        TacticalStyle::Possession => "possession",
+        TacticalStyle::Counterattack => "counterattack",
+        TacticalStyle::WingPlay => "wing_play",
+        TacticalStyle::WidePlay => "wide_play",
+        TacticalStyle::Compact => "compact",
+        TacticalStyle::Experimental => "experimental",
+    };
+    let managed_players = if managed_team_id == Some(team.id) {
+        team.players.players.iter().map(|player| ManagerRosterOption {
+            id: player.id,
+            name: player.full_name.to_string(),
+        }).collect()
+    } else {
+        Vec::new()
+    };
 
     Ok(TeamScheduleTemplate {
         css_version: CSS_VERSION,
+        match_viewer_version: MATCH_VIEWER_VERSION,
         computer_name: &COMPUTER_NAME,
         cpu_brand: &CPU_BRAND,
         cores_count: *CPU_CORES,
@@ -286,6 +367,18 @@ pub async fn team_schedule_get_action(
             .unwrap_or_default(),
         menu_sections,
         team_slug: team.slug.clone(),
+        is_managed: managed_team_id == Some(team.id),
+        managed_formation_key,
+        managed_style_key,
+        managed_players,
+        live_opponent_name,
+        managed_league_id: team.league_id,
+        managed_competition_ids: managed_competition_ids
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(","),
+        next_match_days,
         active_tab: "schedule",
         show_finances_tab: team.team_type.is_own_team(),
         show_academy_tab: team.team_type == core::TeamType::Main

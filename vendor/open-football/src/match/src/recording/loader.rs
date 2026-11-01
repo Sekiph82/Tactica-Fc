@@ -1,5 +1,5 @@
 use crate::app::bill::{Held, MemoryBill};
-use crate::app::config::ViewerConfig;
+use crate::app::config::{GoalInfo, ViewerConfig};
 use crate::app::perf::FrameCost;
 use crate::app::quality::{Footprint, Quality};
 use crate::recording::playback::{Playback, RecordedSpans};
@@ -110,6 +110,14 @@ thread_local! {
     /// error handler fails every one of these, so the loader's ordinary retry
     /// asks for them again down the fallback path instead of waiting forever.
     static COMMISSIONED: RefCell<HashSet<usize>> = RefCell::new(HashSet::new());
+
+    /// Timestamped position batches received from an embedded live-match host.
+    static INLINE_RECORDINGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Queue one upstream-shaped recording batch from the host match engine.
+pub fn push_inline_recording(json: String) {
+    INLINE_RECORDINGS.with(|queue| queue.borrow_mut().push(json));
 }
 
 /// A plain dedicated Web Worker that fetches and parses chunks so the replay's
@@ -494,8 +502,11 @@ impl ChunkLoader {
     /// the scene is being built at, and the page's own `?readahead=`.
     pub fn bootstrap(
         mut loader: ResMut<ChunkLoader>,
-        config: Res<ViewerConfig>,
+        mut config: ResMut<ViewerConfig>,
         quality: Res<Quality>,
+        mut tracks: ResMut<ReplayTracks>,
+        mut playback: ResMut<Playback>,
+        mut spans: ResMut<RecordedSpans>,
     ) {
         loader.read_ahead = match config.readahead {
             Some(asked) => asked.min(Self::READ_AHEAD),
@@ -504,6 +515,37 @@ impl ChunkLoader {
                 Footprint::Handheld => Self::READ_AHEAD_HANDHELD,
             },
         };
+        let inline_recording = config.inline_recording.clone();
+        if let Some(recording) = inline_recording.as_deref() {
+            match serde_json::from_str::<ChunkPayload>(recording) {
+                Ok(payload) => {
+                    let duration = config.match_time_ms.max(1.0);
+                    config.goals.extend(payload.goals.iter().map(|goal| GoalInfo {
+                        player_id: goal.player_id,
+                        time: goal.time,
+                        is_auto_goal: goal.is_auto_goal,
+                    }));
+                    config.goals.sort_by(|a, b| a.time.total_cmp(&b.time));
+                    let players = tracks.absorb(payload);
+                    for (player_id, samples) in players {
+                        tracks.absorb_player(player_id, &samples);
+                    }
+                    loader.chunk_count = 1;
+                    loader.chunk_duration_ms = duration;
+                    loader.loaded.insert(0);
+                    loader.ready = true;
+                    playback.duration_ms = duration;
+                    playback.playing = !config.embedded;
+                    spans.set(vec![(0.0, duration)]);
+                }
+                Err(error) => {
+                    error!("invalid inline match recording: {error}");
+                    loader.ready = true;
+                    loader.nothing = true;
+                }
+            }
+            return;
+        }
         loader.request_metadata(&config);
     }
 
@@ -514,13 +556,20 @@ impl ChunkLoader {
         mut tracks: ResMut<ReplayTracks>,
         mut playback: ResMut<Playback>,
         mut spans: ResMut<RecordedSpans>,
-        config: Res<ViewerConfig>,
+        mut config: ResMut<ViewerConfig>,
         time: Res<Time>,
     ) {
-        let deliveries: Vec<Delivery> = match loader.inbox.lock() {
+        let mut deliveries: Vec<Delivery> = match loader.inbox.lock() {
             Ok(mut inbox) => inbox.drain(..).collect(),
             Err(_) => Vec::new(),
         };
+        let inline: Vec<String> = INLINE_RECORDINGS.with(|queue| queue.borrow_mut().drain(..).collect());
+        for json in inline {
+            match serde_json::from_str::<ChunkPayload>(&json) {
+                Ok(payload) => deliveries.push(Delivery::Chunk(0, payload)),
+                Err(error) => error!("invalid live match recording batch: {error}"),
+            }
+        }
 
         for delivery in deliveries {
             match delivery {
@@ -560,6 +609,9 @@ impl ChunkLoader {
                     loader.retry_in = METADATA_RETRY_SECONDS;
                 }
                 Delivery::Chunk(index, payload) => {
+                    let mut payload = payload;
+                    config.goals.append(&mut payload.goals);
+                    config.goals.sort_by(|a, b| a.time.total_cmp(&b.time));
                     // The ball, the states and the event log now; the players
                     // over the next few frames — see `Self::read_on`.
                     let players = Backlog::Json(tracks.absorb(payload).into_iter().collect());
@@ -604,6 +656,13 @@ impl ChunkLoader {
         }
 
         loader.read_on(&mut tracks);
+
+        // Inline live feeds are pushed by the host and must never fall through
+        // to HTTP metadata/chunk requests using the empty `api_base`.
+        if config.inline_recording.is_some() {
+            MemoryBill::hold(Held::Recording, tracks.resident_bytes());
+            return;
+        }
 
         if loader.chunk_count == 0 {
             if loader.retry_in > 0.0 {

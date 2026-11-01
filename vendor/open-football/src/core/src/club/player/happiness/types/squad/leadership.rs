@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LeadershipEventKind {
     CaptaincyAwarded,
     CaptaincyRemoved,
@@ -39,7 +39,7 @@ impl LeadershipEventKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LeadershipEventContext {
     pub kind: LeadershipEventKind,
     pub partner_player_id: Option<u32>,

@@ -24,7 +24,7 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 /// His belief in himself as a player.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct CompetitiveMind {
     /// −100..=100. Built from what actually happens on the pitch.
     belief_pct: i8,

@@ -15,7 +15,7 @@ use chrono::{Duration, NaiveDate};
 /// sweep re-derives from his birth year. The stages are ordered by how
 /// close he is to the first team; [`PathwayStage::is_terminal`] separates
 /// the two that end the pathway.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PathwayStage {
     /// Still in the academy or a youth side, not yet a senior question.
     Academy,
@@ -133,7 +133,7 @@ impl PathwayStage {
 /// Set for every contracted player — at signing, at academy graduation, at
 /// a youth-contract upgrade, and once for an existing squad the first time
 /// the monthly review sees him.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlayerPlan {
     /// What role the club envisioned when signing this player.
     pub role: PlayerPlanRole,
@@ -167,7 +167,7 @@ pub struct PlayerPlan {
     pub band_target: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PlayerPlanRole {
     /// Signed to be a first-team starter right away (experienced, high fee).
     ImmediateStarter,

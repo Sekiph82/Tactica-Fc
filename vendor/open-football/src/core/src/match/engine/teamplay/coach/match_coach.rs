@@ -18,6 +18,7 @@ use crate::r#match::engine::teamplay::coach::metrics::{MetricSnapshot, RollingTe
 #[derive(Debug, Clone)]
 pub struct MatchCoach {
     pub instruction: CoachInstruction,
+    pub manager_instruction_override: Option<CoachInstruction>,
     /// Tick when instruction was last updated
     pub last_update_tick: u64,
     /// Team's last shot tick (for team-wide shot cooldown)
@@ -50,6 +51,7 @@ impl Default for MatchCoach {
     fn default() -> Self {
         MatchCoach {
             instruction: CoachInstruction::Normal,
+            manager_instruction_override: None,
             last_update_tick: 0,
             last_shot_tick: 0,
             last_possession_gain_tick: 0,
@@ -77,6 +79,10 @@ impl MatchCoach {
         current_tick: u64,
     ) {
         self.last_update_tick = current_tick;
+        if let Some(instruction) = self.manager_instruction_override {
+            self.instruction = instruction;
+            return;
+        }
 
         let _time_remaining = 1.0 - match_progress;
         // The escalation ladder is DISCRETE — a trailing side is on
@@ -386,5 +392,20 @@ impl MatchCoach {
         } else {
             FormationLine::Attack
         }
+    }
+}
+
+#[cfg(test)]
+mod manager_instruction_tests {
+    use super::{CoachInstruction, MatchCoach};
+
+    #[test]
+    fn manager_instruction_survives_the_assistant_coach_evaluation() {
+        let mut coach = MatchCoach::new();
+        coach.manager_instruction_override = Some(CoachInstruction::PushForward);
+
+        coach.evaluate(2, 0.95, 0.9, 500);
+
+        assert_eq!(coach.instruction, CoachInstruction::PushForward);
     }
 }

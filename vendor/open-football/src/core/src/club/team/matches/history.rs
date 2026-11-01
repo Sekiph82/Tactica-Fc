@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 const DEFAULT_MATCH_LIST_SIZE: usize = 10;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MatchHistory {
     items: Vec<MatchHistoryItem>,
 }
@@ -154,7 +154,7 @@ impl MatchHistory {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MatchHistoryItem {
     pub date: NaiveDateTime,
     pub rival_team_id: u32,

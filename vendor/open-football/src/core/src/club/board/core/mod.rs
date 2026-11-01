@@ -41,7 +41,7 @@ use crate::club::{BoardMood, BoardResult, StaffClubContract};
 use crate::context::GlobalContext;
 use chrono::{Datelike, NaiveDate};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ClubBoard {
     pub mood: BoardMood,
     pub confidence: BoardConfidence,
@@ -139,7 +139,7 @@ pub struct ClubBoard {
 /// Held so the promise can be judged against something concrete: not "did
 /// the club sell anybody" but "did the money the board asked for arrive
 /// before the deadline".
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct SaleMandate {
     /// The player the board named.
     pub player_id: u32,
@@ -162,7 +162,7 @@ impl SaleMandate {
 /// One decision per cause per season (or per spell, for a mood that comes
 /// and goes), plus a ceiling on the lot. Reset at the season turn with the
 /// mandate the guards protect.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct BudgetMoves {
     /// A cut has been issued for the current spell of Poor mood. Cleared
     /// when the mood lifts, so a second slump earns a second cut.
@@ -204,7 +204,7 @@ impl BudgetMoves {
 /// The first benefactor read found four second-division clubs and no
 /// giant, and the census could not say why (memory
 /// `feedback_keep_match_debug_data`).
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct BoardIncomeRead {
     /// Twelve-month income from the finance history; 0 before a month has
     /// closed.

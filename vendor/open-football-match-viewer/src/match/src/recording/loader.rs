@@ -555,7 +555,7 @@ impl ChunkLoader {
         mut tracks: ResMut<ReplayTracks>,
         mut playback: ResMut<Playback>,
         mut spans: ResMut<RecordedSpans>,
-        config: Res<ViewerConfig>,
+        mut config: ResMut<ViewerConfig>,
         time: Res<Time>,
     ) {
         let mut deliveries: Vec<Delivery> = match loader.inbox.lock() {
@@ -607,7 +607,12 @@ impl ChunkLoader {
                     loader.metadata_in_flight = false;
                     loader.retry_in = METADATA_RETRY_SECONDS;
                 }
-                Delivery::Chunk(index, payload) => {
+                Delivery::Chunk(index, mut payload) => {
+                    let goals = std::mem::take(&mut payload.goals);
+                    if !goals.is_empty() {
+                        config.goals.extend(goals);
+                        config.goals.sort_by(|left, right| left.time.total_cmp(&right.time));
+                    }
                     // The ball, the states and the event log now; the players
                     // over the next few frames — see `Self::read_on`.
                     let players = Backlog::Json(tracks.absorb(payload).into_iter().collect());

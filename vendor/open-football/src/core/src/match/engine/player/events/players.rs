@@ -821,6 +821,46 @@ pub enum PlayerEvent {
     TakeBall(u32),
 }
 
+impl PlayerEvent {
+    /// Return the event's acting player and, where it is a pass, its target.
+    /// The IDs are structured metadata; callers should not parse `Debug` text.
+    pub fn actor_player_ids(&self) -> (Option<u32>, Option<u32>) {
+        match self {
+            Self::PassTo(context) => (Some(context.from_player_id), Some(context.to_player_id)),
+            Self::Shoot(context) => (Some(context.from_player_id), None),
+            Self::Goal(id, _)
+            | Self::Assist(id)
+            | Self::BallCollision(id)
+            | Self::TacklingBall(id)
+            | Self::BallOwnerChange(id)
+            | Self::ClearBall(id, _)
+            | Self::MiscuedClearance(id, _)
+            | Self::RushOut(id)
+            | Self::MovePlayer(id, _)
+            | Self::Leap(id, _)
+            | Self::StayInGoal(id)
+            | Self::MoveBall(id, _)
+            | Self::CommunicateMessage(id, _)
+            | Self::OfferSupport(id)
+            | Self::ClaimBall(id)
+            | Self::GainBall(id)
+            | Self::CaughtBall(id)
+            | Self::ParriedBall(id)
+            | Self::CommitFoul(id, _, _)
+            | Self::Offside(id, _)
+            | Self::Caution(id, _)
+            | Self::HeldTooLong(id)
+            | Self::Handball(id, _)
+            | Self::Dispossessed(id)
+            | Self::Howler(id)
+            | Self::RequestHeading(id, _)
+            | Self::RequestShot(id, _)
+            | Self::RequestBallReceive(id)
+            | Self::TakeBall(id) => (Some(*id), None),
+        }
+    }
+}
+
 #[cfg(feature = "match-logs")]
 impl PlayerEvent {
     /// Index into the ball-relocation census's per-event table.
@@ -1213,18 +1253,20 @@ impl PlayerEventDispatcher {
         // `TakeBall` was never logged — it sets no ball state at all and
         // fires every tick for every chaser.
         let described = (context.logging_enabled && !matches!(event, PlayerEvent::TakeBall(_)))
-            .then(|| format!("{:?}", event));
+            .then(|| (format!("{:?}", event), event.actor_player_ids()));
         let mut refusal: Option<&'static str> = None;
         let out = Self::dispatch_one(event, field, context, match_data, &mut refusal);
-        if let Some(line) = described {
+        if let Some((line, (actor_player_id, related_player_id))) = described {
             let when = context.total_match_time;
-            match_data.add_match_event(
+            match_data.add_match_event_with_players(
                 when,
                 "player",
                 match refusal {
                     Some(why) => format!("REFUSED {line} — {why}"),
                     None => line,
                 },
+                actor_player_id,
+                related_player_id,
             );
         }
         #[cfg(feature = "match-logs")]

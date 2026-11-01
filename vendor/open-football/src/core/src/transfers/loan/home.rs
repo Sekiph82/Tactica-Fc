@@ -88,7 +88,7 @@ impl SquadHomeContext<'_> {
 /// mind already builds its picture rather than by rebuilding a
 /// `MindSituation` and rescanning `recent_events` for every player in the
 /// world every day.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct HomePull {
     /// 0..1 — the mind's `GoHome`, a recent `WantsReturnHome` mood, or raw
     /// cultural isolation, whichever is loudest.

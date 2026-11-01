@@ -14,7 +14,7 @@ use crate::club::board::ownership::{ClubBenefactor, OwnershipModel};
 use crate::club::board::vision::{ClubVision, LongTermGoal};
 use crate::transfers::value::wage::OwnerEnvelopes;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SeasonTargets {
     pub transfer_budget: i32,
     pub wage_budget: i32,
@@ -64,7 +64,7 @@ impl SeasonTargets {
 /// Board confidence in the current management (0-100).
 /// Drops when results are poor, recovers when exceeding expectations.
 /// At 0 — or after sustained Poor mood — the manager is sacked.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BoardConfidence {
     pub level: i32,
 }

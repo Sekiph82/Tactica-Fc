@@ -3,6 +3,27 @@ use crate::r#match::player::events::{PlayerEvent, PlayerEventDispatcher};
 use crate::r#match::{MatchContext, MatchField, ResultMatchPositionData};
 use std::vec::IntoIter;
 
+fn ball_event_player_ids(event: BallEvent) -> (Option<u32>, Option<u32>) {
+    match event {
+        BallEvent::Goal(metadata) => (
+            Some(metadata.goalscorer_player_id),
+            metadata.assist_player_id,
+        ),
+        BallEvent::PassCompleted(receiver, passer) => (Some(passer), Some(receiver)),
+        BallEvent::Intercepted(interceptor, passer, _) => (Some(interceptor), passer),
+        BallEvent::FirstTouchFailed(receiver, passer, _) => (Some(receiver), Some(passer)),
+        BallEvent::Claimed(player_id)
+        | BallEvent::Blocked(player_id, _)
+        | BallEvent::HeadedClear(player_id, _)
+        | BallEvent::Gained(player_id)
+        | BallEvent::Offside(player_id, _)
+        | BallEvent::CarryEnded(player_id, _, _)
+        | BallEvent::Caution(player_id, _)
+        | BallEvent::Handball(player_id, _) => (Some(player_id), None),
+        BallEvent::TakeMe(_) | BallEvent::HitFrame(_, _) => (None, None),
+    }
+}
+
 pub enum Event {
     BallEvent(BallEvent),
     PlayerEvent(PlayerEvent),
@@ -223,11 +244,17 @@ impl EventDispatcher {
                     if context.logging_enabled {
                         match ball_event {
                             BallEvent::TakeMe(_) => {}
-                            _ => match_data.add_match_event(
-                                context.total_match_time,
-                                "ball",
-                                format!("{:?}", ball_event),
-                            ),
+                            _ => {
+                                let (actor_player_id, related_player_id) =
+                                    ball_event_player_ids(ball_event);
+                                match_data.add_match_event_with_players(
+                                    context.total_match_time,
+                                    "ball",
+                                    format!("{:?}", ball_event),
+                                    actor_player_id,
+                                    related_player_id,
+                                )
+                            }
                         }
                     }
 

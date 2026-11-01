@@ -5,7 +5,7 @@ use chrono::Duration;
 use chrono::NaiveDateTime;
 pub use chrono::prelude::{DateTime, Datelike, NaiveDate, Utc};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ContractType {
     PartTime,
     FullTime,
@@ -97,7 +97,7 @@ impl ClubLevelAnchor {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PlayerSquadStatus {
     Invalid,
     NotYetSet,
@@ -407,14 +407,14 @@ impl PlayerSquadStatus {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum PlayerTransferStatus {
     TransferListed,
     LoadListed,
     TransferAndLoadListed,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlayerClubContract {
     pub shirt_number: Option<u8>,
 
@@ -968,7 +968,7 @@ pub fn is_inert_clause(clause_type: &ContractClauseType) -> bool {
 }
 
 // Bonuses
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum ContractBonusType {
     AppearanceFee,
     GoalFee,
@@ -985,7 +985,7 @@ pub enum ContractBonusType {
     LoyaltyBonus,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ContractBonus {
     pub value: i32,
     pub bonus_type: ContractBonusType,
@@ -998,7 +998,7 @@ impl ContractBonus {
 }
 
 // Clauses
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum ContractClauseType {
     MinimumFeeRelease,
     RelegationFeeRelease,
@@ -1022,7 +1022,7 @@ pub enum ContractClauseType {
     OptionalContractExtensionByClub,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ContractClause {
     /// Single-number payload — release fee, percentage, or extension years
     /// depending on `bonus_type`. Kept for backward compatibility and as

@@ -229,6 +229,9 @@ pub struct ChunkPayload {
     pub players: HashMap<u32, Box<RawValue>>,
     #[serde(default)]
     pub events: Vec<MatchEvent>,
+    /// Goals arriving from a live host simulation after viewer startup.
+    #[serde(default)]
+    pub goals: Vec<crate::app::config::GoalInfo>,
     #[serde(default)]
     pub states: HashMap<u32, Vec<StateEntry>>,
 }

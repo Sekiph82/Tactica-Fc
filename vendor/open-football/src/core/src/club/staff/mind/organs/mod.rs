@@ -25,7 +25,7 @@ use crate::club::mind::organs::memory::{EpisodeDomain, MindMemory};
 /// Composition rather than a second copy of [`MindOrgans`]: the shared
 /// pair is held whole, and the accessors below mean no caller has to
 /// know it is nested.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct StaffOrgans {
     /// What he remembers and what he wants — the same two organs a
     /// player has, running the same machinery.

@@ -16,20 +16,22 @@ static GLOBAL: Jemalloc = Jemalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-use database::{DatabaseGenerator, DatabaseLoader};
+use database::{DatabaseEntity, DatabaseGenerator, DatabaseLoader};
 use env_logger::Env;
 use log::info;
 use simulator_core::r#match::MatchDispatcherRegistry;
 use simulator_core::utils::TimeEstimation;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use web::{
     AiConfig, AiJobs, DistributedDispatcher, EventI18nManager, FootballSimulatorServer,
-    GameAppData, I18nManager, NewsI18nManager, Settings, WorkerRegistry, WorkerServer,
+    GameAppData, I18nManager, ManagerCareerStore, NewsI18nManager, Settings, WorkerRegistry,
+    WorkerServer, WorldSaveStore,
 };
 
 #[tokio::main]
-async fn main() {
+pub async fn main() {
     color_eyre::install().unwrap();
 
     env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
@@ -65,23 +67,63 @@ async fn main() {
     )));
 
     let (database, estimated) = TimeEstimation::estimate(DatabaseLoader::load);
-
-    let (game_data, gen_ms) = TimeEstimation::estimate(|| DatabaseGenerator::generate(&database));
-
+    let manager_career_store = Arc::new(ManagerCareerStore::for_current_user());
+    let database_signature = career_database_signature(&database);
+    let world_save_store = Arc::new(WorldSaveStore::for_current_user(database_signature));
+    let restored_world = world_save_store.load().unwrap_or_else(|error| {
+        log::error!("failed to load career world save: {error}");
+        None
+    });
+    let has_restored_world = restored_world.is_some();
+    let (mut game_data, gen_ms) = match restored_world {
+        Some(restored) => {
+            // Generation seeds the process-global IDs for new academy/staff
+            // records. A loaded career needs the same invariant without
+            // constructing and then discarding a second 80k-player world.
+            restored.seed_player_id_sequence();
+            (restored, 0)
+        }
+        None => TimeEstimation::estimate(|| DatabaseGenerator::generate(&database)),
+    };
     info!(
-        "database loaded: {} ms, generated: {} ms",
-        estimated, gen_ms
+        "database loaded: {} ms, world {}: {} ms",
+        estimated,
+        if has_restored_world { "restored" } else { "generated" },
+        gen_ms
     );
 
     let i18n = Arc::new(I18nManager::new());
-    i18n.set_date(game_data.date);
 
     let news_i18n = Arc::new(NewsI18nManager::new());
     let events_i18n = Arc::new(EventI18nManager::new(&i18n));
 
+    i18n.set_date(game_data.date);
+
+    let manager_team_id = manager_career_store
+        .load_team_id()
+        .filter(|team_id| {
+            game_data
+                .team(*team_id)
+                .is_some_and(|team| team.team_type == simulator_core::TeamType::Main)
+        });
+    if let Some(team_id) = manager_team_id {
+        info!("restored manager team selection: {team_id}");
+        if !has_restored_world {
+            if let Some(snapshot) = manager_career_store.load_snapshot(team_id) {
+                if snapshot.apply_to_simulation(&mut game_data, team_id) {
+                    info!("restored manager tactics, lineup, training, and transfer-list choices");
+                }
+            }
+        }
+    }
+
     let data = GameAppData {
         database: Arc::new(database),
         data: Arc::new(RwLock::new(Some(Arc::new(game_data)))),
+        manager_team_id: Arc::new(RwLock::new(manager_team_id)),
+        manager_career_store,
+        world_save_store,
+        live_match_session: Arc::new(RwLock::new(None)),
         process_lock: Arc::new(Mutex::new(())),
         cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         i18n,
@@ -115,4 +157,87 @@ async fn main() {
     }
 
     FootballSimulatorServer::new(data).run().await;
+}
+
+fn career_database_signature(database: &DatabaseEntity) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    env!("CARGO_PKG_VERSION").hash(&mut hasher);
+    for continent in &database.continents {
+        continent.id.hash(&mut hasher);
+        continent.name.hash(&mut hasher);
+        for country in database
+            .countries
+            .iter()
+            .filter(|country| {
+                country.continent_id == continent.id
+                    && database
+                        .leagues
+                        .iter()
+                        .any(|league| league.country_id == country.id)
+            })
+        {
+            country.id.hash(&mut hasher);
+            country.slug.hash(&mut hasher);
+            country.name.hash(&mut hasher);
+            for league in database
+                .leagues
+                .iter()
+                .filter(|league| league.country_id == country.id)
+            {
+                league.id.hash(&mut hasher);
+                league.slug.hash(&mut hasher);
+                league.name.hash(&mut hasher);
+            }
+            // The original world signature included generated youth
+            // subleagues appended after each country's real leagues. Recreate
+            // those identity fields from the database so old career snapshots
+            // remain compatible without generating the full world first.
+            for parent in database
+                .leagues
+                .iter()
+                .filter(|league| league.country_id == country.id)
+            {
+                for configured_type in &parent.sub_leagues_competitions {
+                    let Some((team_type, type_offset)) = youth_team_type(configured_type) else {
+                        continue;
+                    };
+                    let has_team_type = database.clubs.iter().any(|club| {
+                        club.country_id == country.id
+                            && club.teams.iter().any(|team| {
+                                team.team_type == "Main" && team.league_id == Some(parent.id)
+                            })
+                            && club.teams.iter().any(|team| team.team_type == team_type)
+                    });
+                    if !has_team_type {
+                        continue;
+                    }
+
+                    (parent.id + type_offset).hash(&mut hasher);
+                    format!("{}-{}", parent.slug, team_type.to_ascii_lowercase())
+                        .hash(&mut hasher);
+                    format!("{} {}", parent.name, team_type).hash(&mut hasher);
+                }
+            }
+            for club in database
+                .clubs
+                .iter()
+                .filter(|club| club.country_id == country.id)
+            {
+                club.id.hash(&mut hasher);
+                club.name.hash(&mut hasher);
+            }
+        }
+    }
+    format!("{}-{:016x}", env!("CARGO_PKG_VERSION"), hasher.finish())
+}
+
+fn youth_team_type(configured: &str) -> Option<(&'static str, u32)> {
+    match configured {
+        "U18" => Some(("U18", 100_000)),
+        "U19" => Some(("U19", 110_000)),
+        "U20" => Some(("U20", 120_000)),
+        "U21" => Some(("U21", 130_000)),
+        "U23" => Some(("U23", 140_000)),
+        _ => None,
+    }
 }

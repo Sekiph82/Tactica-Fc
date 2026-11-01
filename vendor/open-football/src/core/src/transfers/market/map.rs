@@ -37,7 +37,7 @@ use crate::transfers::pipeline::trace::MarketSwitches;
 pub const AFFINITY_FLOOR: f32 = 0.02;
 
 /// One entry in a country's `import` or `export` list.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct CorridorWeight {
     pub country_id: u32,
     /// Normalised to 0..1 by the list's own maximum, so a country's top
@@ -53,14 +53,14 @@ pub struct CorridorWeight {
 /// Share of a nationality's professional pool raised in another country.
 /// Read both ways: the host country imports the nationality cheaply, and the
 /// home country recruits its own diaspora back.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct DiasporaShare {
     pub country_id: u32,
     pub share: f32,
 }
 
 /// One country's transfer-market card.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct CountryTransferProfile {
     /// Where this country's CLUBS buy foreigners from (source nationality →
     /// clubs of this country).

@@ -937,7 +937,7 @@ impl MeetingPass {
             data_support,
             board_risk_score,
             budget_fit,
-            reason_key,
+            reason_key: reason_key.to_owned(),
         }
     }
 }

@@ -1,7 +1,7 @@
 use chrono::NaiveDate;
 use serde::Serialize;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StatusData {
     pub start_date: NaiveDate,
     pub status: PlayerStatusType,
@@ -13,7 +13,7 @@ impl StatusData {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlayerStatus {
     pub statuses: Vec<StatusData>,
 }
@@ -95,7 +95,7 @@ impl PlayerStatus {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Serialize)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Serialize, serde::Deserialize)]
 pub enum PlayerStatusType {
     //When a player is absent from the club without permission
     Abs,

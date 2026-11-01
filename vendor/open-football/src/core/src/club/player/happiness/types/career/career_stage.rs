@@ -11,7 +11,7 @@
 
 /// Which career-stage moment this payload describes. The renderer keys off
 /// this first, then folds in the reason / evidence atoms.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CareerStageEventKind {
     RetirementConsidering,
     RetirementAnnounced,
@@ -33,7 +33,7 @@ impl CareerStageEventKind {
 /// Why a retirement happened. Drives the magnitude sign at the emit site
 /// (planned / legend → positive; forced / injury → negative) and the
 /// renderer's farewell vs. forced-exit framing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RetirementReason {
     /// Long-term free agent gave up looking for a club.
     LongFreeAgency,
@@ -76,7 +76,7 @@ impl RetirementReason {
 /// Concrete signals the career-stage detector latched onto. Closed enum so
 /// the renderer copy stays bounded; emit sites push the atoms that justified
 /// the moment and the renderer surfaces the most informative one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CareerStageEvidence {
     /// Player is in the late-career age window.
     LateCareer,
@@ -125,7 +125,7 @@ impl CareerStageEvidence {
 /// Structured payload describing a late-career moment. Filled in at emit
 /// time so the renderer can compose a contextual headline + reason rather
 /// than guessing from the event-type enum alone.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CareerStageEventContext {
     pub kind: CareerStageEventKind,
     /// Player age at emit time.

@@ -78,8 +78,13 @@ impl Match {
         // well to a reserve derby: there is no longer a cost worth carrying a
         // special case for. A goal in an U19 game is a goal somebody wants to
         // watch.
-        let config =
+        let mut config =
             MatchEngineConfig::for_fixture(&self.fixture, MatchRuntime::recordings_mode());
+        if let Some(session) = MatchRuntime::live_session() {
+            if session.claim_for_fixture(home_team_id, away_team_id) {
+                config.live_session = Some(session);
+            }
+        }
         let match_result =
             FootballEngine::<840, 545>::play_with_config(self.home_squad, self.away_squad, config);
 

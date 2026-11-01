@@ -11,7 +11,7 @@ use chrono::Duration;
 use chrono::NaiveDate;
 use log::debug;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ClubFinances {
     pub balance: ClubFinancialBalance,
     pub history: ClubFinancialBalanceHistory,
@@ -55,7 +55,7 @@ pub struct ClubFinances {
 ///
 /// Gross, not net, and reset at the season turn — the board judges a
 /// campaign's trading, not a running total since the world began.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct SeasonTransferFees {
     /// Fees paid out on completed incoming permanent deals.
     pub paid: f64,
@@ -82,7 +82,7 @@ impl SeasonTransferFees {
 
 /// One amortization stream: a transfer fee spread across the contract
 /// length so each month the buying club's P&L recognises its share.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TransferObligation {
     pub monthly_amount: i64,
     pub months_remaining: u32,
@@ -90,7 +90,7 @@ pub struct TransferObligation {
 
 /// Severity of debt — drives the monthly interest rate and is consumed by
 /// the result-stage to decide how aggressively to cut budgets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DistressLevel {
     None,
     Distress,
@@ -637,7 +637,7 @@ pub fn classify_distress(balance: i64, avg_monthly_wages: i64) -> DistressLevel 
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ClubFinancialBalance {
     pub balance: i64,
     pub income: i64,

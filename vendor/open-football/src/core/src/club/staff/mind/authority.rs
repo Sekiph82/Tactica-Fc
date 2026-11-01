@@ -19,7 +19,7 @@ use crate::club::mind::organs::memory::{ActorKind, ActorRef, EpisodeKind, FactCl
 use crate::club::mind::verdict::MoodContribution;
 
 /// His read of the people around him.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct AuthorityMind {
     /// The board he answers to. Adopted on first contact.
     pub board: ActorRef,

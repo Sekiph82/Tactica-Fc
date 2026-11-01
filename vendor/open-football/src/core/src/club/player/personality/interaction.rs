@@ -18,7 +18,7 @@ use chrono::NaiveDate;
 /// What the talk was about. Topics are deliberately football-specific —
 /// each maps to a different decision tree in `process_manager_player_talks`
 /// and a different verifier path in `Player::verify_promises`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum InteractionTopic {
     /// "I want more minutes." Both player- and manager-initiated.
     PlayingTime,
@@ -50,7 +50,7 @@ pub enum InteractionTopic {
 /// the same way `team_talks::TeamTalkTone` does at half-time, but at the
 /// 1:1 level. A `Demanding` talk to a low-temperament player backfires;
 /// the same talk to a determined pro lands fine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum InteractionTone {
     /// Even-keeled, factual. Default safe tone.
     Calm,
@@ -69,7 +69,7 @@ pub enum InteractionTone {
 }
 
 /// What came out of the talk.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum InteractionOutcome {
     /// Talk landed — player's concerns reduced or motivation up.
     Positive,
@@ -85,7 +85,7 @@ pub enum InteractionOutcome {
 
 /// One row in the player's manager-interaction log. Lives on `Player`
 /// behind a small ring buffer so the whole structure is bounded.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ManagerInteraction {
     pub date: NaiveDate,
     pub staff_id: u32,
@@ -108,7 +108,7 @@ pub struct ManagerInteraction {
 /// Bounded log of recent interactions with manager / coaching staff.
 /// Drops the oldest entry past `MAX_INTERACTIONS`. Cheap O(n) scans —
 /// `n` is small.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ManagerInteractionLog {
     pub entries: Vec<ManagerInteraction>,
 }

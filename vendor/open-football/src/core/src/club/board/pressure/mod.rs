@@ -53,7 +53,7 @@ impl SupporterEvent {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct BoardPressure {
     pub supporter_pressure: u8,
     pub media_pressure: u8,

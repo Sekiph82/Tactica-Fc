@@ -1,5 +1,6 @@
 use chrono::{Datelike, NaiveDate};
 use log::info;
+use serde::{Deserialize, Serialize};
 
 use crate::continent::Continent;
 use crate::continent::national::{
@@ -8,7 +9,7 @@ use crate::continent::national::{
 
 /// Manages global-scope competitions (e.g. World Cup) at the SimulatorData level.
 /// Qualifying runs per-continent; the tournament is assembled here from all zones.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalCompetitions {
     pub configs: Vec<NationalCompetitionConfig>,
     pub tournaments: Vec<NationalTeamCompetition>,

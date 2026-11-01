@@ -24,7 +24,7 @@ use std::cmp::Ordering;
 /// Deliberately coarse. A fact is not a summary of an episode — it is
 /// the one sentence a player would actually say about a club or a person
 /// years later.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub enum FactClaim {
     #[default]
     None,
@@ -328,7 +328,7 @@ impl FactClaim {
 }
 
 /// One thing he believes about someone or somewhere, held indefinitely.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct SemanticFact {
     pub claim: FactClaim,
     /// Who or what it is about. [`ActorRef::NONE`] for self-knowledge.

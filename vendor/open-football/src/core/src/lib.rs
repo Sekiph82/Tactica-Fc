@@ -14,7 +14,7 @@ pub mod transfers;
 pub mod utils;
 pub mod world;
 
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 pub use competitions::*;
@@ -372,6 +372,7 @@ pub use club::{
     TrainingFocus,
     TrainingIntensity,
     TrainingIntensityPreference,
+    ManagerTrainingFocus,
     TrainingRecord,
     TrainingResponsibility,
     TrainingSchedule,
@@ -487,6 +488,7 @@ static MATCH_RECORDINGS_MODE: AtomicBool = AtomicBool::new(false);
 static MATCH_RECORDING_SCOPE: AtomicU8 = AtomicU8::new(0);
 static MATCH_STORE_MAX_THREADS: AtomicUsize = AtomicUsize::new(4);
 static MATCH_ENGINE_POOL: OnceLock<r#match::MatchPlayEnginePool> = OnceLock::new();
+static LIVE_MATCH_SESSION: OnceLock<Mutex<Option<Arc<r#match::LiveMatchSession>>>> = OnceLock::new();
 
 /// Process-global match-engine runtime configuration and the shared engine
 /// pool. The web crate flips these flags at startup (see `settings.rs`) and
@@ -495,6 +497,16 @@ static MATCH_ENGINE_POOL: OnceLock<r#match::MatchPlayEnginePool> = OnceLock::new
 pub struct MatchRuntime;
 
 impl MatchRuntime {
+    pub fn set_live_session(session: Option<Arc<r#match::LiveMatchSession>>) {
+        *LIVE_MATCH_SESSION.get_or_init(|| Mutex::new(None)).lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = session;
+    }
+
+    pub fn live_session() -> Option<Arc<r#match::LiveMatchSession>> {
+        LIVE_MATCH_SESSION.get_or_init(|| Mutex::new(None)).lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+    }
+
     pub fn set_events_mode(enabled: bool) {
         STORE_MATCH_EVENTS_MODE.store(enabled, Ordering::SeqCst);
     }

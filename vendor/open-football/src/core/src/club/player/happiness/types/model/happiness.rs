@@ -3,7 +3,7 @@ use super::HappinessEventType;
 use crate::club::player::behaviour_config::HappinessConfig;
 use chrono::NaiveDate;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlayerHappiness {
     pub morale: f32,
     pub factors: HappinessFactors,
@@ -98,7 +98,7 @@ pub struct PlayerHappiness {
     pub unhappy_streak: u8,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct HappinessFactors {
     pub playing_time: f32,
     pub salary_satisfaction: f32,
@@ -153,7 +153,7 @@ pub struct MoraleBreakdown {
     pub morale: f32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HappinessEvent {
     pub event_type: HappinessEventType,
     pub magnitude: f32,

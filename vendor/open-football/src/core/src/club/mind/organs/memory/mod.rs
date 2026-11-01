@@ -54,7 +54,7 @@ pub use semantic::{FactClaim, Semantic, SemanticFact, SemanticStore};
 pub use store::FixedStore;
 
 /// What a player carries with him.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct MindMemory {
     pub episodes: EpisodeStore,
     pub semantic: SemanticStore,

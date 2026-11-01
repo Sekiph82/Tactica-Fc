@@ -34,7 +34,7 @@ use std::collections::VecDeque;
 /// the line that performs the act — so a variant existing in this enum
 /// means the paper can genuinely report it. Nothing here is inferred
 /// from a persistent field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ClubAffair {
     /// The board dismissed the head coach.
     ManagerSacked { staff_id: u32 },
@@ -156,7 +156,7 @@ pub enum ClubAffair {
 /// Which kind of clause paid out. Kept apart from the transfer
 /// market's own trigger enum so the press is not coupled to its
 /// scheduling detail — the paper only cares what the money was for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ClauseWindfallKind {
     /// A share of the fee somebody else has just paid, or an agreed
     /// tranche of the original one.
@@ -200,7 +200,7 @@ impl ClubAffair {
 }
 
 /// A happening with the day it happened on.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct ClubAffairEntry {
     pub date: NaiveDate,
     pub affair: ClubAffair,
@@ -208,7 +208,7 @@ pub struct ClubAffairEntry {
 
 /// The club's short diary. Bounded, because every club in the world
 /// keeps one and nothing reads further back than the last press run.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ClubAffairLog {
     entries: VecDeque<ClubAffairEntry>,
 }

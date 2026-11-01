@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">TACTICA FC</string>
+    <string name="title_activity_main">TACTICA FC</string>
+    <string name="package_name">com.tacticafc.manager</string>
+    <string name="custom_url_scheme">com.tacticafc.manager</string>
+</resources>

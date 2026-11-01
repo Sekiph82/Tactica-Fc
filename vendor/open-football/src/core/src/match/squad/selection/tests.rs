@@ -283,6 +283,48 @@ fn manager_plan_changes_the_actual_xi_and_explains_its_score() {
 }
 
 #[test]
+fn exact_manager_slot_plan_reaches_the_competitive_match_xi() {
+    let date = Utc::now().date_naive();
+    let mut tactics = Tactics::new(MatchTacticType::T442);
+    tactics.manager_controlled = true;
+    let positions = tactics.positions().to_vec();
+    let players = positions
+        .iter()
+        .enumerate()
+        .map(|(index, &position)| make_test_player(index as u32 + 1, &[(position, 18)], 160, date))
+        .chain(std::iter::once(make_test_player(
+            12,
+            &[(positions[0], 18)],
+            240,
+            date,
+        )))
+        .collect();
+    let manager_slots = (0..positions.len())
+        .map(|slot| Some(if slot == 0 { 12 } else { slot as u32 + 1 }))
+        .collect::<Vec<_>>();
+    tactics.manager_lineup = manager_slots.clone();
+
+    let mut team = cup_team(players);
+    team.tactics = Some(tactics);
+    let ctx = SelectionContext {
+        date,
+        match_importance: 0.9,
+        ..Default::default()
+    };
+    let result = SquadSelector::select_with_context(&team, &TestCoach::good_youth(), &[], &ctx);
+
+    assert_eq!(result.main_squad.len(), positions.len());
+    for (slot, expected_player) in positions.iter().zip(manager_slots) {
+        let actual = result
+            .main_squad
+            .iter()
+            .find(|player| player.tactical_position.current_position == *slot)
+            .expect("the formation slot should be filled");
+        assert_eq!(Some(actual.id), expected_player, "slot {slot:?}");
+    }
+}
+
+#[test]
 fn hard_competition_rules_exclude_pins_and_emergency_candidates() {
     let mut team = generate_test_team();
     let staff = generate_test_staff();
