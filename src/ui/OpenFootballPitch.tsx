@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Fixture, GameState } from '../game/types';
 import type { MatchSim } from '../game/engine/match';
-import type { MatchPitchSnapshot } from '../game/types';
+import type { MatchPitchSnapshot, MatchVisualAction } from '../game/types';
 import { formationLayout } from '../game/match-pitch';
+import { toOpenFootballRecordingEvents } from './openFootballRecording';
 
 const MATCH_DURATION_MS = 505_340;
 
 export interface OpenFootballBridge {
-  push(snapshots: readonly MatchPitchSnapshot[], goals: readonly { player_id: number; time: number; is_auto_goal: boolean }[]): void;
+  push(
+    snapshots: readonly MatchPitchSnapshot[],
+    goals: readonly { player_id: number; time: number; is_auto_goal: boolean }[],
+    actions: readonly MatchVisualAction[],
+  ): void;
   setPlaying(playing: boolean): void;
 }
 
@@ -76,7 +81,7 @@ export function OpenFootballPitch({
 
       let previousTime = 0;
       bridge = {
-        push(snapshots, goals) {
+        push(snapshots, goals, actions) {
           if (cancelled || snapshots.length === 0) return;
           const ball: number[][] = [];
           const players: Record<number, number[][]> = {};
@@ -92,7 +97,10 @@ export function OpenFootballPitch({
             }
             previousTime = time;
           }
-          if (ball.length) viewer.MatchViewer.pushRecording(JSON.stringify({ ball, players, goals, events: [], states: {} }));
+          const { events, states } = toOpenFootballRecordingEvents(actions, sim.totalMoments);
+          if (ball.length || events.length || Object.keys(states).length) {
+            viewer.MatchViewer.pushRecording(JSON.stringify({ ball, players, goals, events, states }));
+          }
         },
         setPlaying(value) { viewer.MatchViewer.setPlaying(value); },
       };

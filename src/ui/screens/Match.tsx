@@ -440,7 +440,7 @@ function LiveMatch({ id }: { id: number }) {
         return { player_id: event.p!, time: shot ? Math.round(shot.moment / Math.max(sim.totalMoments, 1) * 505_340) : Math.round(event.m / 90 * 505_340), is_auto_goal: false };
       });
       L.viewerEventsSeen = sim.events.length;
-      L.viewer.push(viewerSnapshots, goals);
+      L.viewer.push(viewerSnapshots, goals, viewerActions);
     }
     // store chancer og mål afspilles på 2D-banen (kampen venter imens)
     const seen = L.shotsSeen ?? 0;
