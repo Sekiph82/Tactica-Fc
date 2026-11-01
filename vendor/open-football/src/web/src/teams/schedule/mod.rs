@@ -52,6 +52,10 @@ pub struct TeamScheduleTemplate {
     pub managed_style_key: &'static str,
     pub managed_players: Vec<ManagerRosterOption>,
     pub live_opponent_name: String,
+    pub live_home_color: String,
+    pub live_home_text: String,
+    pub live_away_color: String,
+    pub live_away_text: String,
     pub managed_match_today: bool,
     pub managed_league_id: Option<u32>,
     pub managed_competition_ids: String,
@@ -103,6 +107,7 @@ pub struct TeamScheduleItem {
     pub time: String,
     pub opponent_slug: String,
     pub opponent_name: String,
+    pub opponent_team_id: u32,
     pub is_home: bool,
     pub competition_name: String,
     pub result: Option<TeamScheduleItemResult>,
@@ -182,6 +187,7 @@ pub async fn team_schedule_get_action(
                     time: fixture.time,
                     opponent_slug: fixture.opponent_slug,
                     opponent_name: fixture.opponent_name,
+                    opponent_team_id: played.rival_team_id,
                     is_home: fixture.is_home,
                     competition_name: fixture.competition_name,
                     result: Some(TeamScheduleItemResult {
@@ -234,6 +240,7 @@ pub async fn team_schedule_get_action(
                     time: fixture.date.format("%H:%M").to_string(),
                     opponent_slug: opponent.slug.clone(),
                     opponent_name: opponent.name.clone(),
+                    opponent_team_id: opponent_id,
                     is_home,
                     competition_name: competition.name.clone(),
                     result: None,
@@ -264,15 +271,15 @@ pub async fn team_schedule_get_action(
         let is_home = home_club_id == team.club_id;
         let opponent_club_id = if is_home { away_club_id } else { home_club_id };
 
-        let (opponent_name, opponent_slug) = simulator_data
+        let (opponent_name, opponent_slug, opponent_team_id) = simulator_data
             .club(opponent_club_id)
             .and_then(|club| {
                 club.teams
                     .main_team_id()
                     .and_then(|tid| simulator_data.team(tid))
-                    .map(|t| (t.name.clone(), t.slug.clone()))
+                    .map(|t| (t.name.clone(), t.slug.clone(), t.id))
             })
-            .unwrap_or_else(|| (i18n.t("unknown").to_string(), String::new()));
+            .unwrap_or_else(|| (i18n.t("unknown").to_string(), String::new(), 0));
 
         items.push((
             date.and_hms_opt(20, 0, 0).unwrap(),
@@ -282,6 +289,7 @@ pub async fn team_schedule_get_action(
                 time: "20:00".to_string(),
                 opponent_slug,
                 opponent_name,
+                opponent_team_id,
                 is_home,
                 competition_name: i18n.t(comp_key).to_string(),
                 result: None,
@@ -294,6 +302,26 @@ pub async fn team_schedule_get_action(
     let managed_match_today = items.iter().any(|(date, _, item)| {
         date.date() == simulator_data.date.date() && item.result.is_none()
     });
+    let live_fixture_today = items.iter()
+        .find(|(date, _, item)| date.date() == simulator_data.date.date() && item.result.is_none())
+        .map(|(_, _, item)| item);
+    let live_opponent_name = live_fixture_today
+        .map(|item| item.opponent_name.clone())
+        .unwrap_or_default();
+    let managed_club_colors = simulator_data.club(team.club_id).map(|club| {
+        (club.colors.background.clone(), club.colors.foreground.clone())
+    }).unwrap_or_else(|| ("#1b263b".to_string(), "#ffffff".to_string()));
+    let opponent_club_colors = live_fixture_today
+        .and_then(|item| simulator_data.team(item.opponent_team_id))
+        .and_then(|opponent| simulator_data.club(opponent.club_id))
+        .map(|club| (club.colors.background.clone(), club.colors.foreground.clone()))
+        .unwrap_or_else(|| ("#1b263b".to_string(), "#ffffff".to_string()));
+    let manager_is_home = live_fixture_today.is_some_and(|item| item.is_home);
+    let (live_home_color, live_home_text, live_away_color, live_away_text) = if manager_is_home {
+        (managed_club_colors.0, managed_club_colors.1, opponent_club_colors.0, opponent_club_colors.1)
+    } else {
+        (opponent_club_colors.0, opponent_club_colors.1, managed_club_colors.0, managed_club_colors.1)
+    };
     let seasons = SeasonStep::resolve(
         items.iter().map(|(_, season, _)| *season),
         query.season,
@@ -303,11 +331,6 @@ pub async fn team_schedule_get_action(
         items.retain(|(_, season, _)| season.opening_year == step.selected);
     }
     let items: Vec<TeamScheduleItem> = items.into_iter().map(|(_, _, item)| item).collect();
-    let live_opponent_name = items
-        .iter()
-        .find(|item| item.result.is_none())
-        .map(|item| item.opponent_name.clone())
-        .unwrap_or_default();
     let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
     let current_path = format!("/{}/teams/{}/schedule", route_params.lang, team.slug);
     let menu_params = views::MenuParams {
@@ -438,6 +461,10 @@ pub async fn team_schedule_get_action(
         managed_style_key,
         managed_players,
         live_opponent_name,
+        live_home_color,
+        live_home_text,
+        live_away_color,
+        live_away_text,
         managed_match_today,
         managed_league_id: team.league_id,
         managed_competition_ids: managed_competition_ids
