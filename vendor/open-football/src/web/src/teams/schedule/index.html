@@ -176,6 +176,14 @@
                 // Never let an older response rewind the playback-rate baseline.
                 if (sequence < viewerRateSampleSequence) return;
                 if (status !== 'playing') {
+                    // Do not include halftime or another stopped phase in the
+                    // wall-clock interval used after play resumes. Otherwise
+                    // the first resumed rate estimate is diluted by the entire
+                    // pause and the viewer can crawl for several updates.
+                    viewerRateSampleAt = now;
+                    viewerRateSampleElapsedMs = elapsed;
+                    viewerRateSampleSequence = sequence;
+                    viewerLastProgressAt = now;
                     setViewerPlaying(false);
                     return;
                 }
