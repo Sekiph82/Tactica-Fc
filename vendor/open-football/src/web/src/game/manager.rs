@@ -551,6 +551,7 @@ pub async fn set_training_action(
         "fitness" => Some(TrainingFocus::FitnessBuilding),
         "mental" => Some(TrainingFocus::MentalDevelopment),
         "free_kicks" => Some(TrainingFocus::SpecificSkill(SkillType::FreeKicks)),
+        "penalties" => Some(TrainingFocus::SpecificSkill(SkillType::Penalties)),
         "long_shots" => Some(TrainingFocus::SpecificSkill(SkillType::LongShots)),
         "heading" => Some(TrainingFocus::SpecificSkill(SkillType::Heading)),
         "tackling" => Some(TrainingFocus::SpecificSkill(SkillType::Tackling)),

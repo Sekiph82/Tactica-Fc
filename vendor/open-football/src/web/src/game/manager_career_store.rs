@@ -351,6 +351,7 @@ fn player_training_focus_from_key(key: &str) -> Option<core::TrainingFocus> {
         "fitness" => core::TrainingFocus::FitnessBuilding,
         "mental" => core::TrainingFocus::MentalDevelopment,
         "free_kicks" => core::TrainingFocus::SpecificSkill(core::SkillType::FreeKicks),
+        "penalties" => core::TrainingFocus::SpecificSkill(core::SkillType::Penalties),
         "long_shots" => core::TrainingFocus::SpecificSkill(core::SkillType::LongShots),
         "heading" => core::TrainingFocus::SpecificSkill(core::SkillType::Heading),
         "tackling" => core::TrainingFocus::SpecificSkill(core::SkillType::Tackling),
