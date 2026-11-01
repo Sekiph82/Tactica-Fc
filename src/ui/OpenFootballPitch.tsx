@@ -127,6 +127,10 @@ export function OpenFootballPitch({
           const ballSamples: { moment: number; point: [number, number] }[] = [];
           const playerSamples: { id: number; moment: number; point: [number, number] }[] = [];
           const movementStates: Record<number, [number, string][]> = {};
+          const orderedSnapshots = snapshots
+            .map((snapshot, index) => ({ snapshot, index }))
+            .sort((left, right) => left.snapshot.moment - right.snapshot.moment || left.index - right.index)
+            .map(({ snapshot }) => snapshot);
           for (const [index, action] of orderedActions.entries()) {
             const window = actionWindows[index];
             const startMoment = window.start + 0.001;
@@ -137,7 +141,7 @@ export function OpenFootballPitch({
               playerSamples.push({ id: action.target, moment: window.end, point: point(action.to) });
             }
           }
-          for (const snapshot of snapshots) {
+          for (const snapshot of orderedSnapshots) {
             const time = openFootballTimestamp(snapshot.moment, setup.totalMoments);
             if (time <= previousSnapshotTime) continue;
             const layout = formationLayout(snapshot);
