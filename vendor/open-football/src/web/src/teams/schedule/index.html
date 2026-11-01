@@ -77,20 +77,31 @@
                  data-cooldown-error="{{ i18n.t("mgr_camp_cooldown_error") }}"
                  data-window-error="{{ i18n.t("mgr_camp_window_error") }}"
                  data-funds-error="{{ i18n.t("mgr_camp_funds_error") }}"
-                 data-planning="{{ i18n.t("mgr_camp_planning") }}">
+                 data-planning="{{ i18n.t("mgr_camp_planning") }}"
+                 data-cancelling="{{ i18n.t("mgr_camp_cancelling") }}"
+                 data-cancel-failed="{{ i18n.t("mgr_camp_cancel_failed") }}"
+                 data-cost-home="{{ managed_camp_home_cost }}"
+                 data-cost-sun="{{ managed_camp_sun_cost }}"
+                 data-cost-alps="{{ managed_camp_alps_cost }}"
+                 data-effect-home="{{ i18n.t("mgr_camp_effect_home") }}"
+                 data-effect-sun="{{ i18n.t("mgr_camp_effect_sun") }}"
+                 data-effect-alps="{{ i18n.t("mgr_camp_effect_alps") }}">
             <strong>{{ i18n.t("mgr_training_camp") }}</strong>
             {% if managed_camp_status == "planned" || managed_camp_status == "running" %}
             <p style="margin:8px 0">{{ i18n.t("mgr_camp_active") }}: {{ i18n.t(managed_camp_destination) }} · {{ managed_camp_start_date }} · {{ i18n.t("mgr_camp_cost") }} {{ managed_camp_cost }} · {{ managed_camp_days_completed }}/7 {{ i18n.t("mgr_camp_progress") }} · {% if managed_camp_status == "planned" %}{{ i18n.t("mgr_camp_planned") }}{% else %}{{ i18n.t("mgr_camp_running") }}{% endif %}</p>
+            {% if managed_camp_status == "planned" %}<button type="button" class="fm-button" id="fm-camp-cancel">{{ i18n.t("mgr_camp_cancel") }}</button><span id="fm-camp-status" role="status" aria-live="polite"></span>{% endif %}
             {% else %}
             {% if managed_camp_status == "completed" %}<p style="margin:8px 0">{{ i18n.t("mgr_camp_completed") }}: {{ i18n.t(managed_camp_destination) }} · {{ managed_camp_start_date }}</p>{% endif %}
             {% if managed_camp_status == "cancelled" %}<p style="margin:8px 0">{{ i18n.t("mgr_camp_cancelled") }}</p>{% endif %}
+            {% if managed_camp_status == "cancelled_by_manager" %}<p style="margin:8px 0">{{ i18n.t("mgr_camp_cancelled_by_manager") }}</p>{% endif %}
             <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px">
                 <label>{{ i18n.t("mgr_camp_destination") }}
                     <select id="fm-camp-destination"><option value="home">{{ i18n.t("mgr_camp_home") }}</option><option value="sun">{{ i18n.t("mgr_camp_sun") }}</option><option value="alps">{{ i18n.t("mgr_camp_alps") }}</option></select>
-                </label>
+                </label><span>{{ i18n.t("mgr_camp_cost") }}: <strong id="fm-camp-cost-preview">{{ managed_camp_home_cost }}</strong></span>
                 <button type="button" class="fm-button" id="fm-camp-plan">{{ i18n.t("mgr_camp_plan") }}</button>
                 <span id="fm-camp-status" role="status" aria-live="polite"></span>
             </div>
+            <p id="fm-camp-effect-preview" style="margin:8px 0">{{ i18n.t("mgr_camp_effect_home") }}</p>
             <small>{{ i18n.t("mgr_camp_plan_help") }}</small>
             {% endif %}
         </section>
@@ -160,6 +171,37 @@
             var viewerPlaybackSpeed = 25.0;
 
             var campPlanButton = document.getElementById('fm-camp-plan');
+            var campDestinationSelect = document.getElementById('fm-camp-destination');
+            if (campDestinationSelect) {
+                var updateCampPreview = function() {
+                    var panel = document.getElementById('fm-training-camp');
+                    var destination = campDestinationSelect.value;
+                    document.getElementById('fm-camp-cost-preview').textContent = panel.dataset['cost' + destination.charAt(0).toUpperCase() + destination.slice(1)];
+                    document.getElementById('fm-camp-effect-preview').textContent = panel.dataset['effect' + destination.charAt(0).toUpperCase() + destination.slice(1)];
+                };
+                campDestinationSelect.addEventListener('change', updateCampPreview);
+                updateCampPreview();
+            }
+
+            var campCancelButton = document.getElementById('fm-camp-cancel');
+            if (campCancelButton) {
+                campCancelButton.addEventListener('click', async function() {
+                    var panel = document.getElementById('fm-training-camp');
+                    var campStatus = document.getElementById('fm-camp-status');
+                    campCancelButton.disabled = true;
+                    campStatus.textContent = panel.dataset.cancelling;
+                    try {
+                        var response = await fetch('/api/manager/training-camp/cancel', { method: 'POST' });
+                        if (response.ok) { window.location.reload(); return; }
+                        campStatus.textContent = panel.dataset.cancelFailed;
+                        campCancelButton.disabled = false;
+                    } catch (error) {
+                        campStatus.textContent = panel.dataset.cancelFailed;
+                        campCancelButton.disabled = false;
+                    }
+                });
+            }
+
             if (campPlanButton) {
                 campPlanButton.addEventListener('click', async function() {
                     var panel = document.getElementById('fm-training-camp');

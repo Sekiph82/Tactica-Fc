@@ -8,6 +8,7 @@ use crate::game::{
     manager_toggle_follow_league_action, set_lineup_action, set_tactics_action, set_team_training_focus_action,
     manager_praise_training_player_action,
     manager_plan_training_camp_action,
+    manager_cancel_training_camp_action,
     set_training_action,
     toggle_match_selection_action, toggle_transfer_list_action,
     update_transfer_negotiation_action,
@@ -28,6 +29,7 @@ pub fn game_routes() -> Router<GameAppData> {
         .route("/api/manager/training-focus", post(set_team_training_focus_action))
         .route("/api/manager/training/{report_date}/praise", post(manager_praise_training_player_action))
         .route("/api/manager/training-camp", post(manager_plan_training_camp_action))
+        .route("/api/manager/training-camp/cancel", post(manager_cancel_training_camp_action))
         .route("/api/manager/match-selection/{player_id}", post(toggle_match_selection_action))
         .route("/api/manager/transfer-offer", post(make_transfer_offer_action))
         .route(

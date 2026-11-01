@@ -98,7 +98,7 @@ pub struct TrainingCampRequest {
     pub destination: String,
 }
 
-fn training_camp_cost(sim: &SimulatorData, team_id: u32, destination: &str) -> Option<i64> {
+pub(crate) fn manager_training_camp_cost(sim: &SimulatorData, team_id: u32, destination: &str) -> Option<i64> {
     let team = sim.team(team_id)?;
     if team.team_type != core::TeamType::Main { return None; }
     let club = sim.club(team.club_id)?;
@@ -172,7 +172,7 @@ pub async fn manager_plan_training_camp_action(
         }
     }
     let Some(start_date) = next_training_camp_window(sim, team_id) else { return StatusCode::UNPROCESSABLE_ENTITY; };
-    let Some(cost) = training_camp_cost(sim, team_id, &body.destination) else { return StatusCode::BAD_REQUEST; };
+    let Some(cost) = manager_training_camp_cost(sim, team_id, &body.destination) else { return StatusCode::BAD_REQUEST; };
     if club.finance.balance.balance < cost { return StatusCode::PAYMENT_REQUIRED; }
     if let Err(error) = state.manager_career_store.update_snapshot(team_id, |snapshot| {
         snapshot.training_camp = Some(super::ManagerTrainingCamp {
@@ -187,6 +187,21 @@ pub async fn manager_plan_training_camp_action(
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
     StatusCode::ACCEPTED
+}
+
+pub async fn manager_cancel_training_camp_action(State(state): State<GameAppData>) -> StatusCode {
+    let Some(team_id) = managed_team_id(&state).await else { return StatusCode::FORBIDDEN; };
+    let mut cancelled = false;
+    if let Err(error) = state.manager_career_store.update_snapshot(team_id, |snapshot| {
+        if let Some(camp) = snapshot.training_camp.as_mut().filter(|camp| camp.status == "planned") {
+            camp.status = "cancelled_by_manager".to_string();
+            cancelled = true;
+        }
+    }) {
+        log::error!("failed to cancel manager training camp: {error}");
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+    if cancelled { StatusCode::NO_CONTENT } else { StatusCode::CONFLICT }
 }
 
 #[derive(Deserialize)]

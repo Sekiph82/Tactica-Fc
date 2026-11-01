@@ -2,7 +2,7 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION, MATCH_VIEWER_VERSION};
 use crate::common::played_fixture::PlayedFixture;
-use crate::game::ManagerMatchReport;
+use crate::game::{manager_training_camp_cost, ManagerMatchReport};
 use crate::common::season_step::SeasonStep;
 use crate::leagues::address::LeagueAddress;
 use crate::teams::newspaper::NewspaperCounter;
@@ -60,6 +60,9 @@ pub struct TeamScheduleTemplate {
     pub managed_camp_start_date: String,
     pub managed_camp_days_completed: u8,
     pub managed_camp_cost: String,
+    pub managed_camp_home_cost: String,
+    pub managed_camp_sun_cost: String,
+    pub managed_camp_alps_cost: String,
     pub active_tab: &'static str,
     pub show_finances_tab: bool,
     pub show_academy_tab: bool,
@@ -353,6 +356,12 @@ pub async fn team_schedule_get_action(
     let managed_camp_start_date = managed_camp.map_or_else(String::new, |camp| camp.start_date.clone());
     let managed_camp_days_completed = managed_camp.map_or(0, |camp| camp.days_completed);
     let managed_camp_cost = managed_camp.map_or_else(String::new, |camp| format!("${}", camp.cost));
+    let managed_camp_home_cost = manager_training_camp_cost(simulator_data, team.id, "home")
+        .map_or_else(String::new, |cost| format!("${cost}"));
+    let managed_camp_sun_cost = manager_training_camp_cost(simulator_data, team.id, "sun")
+        .map_or_else(String::new, |cost| format!("${cost}"));
+    let managed_camp_alps_cost = manager_training_camp_cost(simulator_data, team.id, "alps")
+        .map_or_else(String::new, |cost| format!("${cost}"));
     let unread_newspaper_count = if let Some(snapshot) = manager_snapshot.as_ref() {
         let latest_issue = team.newsroom.latest().map(|issue| issue.number).unwrap_or(0);
         let last_read_issue = snapshot.last_read_newspaper_issue;
@@ -441,6 +450,9 @@ pub async fn team_schedule_get_action(
         managed_camp_start_date,
         managed_camp_days_completed,
         managed_camp_cost,
+        managed_camp_home_cost,
+        managed_camp_sun_cost,
+        managed_camp_alps_cost,
         active_tab: "schedule",
         show_finances_tab: team.team_type.is_own_team(),
         show_academy_tab: team.team_type == core::TeamType::Main
