@@ -117,6 +117,10 @@ pub struct ViewerConfig {
     /// the device that is failing.
     #[serde(default)]
     pub device: Option<String>,
+    /// Renderer selected by the host after checking browser GPU support.
+    /// WebGPU is preferred on capable browsers; WebGL2 remains the fallback.
+    #[serde(default)]
+    pub renderer: Option<String>,
     /// **How much crowd to build**: `"off"`, `"handheld"` or `"full"`. Absent
     /// means the footprint decides — see
     /// [`Throng::of`](crate::scene::crowd::Throng::of).

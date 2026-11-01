@@ -72,6 +72,10 @@ use bevy::input::InputSystems;
 use bevy::light::{DirectionalLightShadowMap, PointLightShadowMap};
 use bevy::log::{Level, LogPlugin};
 use bevy::prelude::*;
+use bevy::render::{
+    RenderPlugin,
+    settings::{Backends, WgpuSettings, WgpuSettingsPriority},
+};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -126,6 +130,7 @@ impl MatchViewer {
         let start_time_ms = config.start_time_ms;
         let debug = config.debug;
         let instrumented = config.instrumented();
+        let requested_renderer = config.renderer.as_deref();
 
         // The orbit drag needs the right and wheel buttons, and the browser
         // answers those with a context menu and autoscroll. Winit would
@@ -177,6 +182,18 @@ impl MatchViewer {
             bevy::winit::WinitSettings::default()
         };
 
+        let mut wgpu_settings = WgpuSettings::default();
+        #[cfg(target_arch = "wasm32")]
+        {
+            if requested_renderer == Some("webgpu") {
+                wgpu_settings.backends = Some(Backends::BROWSER_WEBGPU);
+                wgpu_settings.priority = WgpuSettingsPriority::WebGPU;
+            } else {
+                wgpu_settings.backends = Some(Backends::GL);
+                wgpu_settings.priority = WgpuSettingsPriority::WebGL2;
+            }
+        }
+
         App::new()
             .insert_resource(pace)
             .add_plugins(
@@ -202,6 +219,10 @@ impl MatchViewer {
                     })
                     .set(LogPlugin {
                         level: Level::WARN,
+                        ..default()
+                    })
+                    .set(RenderPlugin {
+                        render_creation: wgpu_settings.into(),
                         ..default()
                     }),
             )

@@ -71,6 +71,8 @@ export function OpenFootballPitch({
 
       const initial = makeInitialRecording(setup.initialSnapshot);
       const config = makeConfig(initial, setup, `#tactica-of-${id}`);
+      config.renderer = await preferredRenderer();
+      if (cancelled || !canvas.current) return;
       viewer.MatchViewer.start(JSON.stringify(config));
       viewer.MatchViewer.setHostTime(0);
 
@@ -203,9 +205,20 @@ function makeInitialRecording(snapshot: MatchPitchSnapshot) {
   return { ball: [[0, x, y, 0]], players, events: [], states: {} };
 }
 
+async function preferredRenderer(): Promise<'webgpu' | 'webgl2'> {
+  const gpu = (navigator as Navigator & { gpu?: { requestAdapter: () => Promise<unknown | null> } }).gpu;
+  if (!gpu) return 'webgl2';
+  try {
+    return (await gpu.requestAdapter()) ? 'webgpu' : 'webgl2';
+  } catch {
+    return 'webgl2';
+  }
+}
+
 function makeConfig(initial: ReturnType<typeof makeInitialRecording>, setup: OpenFootballSetup, selector: string) {
   return {
     canvas: selector,
+    renderer: 'webgl2' as 'webgpu' | 'webgl2',
     api_base: '',
     inline_recording: JSON.stringify(initial),
     embedded: true,

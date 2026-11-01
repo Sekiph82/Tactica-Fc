@@ -75,6 +75,7 @@ bevy = { version = "0.20.1", default-features = false, features = [
     # is what makes a TAP on the transport bar register at all.
     "touch",
     "webgl2",
+    "webgpu",
     "zstd_rust",
 ] }
 # The rasteriser behind Bevy's own text, taken as a direct dependency so the
