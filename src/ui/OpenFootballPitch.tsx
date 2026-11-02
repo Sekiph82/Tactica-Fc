@@ -31,6 +31,12 @@ type ViewerModule = {
   };
 };
 
+export interface OpenFootballProgress {
+  phase: 'starting' | 'building' | 'recording' | 'squad' | 'ready';
+  done: number;
+  total: number;
+}
+
 function point([x, y]: [number, number]): [number, number] {
   return [Math.max(0, Math.min(840, x * 8.4)), Math.max(0, Math.min(545, y * 5.45))];
 }
@@ -42,6 +48,7 @@ export function OpenFootballPitch({
   speed,
   onBridge,
   onReady,
+  onProgress,
   onFailure,
 }: {
   id: number;
@@ -50,6 +57,7 @@ export function OpenFootballPitch({
   speed: number;
   onBridge: (bridge: OpenFootballBridge | null) => void;
   onReady: (ready: boolean) => void;
+  onProgress: (progress: OpenFootballProgress) => void;
   onFailure: () => void;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -66,7 +74,13 @@ export function OpenFootballPitch({
     let bridge: OpenFootballBridge | null = null;
     const attitudeTimeline = new OpenFootballStateTimeline();
     const progress = (event: Event) => {
-      if ((event as CustomEvent<{ phase?: string }>).detail?.phase !== 'ready' || cancelled || ready) return;
+      if (cancelled) return;
+      const detail = (event as CustomEvent<Partial<OpenFootballProgress>>).detail;
+      const phase = detail?.phase;
+      if (phase === 'starting' || phase === 'building' || phase === 'recording' || phase === 'squad' || phase === 'ready') {
+        onProgress({ phase, done: Number(detail.done) || 0, total: Number(detail.total) || 0 });
+      }
+      if (phase !== 'ready' || ready) return;
       ready = true;
       if (readyTimeout !== undefined) window.clearTimeout(readyTimeout);
       setReady(true);
@@ -229,7 +243,7 @@ export function OpenFootballPitch({
     };
     // This is a match-scoped WASM app. The prepared presentation setup is stable for its lifetime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, setup]);
+  }, [id, setup, onProgress]);
 
   useEffect(() => { bridgeRef.current?.setPlaying(playing); }, [playing]);
   useEffect(() => { bridgeRef.current?.setSpeed(speed); }, [speed]);

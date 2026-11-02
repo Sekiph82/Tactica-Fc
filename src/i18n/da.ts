@@ -1271,6 +1271,7 @@ export const da: Record<string, string> = {
   'match.played': 'Kampen er spillet', 'match.preview': 'Optakt', 'match.yourXI': 'Din startopstilling', 'match.quick': 'Simulér resultat',
   'match.kickoff': 'Kick-off ▶', 'match.notToday': 'Kampen spilles ikke i dag.', 'match.ft': 'Slut', 'match.resume': 'Fortsæt', 'match.pause': 'Pause',
   'match.viewerLoading': 'Kampvisningen indlæses…', 'match.viewerKickoffWait': 'Kampen fløjtes først i gang, når visningen er klar.', 'match.viewerFailed': 'Kampvisningen er ikke klar endnu.', 'match.viewerRetryHint': 'Kampuret er ikke gået. Hvis visningen bliver klar lidt senere, fortsætter kampen her; ellers gå tilbage til optakten.', 'match.viewerRetry': 'Tilbage til optakten',
+  'match.viewer.phase.starting': 'Starter kampmotoren…', 'match.viewer.phase.building': 'Forbereder bane og tribuner…', 'match.viewer.phase.recording': 'Indlæser kampdata…', 'match.viewer.phase.squad': 'Forbereder spillerne…', 'match.viewer.phase.ready': 'Visningen er klar', 'match.viewerBuildProgress': 'Banen klargøres {done}/{total}',
   'match.toEnd': 'Spring til slut', 'match.continue': 'Fortsæt ›', 'match.commentary': 'Kommentar', 'match.stats': 'Statistik', 'match.myTeam': 'Mit hold',
   'match.camera.focus': 'Følg bolden', 'match.camera.full': 'Hele banen',
   'match.subsLeft': '{n} udsk. tilbage', 'match.vidiprinter': 'Andre kampe', 'match.noOther': 'Ingen andre kampe i dag', 'match.rating': 'Karakter',

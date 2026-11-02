@@ -24,7 +24,7 @@ import { stageLabel } from './Fixtures';
 import { useHotkeys } from '../hotkeys';
 import { TeamTalk } from '../teamtalk';
 import { talkDone } from '../../game/teamtalk';
-import { OpenFootballPitch, type OpenFootballBridge } from '../OpenFootballPitch';
+import { OpenFootballPitch, type OpenFootballBridge, type OpenFootballProgress } from '../OpenFootballPitch';
 import { makeOpenFootballSetup, type OpenFootballSetup } from '../openFootballSetup';
 import { openFootballPlaybackSpeed } from '../openFootballSpeed';
 import { OPEN_FOOTBALL_MATCH_DURATION_MS, OPEN_FOOTBALL_MAX_MATCH_DURATION_MS, openFootballMinuteTimestamp, openFootballShootoutDuration, openFootballTimestamp } from '../openFootballTimeline';
@@ -446,6 +446,7 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
   const [report, setReport] = useState<MatchReport | null>(() => L.finishPresentationReady ? sim.report() : null);
   const [viewerBridge, setViewerBridge] = useState<OpenFootballBridge | null>(null);
   const [viewerReady, setViewerReady] = useState(false);
+  const [viewerProgress, setViewerProgress] = useState<OpenFootballProgress | null>(null);
   const [viewerPrimed, setViewerPrimed] = useState(() => !!L.viewerPrimed);
   const [viewerFailed, setViewerFailed] = useState(false);
   const [visualFrame, setVisualFrame] = useState<MatchVisualFrame | undefined>(() => L.visualQueue.shift());
@@ -912,12 +913,13 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
       <div className="match2d">
           <div className="match-stage">
             <OpenFootballPitch id={id} setup={L.viewerSetup} speed={openFootballPlaybackSpeed(speed, h2h ? { halfMinutes: g.options.h2hHalfMinutes ?? 3, homeSpeed: hs.homeSpeed, awaySpeed: hs.awaySpeed } : undefined)} playing={!paused && !report && viewerReady && !viewerFailed && (h2h || viewerPrimed) && (!h2h || hs.phase === 'play')}
-              onBridge={(bridge) => { L.viewer = bridge ?? undefined; setViewerBridge(bridge); }} onReady={(ready) => { setViewerReady(ready); if (ready) setViewerFailed(false); }}
+              onBridge={(bridge) => { L.viewer = bridge ?? undefined; setViewerBridge(bridge); }} onReady={(ready) => { setViewerReady(ready); if (ready) setViewerFailed(false); }} onProgress={setViewerProgress}
               onFailure={() => { L.viewer = undefined; setViewerBridge(null); setViewerReady(false); setViewerFailed(true); }} />
             {!viewerReady && <div className="match-viewer-status" role="status" aria-live="polite">
               <div className="match-viewer-status-card">
-                <strong>{viewerFailed ? t('match.viewerFailed') : t('match.viewerLoading')}</strong>
-                <span>{viewerFailed ? t('match.viewerRetryHint') : t('match.viewerKickoffWait')}</span>
+                <strong>{viewerFailed ? t('match.viewerFailed') : t(viewerProgress ? `match.viewer.phase.${viewerProgress.phase}` : 'match.viewerLoading')}</strong>
+                <span>{viewerFailed ? t('match.viewerRetryHint') : viewerProgress?.phase === 'building' ? t('match.viewerBuildProgress', { done: viewerProgress.done, total: viewerProgress.total }) : t('match.viewerKickoffWait')}</span>
+                {!viewerFailed && viewerProgress?.phase === 'building' && <div className="viewer-progress" aria-label={t('match.viewerBuildProgress', { done: viewerProgress.done, total: viewerProgress.total })}><i style={{ width: `${viewerProgress.total ? Math.min(100, (viewerProgress.done / viewerProgress.total) * 100) : 0}%` }} /></div>}
                 {viewerFailed && <button className="primary" onClick={onViewerRetry}>{t('match.viewerRetry')}</button>}
               </div>
             </div>}

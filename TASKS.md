@@ -193,7 +193,7 @@ TACTICA FC; CM0102/CM2010 tarzında kariyer, kulüp yönetimi, haberler, antrenm
 - [x] M05-S01-T01 Open Football viewer'ı React maç ekranına göm; tam upstream uygulama navigasyonunu TACTICA'ya alma.
 - [x] M05-S01-T02 Fixture, takım rengi, forma numarası, oyuncu, ilk 11 ve bench verisini viewer DTO'suna aktar.
 - [x] M05-S01-T03 TACTICA position/ball/event/goal/time kayıtlarını viewer recording formatına bağla.
-- [x] M05-S01-T04 Viewer hazır olana kadar kick-off saatini tut; görünür loading/error/retry state'i sağla.
+- [x] M05-S01-T04 Viewer hazır olana kadar kick-off saatini tut; Open Football bring-up aşamalarını ve saha kurulum ilerlemesini göster; hata/retry state'i sağla.
 - [x] M05-S01-T05 1x/2x/4x/8x speed, 90 dakika, uzatma ve shootout zaman çizgisini eşle.
 - [x] M05-S01-T06 Stale/overlap batch'i reddet; host time monotonic ve accepted frame'e göre ilerlesin.
 - [x] M05-S01-T07 Gecikmiş poll'daki tüm frame'leri sequence cursor ile toparla; track history ve allocation'ı sınırla.
