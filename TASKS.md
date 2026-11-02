@@ -199,6 +199,7 @@ TACTICA FC; CM0102/CM2010 tarzında kariyer, kulüp yönetimi, haberler, antrenm
 - [x] M05-S01-T07 Gecikmiş poll'daki tüm frame'leri sequence cursor ile toparla; track history ve allocation'ı sınırla.
 - [x] M05-S01-T08 Son viewer frame'i ve full-time raporu tam aynı timestamp'te sırala.
 - [x] M05-S01-T09 Viewer Bevy süreci başladıktan sonraki timeout/retry için güvenli yaşam döngüsü kur; eski viewer durdurulmadan yenisini açma, aynı maç state'ini koru ve ikinci eşzamanlı app açma. **Kanıt:** Viewer WASM'a session-scoped `stop/isRunning` API'si ve tek aktif event-loop kilidi eklendi; React unmount sonrası eski session kapanana kadar yenisini bekliyor, 20 saniye aşılırsa ikinci viewer açmak yerine hata veriyor. Viewer kaynak kodu release WASM'a derlendi ve TACTICA public JS/WASM + gzip çıktıları yeniden üretildi; `npx tsc --noEmit` başarılı. Canlı tarayıcı retry ve tam maç kabulü M05-S03 altında açık.
+- [x] M05-S01-T10 Maç ekranındaki React dışı yardımcı export'larını ayrı modüle taşı; Vite Fast Refresh bunları uyumsuz export sayıp aktif maç ekranını geçersiz kılmasın. **Kanıt:** `statColors` ve renk yardımcıları `matchColors.ts` modülüne taşındı; `Match.tsx` yalnızca React ekran bileşenlerini export ediyor; `npx tsc --noEmit` başarılı. Gerçek tarayıcıda HMR ve maç açılış kabulü M05-S03-T07 altında açık.
 
 ## Sprint M05-S02 — Eylem ve hareket
 

@@ -9,7 +9,8 @@ import { ClubLink, Crest, Panel, PlayerLink, Rating, Tabs } from '../components'
 import { useGame, useRouteState } from '../core';
 import { commentaryText } from '../commentary';
 import { Head } from './common';
-import { StatsPanel, statColors } from './Match';
+import { StatsPanel } from './Match';
+import { statColors } from './matchColors';
 import { WEATHER_ICON, type Weather } from '../../game/weather';
 import { TeamTalk } from '../teamtalk';
 
