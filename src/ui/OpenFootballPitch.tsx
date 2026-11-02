@@ -6,6 +6,9 @@ import type { OpenFootballSetup } from './openFootballSetup';
 import { OPEN_FOOTBALL_MATCH_DURATION_MS, openFootballTimestamp } from './openFootballTimeline';
 
 const VIEWER_READY_TIMEOUT_MS = 60_000;
+const VIEWER_STOP_TIMEOUT_MS = 20_000;
+let nextViewerSessionId = 1;
+let pendingViewerStop: { viewer: ViewerModule; sessionId: number } | null = null;
 
 export interface OpenFootballBridge {
   push(
@@ -22,7 +25,9 @@ export interface OpenFootballBridge {
 type ViewerModule = {
   default: (input: URL) => Promise<unknown>;
   MatchViewer: {
-    start: (config: string) => void;
+    start: (config: string) => boolean;
+    stop: (sessionId: number) => void;
+    isRunning: (sessionId: number) => boolean;
     pushRecording: (recording: string) => void;
     setPlaying: (playing: boolean) => void;
     setSpeed: (speed: number) => void;
@@ -30,6 +35,19 @@ type ViewerModule = {
     setHostTime: (timeMs: number) => void;
   };
 };
+
+async function waitForPreviousViewerStop() {
+  const pending = pendingViewerStop;
+  if (!pending) return;
+  const deadline = Date.now() + VIEWER_STOP_TIMEOUT_MS;
+  while (pending.viewer.MatchViewer.isRunning(pending.sessionId)) {
+    if (Date.now() >= deadline) {
+      throw new Error('The previous match viewer did not stop; refusing to open a second viewer.');
+    }
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+  }
+  if (pendingViewerStop === pending) pendingViewerStop = null;
+}
 
 export interface OpenFootballProgress {
   phase: 'starting' | 'building' | 'recording' | 'squad' | 'ready';
@@ -70,6 +88,8 @@ export function OpenFootballPitch({
     let failureReported = false;
     let timedOut = false;
     let viewerStarted = false;
+    let viewer: ViewerModule | null = null;
+    let sessionId: number | undefined;
     let readyTimeout: number | undefined;
     let bridge: OpenFootballBridge | null = null;
     const attitudeTimeline = new OpenFootballStateTimeline();
@@ -102,19 +122,23 @@ export function OpenFootballPitch({
       fail(new Error(`Viewer startup exceeded ${VIEWER_READY_TIMEOUT_MS} ms`));
     }, VIEWER_READY_TIMEOUT_MS);
     const start = async () => {
+      await waitForPreviousViewerStop();
+      if (cancelled) return;
       const base = `${import.meta.env.BASE_URL}open-football-viewer/`;
-      const viewer = await import(/* @vite-ignore */ `${base}match_viewer.js`) as ViewerModule;
+      const loadedViewer = await import(/* @vite-ignore */ `${base}match_viewer.js`) as ViewerModule;
+      viewer = loadedViewer;
       const wasmUrl = new URL(`${base}match_viewer_bg.wasm`, document.baseURI);
-      await viewer.default(wasmUrl);
+      await loadedViewer.default(wasmUrl);
       if (cancelled || timedOut || !canvas.current) return;
 
       const initial = makeInitialRecording(setup.initialSnapshot);
-      const config = makeConfig(initial, setup, `#tactica-of-${id}`);
+      sessionId = nextViewerSessionId++;
+      const config = makeConfig(initial, setup, `#tactica-of-${id}`, sessionId);
       config.renderer = await preferredRenderer();
       if (cancelled || timedOut || !canvas.current) return;
-      viewerStarted = true;
-      viewer.MatchViewer.start(JSON.stringify(config));
-      viewer.MatchViewer.setHostTime(0);
+      viewerStarted = loadedViewer.MatchViewer.start(JSON.stringify(config));
+      if (!viewerStarted) throw new Error('The match viewer refused to start because another viewer is still active.');
+      loadedViewer.MatchViewer.setHostTime(0);
 
       let previousSnapshotTime = 0;
       let previousHostTime = 0;
@@ -211,19 +235,19 @@ export function OpenFootballPitch({
           }
           const liveStates = attitudeTimeline.apply(states);
           if (ball.length || Object.keys(players).length || goals.length || events.length || Object.keys(liveStates).length) {
-            viewer.MatchViewer.pushRecording(JSON.stringify({ ball, players, goals, events, states: liveStates }));
+            loadedViewer.MatchViewer.pushRecording(JSON.stringify({ ball, players, goals, events, states: liveStates }));
             // Use the newest accepted snapshot, not the raw batch tail. Delayed
             // or reordered polls must never move the viewer's playback ceiling back.
             if (previousSnapshotTime > previousHostTime) {
-              viewer.MatchViewer.setHostTime(previousSnapshotTime);
+              loadedViewer.MatchViewer.setHostTime(previousSnapshotTime);
               previousHostTime = previousSnapshotTime;
             }
           }
         },
-        setPlaying(value) { viewer.MatchViewer.setPlaying(value); },
-        setSpeed(value) { viewer.MatchViewer.setSpeed(value); },
-        setDuration(value) { viewer.MatchViewer.setDuration(value); },
-        setHostTime(value) { viewer.MatchViewer.setHostTime(value); },
+        setPlaying(value) { loadedViewer.MatchViewer.setPlaying(value); },
+        setSpeed(value) { loadedViewer.MatchViewer.setSpeed(value); },
+        setDuration(value) { loadedViewer.MatchViewer.setDuration(value); },
+        setHostTime(value) { loadedViewer.MatchViewer.setHostTime(value); },
       };
       bridgeRef.current = bridge;
       bridge.setSpeed(speed);
@@ -235,6 +259,10 @@ export function OpenFootballPitch({
       cancelled = true;
       if (readyTimeout !== undefined) window.clearTimeout(readyTimeout);
       bridge?.setPlaying(false);
+      if (viewerStarted && viewer && sessionId !== undefined) {
+        viewer.MatchViewer.stop(sessionId);
+        pendingViewerStop = { viewer, sessionId };
+      }
       bridgeRef.current = null;
       document.removeEventListener('match-viewer-progress', progress);
       setReady(false);
@@ -272,8 +300,9 @@ async function preferredRenderer(): Promise<'webgpu' | 'webgl2'> {
   }
 }
 
-function makeConfig(initial: ReturnType<typeof makeInitialRecording>, setup: OpenFootballSetup, selector: string) {
+function makeConfig(initial: ReturnType<typeof makeInitialRecording>, setup: OpenFootballSetup, selector: string, sessionId: number) {
   return {
+    session_id: sessionId,
     canvas: selector,
     renderer: 'webgl2' as 'webgpu' | 'webgl2',
     api_base: '',

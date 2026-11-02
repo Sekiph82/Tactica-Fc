@@ -6,6 +6,10 @@ use serde::Deserialize;
 /// colours. Handed over as a JSON document when the page starts the viewer.
 #[derive(Resource, Deserialize)]
 pub struct ViewerConfig {
+    /// Host-owned identity for the one browser event loop this config starts.
+    /// Older standalone viewer configs omit it and use zero.
+    #[serde(default)]
+    pub session_id: u32,
     /// CSS selector of the canvas element to render into.
     pub canvas: String,
     /// Prefix shared by the recording endpoints, e.g. `/api/match/1234`.
@@ -464,6 +468,7 @@ impl ViewerConfig {
     /// viewer that only ever read the team sheets are checked against.
     pub fn of_players(players: Vec<PlayerInfo>) -> ViewerConfig {
         ViewerConfig {
+            session_id: 0,
             canvas: String::new(),
             api_base: String::new(),
             inline_recording: None,

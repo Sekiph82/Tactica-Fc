@@ -72,13 +72,77 @@ use bevy::input::InputSystems;
 use bevy::light::{DirectionalLightShadowMap, PointLightShadowMap};
 use bevy::log::{Level, LogPlugin};
 use bevy::prelude::*;
+use std::cell::Cell;
 use wasm_bindgen::prelude::*;
+
+thread_local! {
+    /// Only one Bevy browser event loop may own the viewer canvas at a time.
+    static ACTIVE_VIEWER_SESSION: Cell<Option<u32>> = const { Cell::new(None) };
+    static STOP_REQUESTED_SESSION: Cell<Option<u32>> = const { Cell::new(None) };
+}
+
+fn process_viewer_lifecycle(
+    config: Res<ViewerConfig>,
+    mut exits: MessageReader<AppExit>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    let session_id = config.session_id;
+    if exits.read().next().is_some() {
+        ACTIVE_VIEWER_SESSION.with(|active| {
+            if active.get() == Some(session_id) {
+                active.set(None);
+            }
+        });
+        STOP_REQUESTED_SESSION.with(|requested| {
+            if requested.get() == Some(session_id) {
+                requested.set(None);
+            }
+        });
+        return;
+    }
+
+    let should_stop = STOP_REQUESTED_SESSION.with(|requested| {
+        if requested.get() == Some(session_id) {
+            requested.set(None);
+            true
+        } else {
+            false
+        }
+    });
+    if should_stop {
+        exit.write(AppExit::Success);
+        // Winit processes AppExit at the end of this same browser event-loop
+        // callback. A JS poll can observe this only after that callback exits.
+        ACTIVE_VIEWER_SESSION.with(|active| {
+            if active.get() == Some(session_id) {
+                active.set(None);
+            }
+        });
+    }
+}
 
 #[wasm_bindgen]
 pub struct MatchViewer;
 
 #[wasm_bindgen]
 impl MatchViewer {
+    /// Whether this exact browser event loop still owns the viewer canvas.
+    #[wasm_bindgen(js_name = isRunning)]
+    pub fn is_running(session_id: u32) -> bool {
+        ACTIVE_VIEWER_SESSION.with(|active| active.get() == Some(session_id))
+    }
+
+    /// Ask the event loop for this session to exit. The host can poll
+    /// [`Self::is_running`] before it mounts another viewer on the canvas.
+    #[wasm_bindgen(js_name = stop)]
+    pub fn stop(session_id: u32) {
+        ACTIVE_VIEWER_SESSION.with(|active| {
+            if active.get() == Some(session_id) {
+                STOP_REQUESTED_SESSION.with(|requested| requested.set(Some(session_id)));
+            }
+        });
+    }
+
     /// Append timestamped positions produced by TACTICA's authoritative match
     /// simulation. The renderer remains Open Football's; only the source of
     /// the recording changes.
@@ -101,7 +165,7 @@ impl MatchViewer {
     /// [`ViewerConfig`]; the app takes over the canvas it names and runs until
     /// the page goes away.
     #[wasm_bindgen(js_name = start)]
-    pub fn start(config: String) {
+    pub fn start(config: String) -> bool {
         console_error_panic_hook::set_once();
 
         let config: ViewerConfig = match serde_json::from_str(&config) {
@@ -110,9 +174,25 @@ impl MatchViewer {
                 web_sys::console::error_1(&JsValue::from_str(&format!(
                     "match viewer: unusable config — {error}"
                 )));
-                return;
+                return false;
             }
         };
+
+        let session_id = config.session_id;
+        let claimed = ACTIVE_VIEWER_SESSION.with(|active| {
+            if active.get().is_some() {
+                false
+            } else {
+                active.set(Some(session_id));
+                true
+            }
+        });
+        if !claimed {
+            web_sys::console::error_1(&JsValue::from_str(
+                "match viewer: refusing to start while another viewer event loop is active",
+            ));
+            return false;
+        }
 
         let duration_ms = config.match_time_ms;
         let debug = config.debug;
@@ -726,6 +806,8 @@ impl MatchViewer {
                 Update,
                 Timeline::refresh_debug.run_if(move || instrumented),
             )
+            .add_systems(Last, process_viewer_lifecycle)
             .run();
+        true
     }
 }
