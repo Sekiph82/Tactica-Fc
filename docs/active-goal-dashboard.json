@@ -1,7 +1,7 @@
 {
   "project": "TACTICA FC",
   "goal": "CM tarzı menajerlik kariyeri ve güvenilir canlı maç izleyicisi",
-  "updatedAt": "2026-11-02T15:40:00+03:00",
+  "updatedAt": "2026-11-02T13:16:00+03:00",
   "focus": "M05-S02-T08 · Geniş başlangıç kadrajını gerçek maç ekranında ve GPU destekli tarayıcıda kabul et.",
   "items": [
     {
@@ -14,13 +14,13 @@
       "id": "match-viewer",
       "status": "in-progress",
       "title": "Canlı maç izleyicisi",
-      "detail": "Akış köprüsü tüm engine snapshot'larından 22 oyuncu ve top izlerini, aksiyon yolu önceliğini ve farklı zamanlı anlatımları taşıyor. Önceki turda 103/103 test, typecheck, build ve izole 1× kısa canlı akış geçti. Bu turda başlangıç zoom'u köprüye eklendi, 5 Rust testi geçti ve WASM yeniden derlendi. Headless QA GPU'su Bevy renderer'ını başlatamadığı için gerçek maçta geniş kadraj, gol teması ve tam maç görsel kabulü açık. Renkler kullanıcı tarafından kabul edildi."
+      "detail": "Akış köprüsü tüm engine snapshot'larından 22 oyuncu ve top izlerini, aksiyon yolu önceliğini ve farklı zamanlı anlatımları taşıyor. Önceki turda 103/103 test, typecheck, build ve izole 1× kısa canlı akış geçti. Bu turda başlangıç zoom'u eklendi, 5 Rust testi, typecheck ve üretim build'i geçti. Yeni görüntüleyici npm dev/build/open-football öncesi otomatik olarak public dosyalarına eşitleniyor; sıkıştırılmış asset SHA-256 değerleri eşleşti. Headless QA GPU'su Bevy renderer'ını başlatamadığı için gerçek maçta geniş kadraj, gol teması ve tam maç görsel kabulü açık. Renkler kullanıcı tarafından kabul edildi."
     },
     {
       "id": "movement",
       "status": "open",
       "title": "Oyuncu hareketi ve kamera",
-      "detail": "TACTICA gömülü izleyici artık geniş başlangıç zoom'u (0.45) istiyor; sıfırlama bu başlangıç değerine dönüyor. Kaynak derlemesi başarılı. Geniş kadrajın gerçek GPU'da tüm oyuncuları ve iki kaleyi gösterdiği, aksiyon anındaki okunaklılığın da korunduğu görsel kabul bekliyor. Takım renkleri kabul edildi."
+      "detail": "TACTICA gömülü izleyici artık geniş başlangıç zoom'u (0.45) istiyor; sıfırlama bu başlangıç değerine dönüyor. Public dağıtım kopyası dev, build ve open-football öncesi otomatik güncelleniyor. Geniş kadrajın gerçek GPU'da tüm oyuncuları ve iki kaleyi gösterdiği, aksiyon anındaki okunaklılığın da korunduğu görsel kabul bekliyor. Takım renkleri kabul edildi."
     },
     {
       "id": "transfer-replay",
