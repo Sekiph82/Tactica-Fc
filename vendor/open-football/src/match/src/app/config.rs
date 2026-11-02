@@ -24,6 +24,10 @@ pub struct ViewerConfig {
     /// so older saved configurations retain the viewer's original framing.
     #[serde(default)]
     pub initial_zoom: Option<f32>,
+    /// Keep the complete pitch in view for a tactical manager presentation.
+    /// The standard broadcast camera continues to follow the ball when false.
+    #[serde(default)]
+    pub tactical_overview: bool,
     /// Full-time timestamp of the recording, in milliseconds.
     pub match_time_ms: f64,
     pub home: TeamColors,
@@ -489,6 +493,7 @@ impl ViewerConfig {
             embedded: false,
             start_time_ms: 0.0,
             initial_zoom: None,
+            tactical_overview: false,
             match_time_ms: 0.0,
             home: TeamColors {
                 background: "#ffffff".to_string(),
@@ -550,5 +555,10 @@ mod tests {
         assert_eq!(config.initial_zoom_factor(), 1.0);
         config.initial_zoom = Some(-1.0);
         assert_eq!(config.initial_zoom_factor(), 1.0);
+    }
+
+    #[test]
+    fn tactical_overview_defaults_off_for_legacy_configurations() {
+        assert!(!config().tactical_overview);
     }
 }

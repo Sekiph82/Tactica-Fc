@@ -738,6 +738,19 @@ impl TvCamera {
     /// [`Lineup::FRONT_LENS`](crate::broadcast::lineup::Lineup), the lens the
     /// pre-match ceremony is held on.
     pub const FOV: f32 = 0.265;
+
+    /// Camera height needed to fit both pitch axes from a top-down tactical
+    /// view. The vertical viewport must cover the touchline-to-touchline span
+    /// and, on narrow screens, enough length for both goals.
+    fn tactical_overview_height(aspect: f32, vertical_fov: f32) -> f32 {
+        let aspect = if aspect.is_finite() && aspect > 0.0 {
+            aspect
+        } else {
+            16.0 / 9.0
+        };
+        let half_span = Field::HALF_WIDTH.max(Field::HALF_LENGTH / aspect) * 1.15;
+        half_span / (vertical_fov * 0.5).tan()
+    }
     /// How far the aim point follows the ball across the pitch. Low down the
     /// whole width is in shot anyway, so this is back to a gentle lead rather
     /// than a chase — and it has to stay gentle, because tilting up from here
@@ -872,6 +885,7 @@ impl TvCamera {
     }
 
     pub fn follow_play(
+        config: Res<ViewerConfig>,
         ball: Res<BallState>,
         playback: Res<Playback>,
         time: Res<Time>,
@@ -882,9 +896,9 @@ impl TvCamera {
         changeover: Res<ChangeoverShot>,
         goal: Res<GoalShot>,
         lineup: Res<Lineup>,
-        mut camera: Single<(&mut TvCamera, &mut Transform, &mut Projection)>,
+        mut camera: Single<(&mut TvCamera, &mut Transform, &mut Projection, &Camera)>,
     ) {
-        let (rig, transform, projection) = &mut *camera;
+        let (rig, transform, projection, viewport) = &mut *camera;
 
         // How far the shot has closed onto a subject of its own rather than
         // onto the play, 0..1. Every framing constant below that a follow
@@ -947,6 +961,22 @@ impl TvCamera {
             return;
         }
 
+        if config.tactical_overview {
+            let viewport_size = viewport
+                .logical_viewport_size()
+                .unwrap_or(Vec2::new(16.0, 9.0));
+            let aspect = viewport_size.x / viewport_size.y.max(1.0);
+            let vertical_fov = match projection.as_ref() {
+                Projection::Perspective(perspective) => perspective.fov,
+                _ => Self::FOV,
+            };
+            let height = Self::tactical_overview_height(aspect, vertical_fov);
+            transform.set_if_neq(
+                Transform::from_xyz(0.0, height, 0.0).looking_at(Vec3::ZERO, Vec3::NEG_Z),
+            );
+            return;
+        }
+
         // Where the gantry stands for this bearing and height. At rest the
         // three numbers below come back out as the constants they were
         // written as: `(0, HEIGHT, -(HALF_WIDTH + SETBACK))`.
@@ -992,5 +1022,35 @@ impl TvCamera {
         // Compared first: a camera at rest over a still picture is a frame
         // that changes nothing.
         transform.set_if_neq(Transform::from_translation(stand).looking_at(aim, Vec3::Y));
+    }
+}
+
+#[cfg(test)]
+mod tactical_overview_tests {
+    use super::TvCamera;
+    use crate::scene::field::Field;
+
+    #[test]
+    fn tactical_overview_fits_both_goals_and_touchlines_on_wide_screens() {
+        let aspect = 2.4;
+        let fov = 0.6;
+        let height = TvCamera::tactical_overview_height(aspect, fov);
+        let vertical_span = 2.0 * height * (fov * 0.5).tan();
+        let horizontal_span = vertical_span * aspect;
+
+        assert!(vertical_span >= Field::WIDTH * 1.14);
+        assert!(horizontal_span >= Field::LENGTH * 1.14);
+    }
+
+    #[test]
+    fn tactical_overview_fits_both_goals_on_portrait_screens() {
+        let aspect = 0.6;
+        let fov = 0.6;
+        let height = TvCamera::tactical_overview_height(aspect, fov);
+        let vertical_span = 2.0 * height * (fov * 0.5).tan();
+        let horizontal_span = vertical_span * aspect;
+
+        assert!(vertical_span >= Field::LENGTH * 1.14);
+        assert!(horizontal_span >= Field::WIDTH * 1.14);
     }
 }

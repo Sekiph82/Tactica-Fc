@@ -400,6 +400,7 @@ function makeConfig(initial: ReturnType<typeof makeInitialRecording>, setup: Ope
     inline_recording: JSON.stringify(initial),
     embedded: true,
     initial_zoom: 0.45,
+    tactical_overview: true,
     match_time_ms: OPEN_FOOTBALL_MATCH_DURATION_MS,
     home: setup.homeColor,
     away: setup.awayColor,
