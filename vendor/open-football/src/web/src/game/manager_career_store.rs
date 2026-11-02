@@ -10,7 +10,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-const SCHEMA_VERSION: u32 = 9;
+const SCHEMA_VERSION: u32 = 10;
 const FILE_NAME: &str = "manager-career.jsonl";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -47,6 +47,10 @@ pub struct ManagerCareerSnapshot {
     /// has not yet captured the corresponding transfer decision.
     #[serde(default)]
     pub pending_transfer_responses: HashMap<u32, bool>,
+    /// Manager-created negotiations and the latest manager counter-offer
+    /// state, replayed when the full world save predates the manager action.
+    #[serde(default)]
+    pub pending_transfer_negotiations: HashMap<String, PendingManagerTransferNegotiation>,
     /// Highest club-newspaper edition the manager has explicitly read.
     #[serde(default)]
     pub last_read_newspaper_issue: u32,
@@ -77,6 +81,15 @@ pub struct ManagerCareerSnapshot {
     /// Number of completed camp reports the manager has explicitly read.
     #[serde(default)]
     pub last_read_training_camp_reports: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PendingManagerTransferNegotiation {
+    pub country_id: u32,
+    pub negotiation_id: u32,
+    /// Serialized engine negotiation. Keeping this as a string preserves the
+    /// Eq-based snapshot format while retaining the full engine-owned state.
+    pub negotiation_json: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -200,9 +213,31 @@ impl ManagerCareerStore {
         Ok(())
     }
 
-    pub fn clear_pending_transfer_responses(&self, team_id: u32) -> io::Result<()> {
+    pub fn queue_transfer_negotiation(
+        &self,
+        team_id: u32,
+        country_id: u32,
+        negotiation: &core::transfers::deal::negotiation::TransferNegotiation,
+    ) -> io::Result<()> {
+        let negotiation_json = serde_json::to_string(negotiation).map_err(io::Error::other)?;
+        let negotiation_id = negotiation.id;
+        self.update_snapshot(team_id, |snapshot| {
+            snapshot.pending_transfer_negotiations.insert(
+                format!("{country_id}:{negotiation_id}"),
+                PendingManagerTransferNegotiation {
+                    country_id,
+                    negotiation_id,
+                    negotiation_json,
+                },
+            );
+        })?;
+        Ok(())
+    }
+
+    pub fn clear_pending_transfer_journal(&self, team_id: u32) -> io::Result<()> {
         self.update_snapshot(team_id, |snapshot| {
             snapshot.pending_transfer_responses.clear();
+            snapshot.pending_transfer_negotiations.clear();
         })?;
         Ok(())
     }
@@ -234,6 +269,73 @@ impl ManagerCareerStore {
 }
 
 impl ManagerCareerSnapshot {
+    /// Replay manager-created offers and counter-offers after loading the last
+    /// full world save. A more advanced or completed world negotiation wins.
+    pub fn apply_pending_transfer_negotiations(
+        &self,
+        sim: &mut core::SimulatorData,
+        team_id: u32,
+    ) -> usize {
+        use core::transfers::deal::negotiation::{NegotiationStatus, TransferNegotiation};
+        use core::transfers::market::TransferListingStatus;
+
+        let Some(managed_club_id) = sim
+            .team(team_id)
+            .filter(|team| team.team_type == core::TeamType::Main)
+            .map(|team| team.club_id)
+        else {
+            return 0;
+        };
+
+        let mut applied = 0;
+        for pending in self.pending_transfer_negotiations.values() {
+            let Ok(negotiation) = serde_json::from_str::<TransferNegotiation>(&pending.negotiation_json) else {
+                continue;
+            };
+            if negotiation.id != pending.negotiation_id
+                || negotiation.buying_club_id != managed_club_id
+                || negotiation.selling_club_id == managed_club_id
+            {
+                continue;
+            }
+
+            let Some(country) = sim.country_mut(pending.country_id) else {
+                continue;
+            };
+            let market = &mut country.transfer_market;
+            if let Some(current) = market.negotiations.get(&negotiation.id) {
+                if current.manager_decision.is_some()
+                    || matches!(
+                        current.status,
+                        NegotiationStatus::Accepted
+                            | NegotiationStatus::Rejected
+                            | NegotiationStatus::Expired
+                    )
+                    || transfer_phase_order(&current.phase) > transfer_phase_order(&negotiation.phase)
+                {
+                    continue;
+                }
+            }
+
+            let Some(listing) = market.listings.get_mut(negotiation.listing_id as usize) else {
+                continue;
+            };
+            if listing.player_id != negotiation.player_id
+                || listing.club_id != negotiation.selling_club_id
+                || !matches!(listing.status, TransferListingStatus::Available | TransferListingStatus::InNegotiation)
+            {
+                continue;
+            }
+            listing.status = TransferListingStatus::InNegotiation;
+            market.next_negotiation_id = market
+                .next_negotiation_id
+                .max(negotiation.id.saturating_add(1));
+            market.negotiations.insert(negotiation.id, negotiation);
+            applied += 1;
+        }
+        applied
+    }
+
     /// Replay durable manager answers after loading the last full world save.
     /// Responses already present or resolved in that save are left untouched.
     pub fn apply_pending_transfer_responses(
@@ -434,6 +536,16 @@ impl ManagerCareerSnapshot {
             );
         }
         true
+    }
+}
+
+fn transfer_phase_order(phase: &core::transfers::deal::negotiation::NegotiationPhase) -> u16 {
+    use core::transfers::deal::negotiation::NegotiationPhase;
+    match phase {
+        NegotiationPhase::InitialApproach { .. } => 0,
+        NegotiationPhase::ClubNegotiation { round, .. } => 10 + u16::from(*round),
+        NegotiationPhase::PersonalTerms { round, .. } => 20 + u16::from(*round),
+        NegotiationPhase::MedicalAndFinalization { .. } => 30,
     }
 }
 

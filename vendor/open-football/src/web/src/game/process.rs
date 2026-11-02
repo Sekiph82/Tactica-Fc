@@ -268,9 +268,9 @@ impl ProcessingRun {
                     if let Some(team_id) = self.manager_team_id
                         && let Err(error) = self
                             .manager_career_store
-                            .clear_pending_transfer_responses(team_id)
+                            .clear_pending_transfer_journal(team_id)
                     {
-                        error!("failed to clear manager transfer response journal: {error}");
+                        error!("failed to clear manager transfer action journal: {error}");
                     }
                 }
                 Err(error) => error!("failed to persist career world snapshot: {error}"),

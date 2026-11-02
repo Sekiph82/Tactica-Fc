@@ -114,6 +114,10 @@ pub async fn main() {
                     info!("restored manager tactics, lineup, training, and transfer-list choices");
                 }
             }
+            let replayed = snapshot.apply_pending_transfer_negotiations(&mut game_data, team_id);
+            if replayed > 0 {
+                info!("replayed {replayed} pending manager transfer offer/update(s)");
+            }
             let replayed = snapshot.apply_pending_transfer_responses(&mut game_data, team_id);
             if replayed > 0 {
                 info!("replayed {replayed} pending manager transfer response(s)");

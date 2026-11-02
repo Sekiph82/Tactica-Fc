@@ -1150,8 +1150,20 @@ pub async fn make_transfer_offer_action(
             negotiation.open_salary_at(body.annual_wage);
         }
     }
-    let status = persist_manager_world(&state, sim);
-    if status != StatusCode::ACCEPTED {
+    let Some(negotiation) = seller_country
+        .transfer_market
+        .negotiations
+        .get(&negotiation_id)
+        .cloned()
+    else {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    };
+    if let Err(error) = state.manager_career_store.queue_transfer_negotiation(
+        buyer_team_id,
+        seller_country_id,
+        &negotiation,
+    ) {
+        log::error!("failed to persist manager transfer offer: {error}");
         if let Some(country) = sim.country_mut(seller_country_id) {
             country
                 .transfer_market
@@ -1163,8 +1175,9 @@ pub async fn make_transfer_offer_action(
                 }
             }
         }
+        return StatusCode::INTERNAL_SERVER_ERROR;
     }
-    status
+    StatusCode::ACCEPTED
 }
 
 /// Let the manager respond to the engine's current negotiation stage.
@@ -1206,7 +1219,7 @@ pub async fn update_transfer_negotiation_action(
             .unwrap_or_else(|| (club.finance.balance.balance.max(0) as f64) * 0.3)
     });
 
-    let (country_id, previous_negotiation) = {
+    let (country_id, previous_negotiation, updated_negotiation) = {
         let Some(country) = sim
             .continents
             .iter_mut()
@@ -1292,18 +1305,23 @@ pub async fn update_transfer_negotiation_action(
             }
             _ => return StatusCode::CONFLICT,
         }
-        (country_id, previous)
+        (country_id, previous, negotiation.clone())
     };
-    let status = persist_manager_world(&state, sim);
-    if status != StatusCode::ACCEPTED {
+    if let Err(error) = state.manager_career_store.queue_transfer_negotiation(
+        buyer_team_id,
+        country_id,
+        &updated_negotiation,
+    ) {
+        log::error!("failed to persist manager transfer negotiation update: {error}");
         if let Some(country) = sim.country_mut(country_id) {
             country
                 .transfer_market
                 .negotiations
                 .insert(body.negotiation_id, previous_negotiation);
         }
+        return StatusCode::INTERNAL_SERVER_ERROR;
     }
-    status
+    StatusCode::ACCEPTED
 }
 
 /// Queue the managed side's decision for the next ordinary transfer tick.
