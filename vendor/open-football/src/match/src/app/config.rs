@@ -20,6 +20,10 @@ pub struct ViewerConfig {
     /// Starting point for a live feed that joins an already-running match.
     #[serde(default)]
     pub start_time_ms: f64,
+    /// Lens framing to use for the opening broadcast shot. Kept as an option
+    /// so older saved configurations retain the viewer's original framing.
+    #[serde(default)]
+    pub initial_zoom: Option<f32>,
     /// Full-time timestamp of the recording, in milliseconds.
     pub match_time_ms: f64,
     pub home: TeamColors,
@@ -284,6 +288,14 @@ impl ViewerConfig {
         120.0
     }
 
+    /// Keep host supplied framing inside the lens range the camera can draw.
+    pub fn initial_zoom_factor(&self) -> f32 {
+        self.initial_zoom
+            .filter(|factor| factor.is_finite() && *factor > 0.0)
+            .unwrap_or(1.0)
+            .clamp(0.45, 3.0)
+    }
+
     /// Whether the frame-cost readout is on. See [`Self::perf`] for why the
     /// engine's overlay implies the frame's and not the other way round.
     pub fn instrumented(&self) -> bool {
@@ -476,6 +488,7 @@ impl ViewerConfig {
             inline_recording: None,
             embedded: false,
             start_time_ms: 0.0,
+            initial_zoom: None,
             match_time_ms: 0.0,
             home: TeamColors {
                 background: "#ffffff".to_string(),
@@ -497,6 +510,7 @@ impl ViewerConfig {
             perf: false,
             grain: None,
             device: None,
+            renderer: None,
             crowd: None,
             squad: None,
             stage: None,
@@ -504,5 +518,37 @@ impl ViewerConfig {
             lineup: true,
             fps_cap: Self::high_refresh(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PlayerInfo, ViewerConfig};
+
+    fn config() -> ViewerConfig {
+        ViewerConfig::of_players(Vec::<PlayerInfo>::new())
+    }
+
+    #[test]
+    fn initial_zoom_defaults_to_existing_framing() {
+        assert_eq!(config().initial_zoom_factor(), 1.0);
+    }
+
+    #[test]
+    fn initial_zoom_is_clamped_to_supported_lens_range() {
+        let mut config = config();
+        config.initial_zoom = Some(0.1);
+        assert_eq!(config.initial_zoom_factor(), 0.45);
+        config.initial_zoom = Some(4.0);
+        assert_eq!(config.initial_zoom_factor(), 3.0);
+    }
+
+    #[test]
+    fn invalid_initial_zoom_falls_back_to_existing_framing() {
+        let mut config = config();
+        config.initial_zoom = Some(f32::NAN);
+        assert_eq!(config.initial_zoom_factor(), 1.0);
+        config.initial_zoom = Some(-1.0);
+        assert_eq!(config.initial_zoom_factor(), 1.0);
     }
 }

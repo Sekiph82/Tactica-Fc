@@ -210,7 +210,7 @@ TACTICA FC; CM0102/CM2010 tarzında kariyer, kulüp yönetimi, haberler, antrenm
 - [x] M05-S02-T05 Canlı sonucu daha hızlı renderer'a gönder; viewer fps ve match wall-clock ilişkisini koru.
 - [ ] M05-S02-T06 CM2010 referanslı sıralı oyuncu/top yolu, destek koşusu ve savunma tepkisini gerçek maçta görsel kabul et.
 - [ ] M05-S02-T07 Gerçek forma numarası, takım rengi, ayakta oyuncu figürü ve doğru goalkeeper kitlerini kabul et. **Takım renkleri kullanıcı tarafından kabul edildi (2026-11-02); renk değişikliği gerekmiyor.** Forma numarası ve kaleci forması kabulü açık.
-- [ ] M05-S02-T08 Topu takip et kamerasında hareket ve aksiyon net; varsayılan tam saha ve iki kale görünür kalsın.
+- [ ] M05-S02-T08 Topu takip et kamerasında hareket ve aksiyon net; varsayılan tam saha ve iki kale görünür kalsın. **İlerleme (2026-11-02):** TACTICA artık gömülü görüntüleyiciye başlangıç zoom'u `0.45` gönderiyor; eski konfigürasyonların kadrajı varsayılan `1.0` olarak korunuyor, zoom sıfırlama yeni başlangıç kadrajına dönüyor. Rust zoom/config testleri 5/5 geçti ve WASM görüntüleyici yeniden derlendi. Görsel kabul açık: mevcut headless Chrome GPU'su Bevy/WebGL2 renderer'ını başlatamadı (`max_compute_workgroups_per_dimension=0`); kullanıcının gerçek maçında tüm kadronun ve iki kalenin kadraja girdiği henüz doğrulanmadı.
 
 ## Sprint M05-S03 — Tam maç kabulü ve süreklilik
 

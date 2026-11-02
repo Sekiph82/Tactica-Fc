@@ -128,6 +128,7 @@ impl MatchViewer {
 
         let duration_ms = config.match_time_ms;
         let start_time_ms = config.start_time_ms;
+        let opening_zoom = config.initial_zoom_factor();
         let debug = config.debug;
         let instrumented = config.instrumented();
         let requested_renderer = config.renderer.as_deref();
@@ -269,7 +270,7 @@ impl MatchViewer {
             // image this owns and startup systems have no order between them
             // worth relying on. See `stage`.
             .init_resource::<Stage>()
-            .init_resource::<CameraZoom>()
+            .insert_resource(CameraZoom::for_opening(opening_zoom))
             // `TvCamera::follow_play` takes `Res<CameraOrbit>` and
             // `CameraOrbit::handle_drag` takes `ResMut<CameraOrbit>`, but
             // nothing ever inserted it — so the first `Update` tick

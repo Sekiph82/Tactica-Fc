@@ -49,11 +49,15 @@ impl ViewerCanvas {
 #[derive(Resource)]
 pub struct CameraZoom {
     pub factor: f32,
+    opening_factor: f32,
 }
 
 impl Default for CameraZoom {
     fn default() -> Self {
-        CameraZoom { factor: 1.0 }
+        CameraZoom {
+            factor: 1.0,
+            opening_factor: 1.0,
+        }
     }
 }
 
@@ -74,6 +78,22 @@ impl CameraZoom {
     /// Trackpads and high-resolution wheels report pixels rather than
     /// notches, and a pixel per notch would make them uncontrollable.
     const PIXELS_PER_NOTCH: f32 = 50.0;
+
+    pub fn for_opening(factor: f32) -> Self {
+        let factor = if factor.is_finite() {
+            factor.clamp(Self::RANGE.0, Self::RANGE.1)
+        } else {
+            1.0
+        };
+        CameraZoom {
+            factor,
+            opening_factor: factor,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.factor = self.opening_factor;
+    }
 
     /// Zoom by a fractional number of notches, so a wheel that reports
     /// pixels moves the lens as smoothly as it is turned.
@@ -112,6 +132,26 @@ impl CameraZoom {
         if notches != 0.0 {
             zoom.turn(notches);
         }
+    }
+}
+
+#[cfg(test)]
+mod zoom_tests {
+    use super::CameraZoom;
+
+    #[test]
+    fn reset_restores_the_session_opening_framing() {
+        let mut zoom = CameraZoom::for_opening(0.45);
+        zoom.scale(2.0);
+        zoom.reset();
+        assert_eq!(zoom.factor, 0.45);
+    }
+
+    #[test]
+    fn opening_framing_clamps_to_the_supported_range() {
+        assert_eq!(CameraZoom::for_opening(0.1).factor, 0.45);
+        assert_eq!(CameraZoom::for_opening(5.0).factor, 3.0);
+        assert_eq!(CameraZoom::for_opening(f32::NAN).factor, 1.0);
     }
 }
 
@@ -579,7 +619,7 @@ impl CameraRig {
         subject: &mut CameraSubject,
     ) {
         *orbit = CameraOrbit::default();
-        *zoom = CameraZoom::default();
+        zoom.reset();
         flight.land();
         subject.release();
     }
@@ -597,7 +637,7 @@ impl CameraRig {
             || subject.locked()
             || orbit.bearing.abs() > 1e-3
             || (orbit.elevation - TvCamera::rest_elevation()).abs() > 1e-3
-            || (zoom.factor - 1.0).abs() > 1e-3
+            || (zoom.factor - zoom.opening_factor).abs() > 1e-3
     }
 }
 

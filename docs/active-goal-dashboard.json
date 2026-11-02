@@ -1,8 +1,8 @@
 {
   "project": "TACTICA FC",
   "goal": "CM tarzı menajerlik kariyeri ve güvenilir canlı maç izleyicisi",
-  "updatedAt": "2026-11-02T12:34:02+03:00",
-  "focus": "M05-S03-T08 · Canlı akışın sürekliliğini doğrula; kamera kadrajı ve gol temasını görsel kabulden geçir.",
+  "updatedAt": "2026-11-02T15:40:00+03:00",
+  "focus": "M05-S02-T08 · Geniş başlangıç kadrajını gerçek maç ekranında ve GPU destekli tarayıcıda kabul et.",
   "items": [
     {
       "id": "career-foundation",
@@ -14,13 +14,13 @@
       "id": "match-viewer",
       "status": "in-progress",
       "title": "Canlı maç izleyicisi",
-      "detail": "Akış köprüsü tüm engine snapshot'larından 22 oyuncu ve top izlerini, aksiyon yolu önceliğini ve farklı zamanlı anlatımları taşıyor. 103/103 test, typecheck, build ve izole 1× kısa canlı akış geçti. Renkler kullanıcı tarafından kabul edildi. Tam maç, gol temasının görsel doğrulaması ve yakın kamera kadrajında tüm oyuncuları gösterme kabulü açık."
+      "detail": "Akış köprüsü tüm engine snapshot'larından 22 oyuncu ve top izlerini, aksiyon yolu önceliğini ve farklı zamanlı anlatımları taşıyor. Önceki turda 103/103 test, typecheck, build ve izole 1× kısa canlı akış geçti. Bu turda başlangıç zoom'u köprüye eklendi, 5 Rust testi geçti ve WASM yeniden derlendi. Headless QA GPU'su Bevy renderer'ını başlatamadığı için gerçek maçta geniş kadraj, gol teması ve tam maç görsel kabulü açık. Renkler kullanıcı tarafından kabul edildi."
     },
     {
       "id": "movement",
       "status": "open",
       "title": "Oyuncu hareketi ve kamera",
-      "detail": "Saha kareleri akıyor; yakın aksiyon kamerasında kenar oyuncular kadraj dışında kalabiliyor. Tam saha/aksiyon kadrajı, destek koşuları ve savunma tepkileri gerçek maçta görsel kabul bekliyor. Takım renkleri kabul edildi; bu konu tekrar açılmayacak."
+      "detail": "TACTICA gömülü izleyici artık geniş başlangıç zoom'u (0.45) istiyor; sıfırlama bu başlangıç değerine dönüyor. Kaynak derlemesi başarılı. Geniş kadrajın gerçek GPU'da tüm oyuncuları ve iki kaleyi gösterdiği, aksiyon anındaki okunaklılığın da korunduğu görsel kabul bekliyor. Takım renkleri kabul edildi."
     },
     {
       "id": "transfer-replay",
