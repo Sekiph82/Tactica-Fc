@@ -4,7 +4,7 @@
 
 Use the Black Metal identity across the manager interface: near-black and graphite surfaces, brushed-silver text, and stadium red for selection, focus, and primary actions. Match status colors remain semantic: green for positive, amber for caution, and red for negative or urgent states.
 
-The Open Football web interface defines these shared tokens in `vendor/open-football/src/web/assets/static/css/style.css`. Prefer semantic tokens in new components so a theme adjustment stays consistent:
+The TACTICA application defines these shared tokens in `src/styles.css`. Prefer semantic tokens in new components so a theme adjustment stays consistent:
 
 | Role | Token | Current value |
 | --- | --- | --- |

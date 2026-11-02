@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, rmSync } from 'node:fs';
 import { chromium } from 'playwright';
 
-const url = process.argv[2] ?? 'http://localhost:5173/tactica-fc/';
+const url = process.argv[2] ?? 'http://localhost:5184/en';
 const out = 'public/landing';
 const tmp = '/tmp/cm-shots';
 mkdirSync(out, { recursive: true });

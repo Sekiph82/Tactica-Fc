@@ -2,7 +2,7 @@
 // Kør: npm run dev  (i en anden terminal)  og derefter: node scripts/smoke.mjs [url] [screenshot-mappe]
 import { chromium } from 'playwright';
 
-const url = process.argv[2] ?? 'http://localhost:5173/tactica-fc/';
+const url = process.argv[2] ?? 'http://localhost:5184/en';
 const shots = process.argv[3] ?? 'smoke-shots';
 const errors = [];
 const browser = await chromium.launch();

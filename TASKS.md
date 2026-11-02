@@ -258,7 +258,7 @@ TACTICA FC; CM0102/CM2010 tarzında kariyer, kulüp yönetimi, haberler, antrenm
 - [ ] M07-S01-T03 Açılış/yeni oyun, dashboard/Inbox, squad/player ekranlarında 320/390/768/1280px taşmayı incele.
 - [ ] M07-S01-T04 Taktik/antrenman/transfer, lig/kupa/fikstür/sonuç/gazete ekranlarını aynı ölçülerde incele.
 - [ ] M07-S01-T05 Tüm tabloların başlık, para, isim ve düğme alanlarının kesilmeden sığmasını kabul et.
-- [ ] M07-S01-T06 TACTICA kullanıcı akışında eski Open Football branding/theme artığını tara; lisans/credit alanları istisna.
+- [x] M07-S01-T06 TACTICA kullanıcı akışında eski Open Football branding/theme artığını tara; lisans/credit alanları istisna. **Kanıt:** ortak nav/selector, sezon kartları, giriş görseli ve maç ekranındaki eski lacivert/camgöbeği/gold-violet UI renkleri TACTICA tokenlarına taşındı; viewer lisans/credit kapsamı korundu.
 - [ ] M07-S01-T07 Gerçek ekran görüntüsüyle görsel kabul kaydet; yalnızca source/CSS parser başarısını yeterli sayma.
 
 ## Sprint M07-S02 — Etkileşim ve accessibility

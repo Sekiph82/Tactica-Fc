@@ -16,7 +16,7 @@ Start the TACTICA web app:
 npm run dev
 ```
 
-Vite prints the exact local URL when it starts. Open that URL with the `/tactica-fc/` path, for example [http://127.0.0.1:5184/tactica-fc/](http://127.0.0.1:5184/tactica-fc/). If port 5184 is busy, Vite automatically picks the next free port, so leave other running services alone and use the URL printed in PowerShell. The app does not launch Chrome automatically.
+Vite prints the exact local URL when it starts. Open that URL with `/en`, for example `http://127.0.0.1:5184/en`. If port 5184 is busy, Vite automatically picks the next free port, so leave other running services alone and use that port with `/en` (for example `http://127.0.0.1:5186/en`). The app does not launch Chrome automatically. Production builds keep the `/tactica-fc/` prefix for GitHub Pages.
 
 For the club-selection, career, tactics, training, transfers and live-match flow, see [the Turkish manager-career guide](docs/manager-career-guide.md).
 
