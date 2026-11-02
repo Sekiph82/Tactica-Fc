@@ -10,7 +10,7 @@ import { session, skippedMatches, type LiveCmd } from '../../online/client';
 import { fixturesOn, gs, notify, squad } from '../../game/state';
 import type { MatchPitchSnapshot, MatchReport, MatchVisualAction, OppInstructions, OppKind, ShootoutKick } from '../../game/types';
 import { hasVisualQueueCapacity, pairVisualActionsWithSnapshot, type MatchVisualFrame } from '../../game/match-visual';
-import { actionPresentationWindows } from '../openFootballRecording';
+import { actionPresentationWindows, findNarrationActionIndex, narratedActionIndexes } from '../openFootballRecording';
 import { t } from '../../i18n';
 import { Bar, ClubLink, Crest, Panel, Pct, PlayerLink, posStr, Rating, Tabs } from '../components';
 import { useGame, useNav } from '../core';
@@ -31,7 +31,7 @@ import { OPEN_FOOTBALL_MATCH_DURATION_MS, OPEN_FOOTBALL_MAX_MATCH_DURATION_MS, o
 import { statColors, teamColors } from './matchColors';
 
 // Den igangværende kamp overlever navigation mellem skærme
-let live: { fixture: number; sim: MatchSim; viewerSetup: OpenFootballSetup; lines: { text: string; cls: string; m: number; moment: number; hg: number; ag: number; k?: string }[]; consumed: number; visualQueue: MatchVisualFrame[]; visualSeen: number; viewerEventsSeen?: number; viewer?: OpenFootballBridge; viewerPrimed?: boolean; halfShown?: boolean; shotsSeen?: number; cornersSeen?: number; h2hInit?: boolean; evSeen?: number; h2h?: H2hState; ldSeen?: number; prevTab?: string; finishFrameSent?: boolean; finishPresentationReady?: boolean; finishPresentationTimer?: ReturnType<typeof setTimeout>; extraTimeDurationSent?: boolean; shootoutPresentationStarted?: boolean; shootoutKicksSeen?: number } | null = null;
+let live: { fixture: number; sim: MatchSim; viewerSetup: OpenFootballSetup; lines: { text: string; cls: string; m: number; moment: number; hg: number; ag: number; k?: string; aId?: number; bId?: number }[]; consumed: number; visualQueue: MatchVisualFrame[]; visualSeen: number; viewerEventsSeen?: number; viewer?: OpenFootballBridge; viewerPrimed?: boolean; halfShown?: boolean; shotsSeen?: number; cornersSeen?: number; h2hInit?: boolean; evSeen?: number; h2h?: H2hState; ldSeen?: number; prevTab?: string; finishFrameSent?: boolean; finishPresentationReady?: boolean; finishPresentationTimer?: ReturnType<typeof setTimeout>; extraTimeDurationSent?: boolean; shootoutPresentationStarted?: boolean; shootoutKicksSeen?: number } | null = null;
 
 /** Stage and play one engine-resolved shootout kick on its own viewer beat. */
 function shootoutPresentation(base: MatchPitchSnapshot, kick: ShootoutKick | undefined, moment: number) {
@@ -344,7 +344,7 @@ function startH2hBackground(id: number) {
     const ctx = { home, away, score: `${home} ${sim.teams[0].stats.goals}-${sim.teams[1].stats.goals} ${away}` };
     while (L.consumed < sim.commentary.length) {
       const l = sim.commentary[L.consumed];
-      L.lines.push({ text: commentaryText(l, ctx, L.consumed), cls: l.k.startsWith('goal') && l.k !== 'goal-offside' ? 'goal' : l.hi ? 'hi' : '', m: l.m, moment: l.moment, hg: sim.teams[0].stats.goals, ag: sim.teams[1].stats.goals, k: l.k });
+      L.lines.push({ text: commentaryText(l, ctx, L.consumed), cls: l.k.startsWith('goal') && l.k !== 'goal-offside' ? 'goal' : l.hi ? 'hi' : '', m: l.m, moment: l.moment, hg: sim.teams[0].stats.goals, ag: sim.teams[1].stats.goals, k: l.k, aId: l.aId, bId: l.bId });
       L.consumed++;
     }
     const finished = sim.finished;
@@ -423,7 +423,7 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
     while (L.consumed < sim.commentary.length) {
       const l = sim.commentary[L.consumed];
       const cls = l.k.startsWith('goal') && l.k !== 'goal-offside' ? 'goal' : l.hi ? 'hi' : '';
-      L.lines.push({ text: commentaryText(l, ctx, L.consumed), cls, m: l.m, moment: l.moment, hg: sim.teams[0].stats.goals, ag: sim.teams[1].stats.goals, k: l.k });
+      L.lines.push({ text: commentaryText(l, ctx, L.consumed), cls, m: l.m, moment: l.moment, hg: sim.teams[0].stats.goals, ag: sim.teams[1].stats.goals, k: l.k, aId: l.aId, bId: l.bId });
       L.consumed++;
     }
   };
@@ -499,33 +499,41 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
     // early when the simulation reports full time on its next step.
     if (sim.finished && L.viewer && !L.finishFrameSent) viewerSnapshots.push(sim.pitch());
     if (L.viewer && viewerSnapshots.length) {
-      const actionWindows = actionPresentationWindows(viewerActions, sim.totalMoments);
       const newLines = L.lines.slice(linesBefore);
+      const lineActionCues = newLines.map((line) => ({ moment: line.moment, kind: line.k, actorId: line.aId, targetId: line.bId }));
+      const selectedActionIndexes = new Set(narratedActionIndexes(lineActionCues, viewerActions));
+      const narratedActions = viewerActions.filter((_action, index) => selectedActionIndexes.has(index));
+      const actionWindows = actionPresentationWindows(narratedActions, sim.totalMoments);
       const narration = newLines.map((line) => {
-        const goalLine = (line.k?.startsWith('goal') ?? false) && line.k !== 'goal-offside';
-        const shotIndex = goalLine ? viewerActions.findIndex((action) => action.kind === 'shot' && action.outcome === 'goal' && action.minute === line.m && action.moment === line.moment) : -1;
-        const sceneIndex = viewerActions.findIndex((action) => action.moment === line.moment);
+        const actionIndex = findNarrationActionIndex({ moment: line.moment, kind: line.k, actorId: line.aId, targetId: line.bId }, narratedActions);
+        const action = actionIndex >= 0 ? narratedActions[actionIndex] : undefined;
         return {
           moment: line.moment,
-          atTimeMs: shotIndex >= 0 ? actionWindows[shotIndex]?.end
-            : sceneIndex >= 0 ? actionWindows[sceneIndex]?.start : undefined,
-          atMoment: shotIndex >= 0 || sceneIndex >= 0 ? undefined : line.moment,
+          atTimeMs: actionIndex >= 0
+            ? action?.kind === 'shot' && (action.outcome === 'goal' || action.outcome === 'offside')
+              ? actionWindows[actionIndex]?.end
+              : actionWindows[actionIndex]?.event
+            : undefined,
+          atMoment: actionIndex >= 0 ? undefined : line.moment,
           minute: line.m,
           text: line.text,
           hg: line.hg,
           ag: line.ag,
+          kind: line.k,
+          actorId: line.aId,
+          targetId: line.bId,
         };
       });
       const goals = sim.events.slice(L.viewerEventsSeen ?? 0).flatMap((event) => {
         if (event.k !== 'goal' || event.p === undefined) return [];
-        const shotIndex = viewerActions.findIndex((action) => action.kind === 'shot' && action.outcome === 'goal'
+        const shotIndex = narratedActions.findIndex((action) => action.kind === 'shot' && action.outcome === 'goal'
           && action.team === event.t && action.actor === event.p && action.minute === event.m
           && newLines.some((line) => line.moment === action.moment && line.m === event.m && (line.k?.startsWith('goal') ?? false) && line.k !== 'goal-offside'));
         if (shotIndex < 0) return [];
         return [{ player_id: event.p, time: actionWindows[shotIndex]?.end ?? openFootballMinuteTimestamp(event.m), is_auto_goal: false }];
       });
       L.viewerEventsSeen = sim.events.length;
-      L.viewer.push(viewerSnapshots, [...goals, ...shootoutGoals], viewerActions, narration);
+      L.viewer.push(viewerSnapshots, [...goals, ...shootoutGoals], narratedActions, narration);
       if (sim.finished) L.finishFrameSent = true;
     }
     // store chancer og mål afspilles på 2D-banen (kampen venter imens)

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { MatchPitchSnapshot, MatchVisualAction } from '../game/types';
 import { formationLayout } from '../game/match-pitch';
-import { actionMomentWindows, actionPresentationWindows, OpenFootballStateTimeline, toOpenFootballBallTracks, toOpenFootballNarrationTracks, toOpenFootballPlayerTracks, toOpenFootballRecordingEvents } from './openFootballRecording';
+import { actionMomentWindows, actionPresentationWindows, OpenFootballStateTimeline, narratedActionIndexes, toOpenFootballBallTracks, toOpenFootballNarrationTracks, toOpenFootballPlayerTracks, toOpenFootballRecordingEvents, type OpenFootballNarrationCue } from './openFootballRecording';
 import type { OpenFootballSetup } from './openFootballSetup';
 import { OPEN_FOOTBALL_MATCH_DURATION_MS, openFootballTimestamp } from './openFootballTimeline';
 
@@ -15,7 +15,7 @@ export interface OpenFootballBridge {
     snapshots: readonly MatchPitchSnapshot[],
     goals: readonly { player_id: number; time: number; is_auto_goal: boolean }[],
     actions: readonly MatchVisualAction[],
-    narration: readonly { moment: number; atMoment?: number; atTimeMs?: number; minute: number; text: string; hg: number; ag: number }[],
+    narration: readonly OpenFootballNarrationCue[],
   ): void;
   setPlaying(playing: boolean): void;
   setSpeed(speed: number): void;
@@ -226,12 +226,12 @@ export function OpenFootballPitch({
       bridge = {
         push(snapshots, goals, actions, narration) {
           if (cancelled || snapshots.length === 0) return;
-          const narratedMoments = new Set(narration.map((line) => line.moment));
           // Keep authoritative possession and off-ball movement flowing between
           // commentary events. Explicit actions below still define the narrated
           // scene's ball path and contact points.
           const narratedSnapshots = snapshots;
-          const narratedActions = actions.filter((action) => narratedMoments.has(action.moment));
+          const narratedActionIds = new Set(narratedActionIndexes(narration, actions));
+          const narratedActions = actions.filter((_action, index) => narratedActionIds.has(index));
           narrationTracks.push(...toOpenFootballNarrationTracks(narration, setup.totalMoments));
           narrationTracks.sort((left, right) => left.at - right.at);
           if (narratedSnapshots.length === 0 && narratedActions.length === 0 && narration.length === 0) return;

@@ -24,6 +24,58 @@ export interface OpenFootballNarrationCue {
   text: string;
   hg: number;
   ag: number;
+  /** Source commentary identity, used to select the matching visual action. */
+  kind?: string;
+  actorId?: number;
+  targetId?: number;
+}
+
+const COMMENTARY_ACTION_KIND: Record<string, MatchVisualAction['kind']> = {
+  'pass-forward': 'pass', longball: 'longBall', dribble: 'dribble', 'dribble-box': 'dribble',
+  throughball: 'throughBall', offside: 'throughBall', cross: 'cross', 'corner-in': 'cross',
+  'shot-blocked': 'shot', 'goal-cheer': 'shot', 'goal-offside': 'shot', 'goal-pen': 'shot',
+  'goal-header': 'shot', 'goal-fk': 'shot', 'goal-long': 'shot', 'goal-1v1': 'shot', goal: 'shot',
+  'var-check': 'shot', 'var-disallowed': 'shot', 'var-given': 'shot', 'var-stands': 'shot',
+  'pen-saved': 'shot', 'header-saved': 'shot', bigsave: 'shot', save: 'shot', post: 'shot',
+  'pen-miss': 'shot', 'header-wide': 'shot', 'miss-1v1': 'shot', 'long-wide': 'shot', wide: 'shot',
+};
+
+/** Find the action described by a commentary line, never merely the first action sharing its minute. */
+export function findNarrationActionIndex(
+  line: Pick<OpenFootballNarrationCue, 'moment' | 'kind' | 'actorId' | 'targetId'>,
+  actions: readonly MatchVisualAction[],
+): number {
+  if (!line.kind) return -1;
+  const expectedKind = line.kind === 'score' ? 'shot' : COMMENTARY_ACTION_KIND[line.kind];
+  if (!expectedKind) return -1;
+  let bestIndex = -1;
+  let bestScore = -Infinity;
+  for (const [index, action] of actions.entries()) {
+    if (action.moment !== line.moment || action.kind !== expectedKind) continue;
+    const offsideRunnerCue = line.kind === 'offside';
+    if (line.actorId !== undefined && (offsideRunnerCue ? action.target : action.actor) !== line.actorId) continue;
+    // Goal commentary's second player is the assister, while the visual action target is the keeper.
+    const goalCue = line.kind.startsWith('goal-') || line.kind === 'goal';
+    if (!goalCue && !offsideRunnerCue && line.targetId !== undefined && action.target !== line.targetId) continue;
+    if (line.kind === 'score' && action.outcome !== 'goal') continue;
+    if (line.kind === 'goal-offside' && action.outcome !== 'offside') continue;
+    if (line.kind.startsWith('goal-') && !['goal-offside', 'goal-cheer'].includes(line.kind) && action.outcome !== 'goal') continue;
+    if (line.kind === 'goal-cheer' && !['goal', 'offside'].includes(action.outcome)) continue;
+    const score = (line.actorId !== undefined ? 4 : 0) + (!goalCue && !offsideRunnerCue && line.targetId !== undefined ? 2 : 0);
+    if (score > bestScore || (score === bestScore && index > bestIndex)) {
+      bestIndex = index;
+      bestScore = score;
+    }
+  }
+  return bestIndex;
+}
+
+/** Select only engine actions explicitly represented by commentary cues. */
+export function narratedActionIndexes(
+  lines: readonly Pick<OpenFootballNarrationCue, 'moment' | 'kind' | 'actorId' | 'targetId'>[],
+  actions: readonly MatchVisualAction[],
+): number[] {
+  return [...new Set(lines.map((line) => findNarrationActionIndex(line, actions)).filter((index) => index >= 0))].sort((a, b) => a - b);
 }
 
 /** Keep distinct same-moment events on their own visual timestamps. */

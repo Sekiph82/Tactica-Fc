@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MatchPitchSnapshot, MatchVisualAction } from '../src/game/types';
-import { OpenFootballStateTimeline, toOpenFootballBallTracks, toOpenFootballNarrationTracks, toOpenFootballPlayerTracks, toOpenFootballRecordingEvents } from '../src/ui/openFootballRecording';
+import { findNarrationActionIndex, narratedActionIndexes, OpenFootballStateTimeline, toOpenFootballBallTracks, toOpenFootballNarrationTracks, toOpenFootballPlayerTracks, toOpenFootballRecordingEvents } from '../src/ui/openFootballRecording';
 
 function action(overrides: Partial<MatchVisualAction> = {}): MatchVisualAction {
   return {
@@ -85,6 +85,22 @@ describe('TACTICA to Open Football viewer recording adapter', () => {
       { at: 252000, moment: 50, minute: 45, text: 'Semenyo ortasını Haaland’ye gönderiyor.', hg: 0, ag: 0 },
       { at: 253100, moment: 50, minute: 45, text: 'GOOOL! Haaland kafayla ağlarda! · Wolves 0-1 Man City', hg: 0, ag: 1 },
     ]);
+  });
+
+  it('binds same-moment narration to its action kind and players, not the first action in that moment', () => {
+    const actions = [
+      action({ kind: 'throughBall', actor: 3, target: 8, outcome: 'complete' }),
+      action({ kind: 'shot', actor: 8, target: 22, outcome: 'goal' }),
+    ];
+    expect(findNarrationActionIndex({ moment: 50, kind: 'goal-header', actorId: 8, targetId: 3 }, actions)).toBe(1);
+    expect(findNarrationActionIndex({ moment: 50, kind: 'throughball', actorId: 3, targetId: 8 }, actions)).toBe(0);
+    expect(findNarrationActionIndex({ moment: 50, kind: 'offside', actorId: 8 }, [action({ kind: 'throughBall', actor: 3, target: 8, outcome: 'offside' })])).toBe(0);
+    expect(narratedActionIndexes([
+      { moment: 50, kind: 'yellow', actorId: 11 },
+      { moment: 50, kind: 'throughball', actorId: 3, targetId: 8 },
+      { moment: 50, kind: 'goal-header', actorId: 8 },
+      { moment: 50, kind: 'score' },
+    ], actions)).toEqual([0, 1]);
   });
 
   it('translates a blocked shot into the viewer contact cue at the engine event time and location', () => {

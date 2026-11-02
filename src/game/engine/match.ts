@@ -357,7 +357,7 @@ export class MatchSim {
   }
   private line(k: string, a?: SP | null, b?: SP | null, hi = false) {
     if (!this.opts.commentary) return;
-    this.commentary.push({ m: this.minute, moment: this.moment, k, a: a ? name(a.p) : undefined, b: b ? name(b.p) : undefined, t: a ? a.team : undefined, hi });
+    this.commentary.push({ m: this.minute, moment: this.moment, k, a: a ? name(a.p) : undefined, b: b ? name(b.p) : undefined, aId: a?.p.id, bId: b?.p.id, t: a ? a.team : undefined, hi });
   }
 
   private pitchPlayers(includeCenters = false) {

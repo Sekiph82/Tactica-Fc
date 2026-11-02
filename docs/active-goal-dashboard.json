@@ -1,8 +1,8 @@
 {
   "project": "TACTICA FC",
   "goal": "CM tarzı menajerlik kariyeri ve güvenilir canlı maç izleyicisi",
-  "updatedAt": "2026-11-02T13:30:00+03:00",
-  "focus": "M05-S02-T08 · Sabit taktik kadrajını GPU destekli gerçek maç ekranında görsel olarak kabul et.",
+  "updatedAt": "2026-11-02T13:55:00+03:00",
+  "focus": "M05-S03-T03/T07 · Olay ve oyuncu kimliğiyle eşlenen anlatımı gerçek maçta görsel kabul et.",
   "items": [
     {
       "id": "career-foundation",
@@ -14,13 +14,13 @@
       "id": "match-viewer",
       "status": "in-progress",
       "title": "Canlı maç izleyicisi",
-      "detail": "Akış köprüsü tüm engine snapshot'larından 22 oyuncu ve top izlerini, aksiyon yolu önceliğini ve farklı zamanlı anlatımları taşıyor. Önceki turda 103/103 test, typecheck, build ve izole 1× kısa canlı akış geçti. Bu turda TACTICA gömülü viewer için ekran oranına göre hesaplanan sabit üstten tam saha kadrajı eklendi; kamera yakın top takibine geçmiyor. Kadraj Rust testleri 3/3, maç/engine testleri 29/29, typecheck ve üretim build'i geçti; yeni WASM ve public dosyaları eşitlendi. Headless QA GPU'su Bevy renderer'ını başlatamadığı için 22 oyuncu, iki kale ve gol teması gerçek GPU'da görsel kabul bekliyor. Renkler kullanıcı tarafından kabul edildi."
+      "detail": "Akış köprüsü tüm engine snapshot'larından 22 oyuncu ve top izlerini taşıyor; TACTICA için sabit tam saha kadrajı kullanıyor. Anlatım aynı andaki ilk klibe kör bağlanmıyor: olay türü ve engine oyuncu kimlikleriyle eşleşen aksiyon aranıyor; eşleşmeyen klipler çıkarılıyor; kalan aksiyonların timestamp pencereleri narration ile aynı sıradan hesaplanıyor. Recording testleri 10/10, tam Vitest 104/104 (15s test timeout), uygulama TypeScript ve üretim build'i geçti. Gerçek GPU'da 22 oyuncu/iki kale kadrajı, metin-top temas senkronu ve gol görüntüsü hâlâ görsel kabul bekliyor. Forma renkleri kullanıcı tarafından kabul edildi; renk değişikliği gerekmiyor."
     },
     {
       "id": "movement",
       "status": "open",
       "title": "Oyuncu hareketi ve kamera",
-      "detail": "TACTICA gömülü izleyici üstten sabit taktik kadrajına geçti; kamera yüksekliği ekran oranı ve aktif lens ile tam saha/dört kenar payını sığdırıyor. Yayın kamerasının topu takip kaynaklı kırpması TACTICA modunda devre dışı; Open Football'ın legacy kamerası varsayılan kalıyor. Dev/build/open-football öncesi public viewer otomatik eşitleniyor. Gerçek GPU'da tüm oyuncular, iki kale ve aksiyon okunaklılığı görsel kabul bekliyor. Takım renkleri kullanıcı tarafından kabul edildi."
+      "detail": "TACTICA gömülü izleyici üstten sabit taktik kadrajı kullanıyor; kamera yüksekliği ekran oranına göre tam saha ve payları sığdırıyor. Narration/aksiyon eşleştirmesi event kind + actor/target kimlikleri kullanıyor ve alakasız same-moment aksiyon kliplerini dışlıyor. Kod testleri ve derleme geçti. Gerçek GPU'da tüm 22 oyuncu, iki kale, top teması/anlatım ve gol animasyonu görsel kabul bekliyor. Forma renkleri kullanıcı tarafından kabul edildi."
     },
     {
       "id": "transfer-replay",

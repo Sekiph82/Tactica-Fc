@@ -741,6 +741,9 @@ export interface CommentaryLine {
   k: string;
   a?: string;
   b?: string;
+  /** Engine identities let the viewer choose this line's action when one moment has several. */
+  aId?: number;
+  bId?: number;
   t?: number;
   hi?: boolean;
 }
