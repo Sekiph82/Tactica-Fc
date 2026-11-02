@@ -10,7 +10,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-const SCHEMA_VERSION: u32 = 10;
+const SCHEMA_VERSION: u32 = 11;
 const FILE_NAME: &str = "manager-career.jsonl";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -43,6 +43,10 @@ pub struct ManagerCareerSnapshot {
     pub player_training: HashMap<u32, String>,
     #[serde(default)]
     pub listed_player_ids: Vec<u32>,
+    /// Latest manager request to list or unlist a player, replayed if the
+    /// full world save has not yet captured the squad change.
+    #[serde(default)]
+    pub pending_transfer_list_updates: HashMap<u32, bool>,
     /// Durable manager answers that must be replayed if the full world save
     /// has not yet captured the corresponding transfer decision.
     #[serde(default)]
@@ -234,10 +238,30 @@ impl ManagerCareerStore {
         Ok(())
     }
 
+    pub fn queue_transfer_list_update(
+        &self,
+        team_id: u32,
+        player_id: u32,
+        listed: bool,
+    ) -> io::Result<()> {
+        self.update_snapshot(team_id, |snapshot| {
+            if listed {
+                if !snapshot.listed_player_ids.contains(&player_id) {
+                    snapshot.listed_player_ids.push(player_id);
+                }
+            } else {
+                snapshot.listed_player_ids.retain(|id| *id != player_id);
+            }
+            snapshot.pending_transfer_list_updates.insert(player_id, listed);
+        })?;
+        Ok(())
+    }
+
     pub fn clear_pending_transfer_journal(&self, team_id: u32) -> io::Result<()> {
         self.update_snapshot(team_id, |snapshot| {
             snapshot.pending_transfer_responses.clear();
             snapshot.pending_transfer_negotiations.clear();
+            snapshot.pending_transfer_list_updates.clear();
         })?;
         Ok(())
     }
@@ -269,6 +293,72 @@ impl ManagerCareerStore {
 }
 
 impl ManagerCareerSnapshot {
+    /// Replay manager list/unlist actions after loading the last full world
+    /// save. Applying the desired state makes this safe to run more than once.
+    pub fn apply_pending_transfer_list_updates(
+        &self,
+        sim: &mut core::SimulatorData,
+        team_id: u32,
+    ) -> usize {
+        let Some(team) = sim
+            .team(team_id)
+            .filter(|team| team.team_type == core::TeamType::Main)
+        else {
+            return 0;
+        };
+        let date = sim.date.date();
+        let club_score = team.reputation.market_value_score();
+        let league_reputation = team.league_reputation;
+        let updates = self.pending_transfer_list_updates.clone();
+        let mut applied = 0;
+
+        for (player_id, should_be_listed) in updates {
+            let Some((currently_listed, asking_price, on_loan)) = sim
+                .team(team_id)
+                .and_then(|team| team.players.players.iter().find(|player| player.id == player_id))
+                .map(|player| (
+                    player.statuses.has(core::PlayerStatusType::Lst),
+                    player.value(date, league_reputation, club_score),
+                    player.is_on_loan(),
+                ))
+            else {
+                continue;
+            };
+            if on_loan || currently_listed == should_be_listed {
+                continue;
+            }
+
+            let Some(team) = sim.team_mut(team_id) else { continue; };
+            let Some(player) = team.players.players.iter_mut().find(|player| player.id == player_id) else {
+                continue;
+            };
+            if should_be_listed {
+                player.statuses.add(date, core::PlayerStatusType::Lst);
+                if let Some(contract) = player.contract.as_mut() {
+                    contract.is_transfer_listed = true;
+                }
+            } else {
+                player.statuses.remove(core::PlayerStatusType::Lst);
+                if let Some(contract) = player.contract.as_mut() {
+                    contract.is_transfer_listed = false;
+                }
+            }
+            if should_be_listed {
+                team.add_player_to_transfer_list(
+                    player_id,
+                    core::shared::currency::CurrencyValue::new(
+                        asking_price,
+                        core::shared::currency::Currency::Usd,
+                    ),
+                );
+            } else {
+                team.transfer_list.remove(player_id);
+            }
+            applied += 1;
+        }
+        applied
+    }
+
     /// Replay manager-created offers and counter-offers after loading the last
     /// full world save. A more advanced or completed world negotiation wins.
     pub fn apply_pending_transfer_negotiations(

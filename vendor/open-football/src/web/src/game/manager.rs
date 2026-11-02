@@ -883,13 +883,11 @@ pub async fn toggle_transfer_list_action(
     }
     let listed = player.statuses.has(core::PlayerStatusType::Lst);
     let asking_price = player.value(date, league_rep, club_score);
-    if let Err(error) = state.manager_career_store.update_snapshot(team_id, |snapshot| {
-        if listed {
-            snapshot.listed_player_ids.retain(|id| *id != player_id);
-        } else if !snapshot.listed_player_ids.contains(&player_id) {
-            snapshot.listed_player_ids.push(player_id);
-        }
-    }) {
+    if let Err(error) = state.manager_career_store.queue_transfer_list_update(
+        team_id,
+        player_id,
+        !listed,
+    ) {
         log::error!("failed to persist manager transfer list: {error}");
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
