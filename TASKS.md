@@ -198,6 +198,7 @@ TACTICA FC; CM0102/CM2010 tarzında kariyer, kulüp yönetimi, haberler, antrenm
 - [x] M05-S01-T06 Stale/overlap batch'i reddet; host time monotonic ve accepted frame'e göre ilerlesin.
 - [x] M05-S01-T07 Gecikmiş poll'daki tüm frame'leri sequence cursor ile toparla; track history ve allocation'ı sınırla.
 - [x] M05-S01-T08 Son viewer frame'i ve full-time raporu tam aynı timestamp'te sırala.
+- [ ] M05-S01-T09 Viewer Bevy süreci başladıktan sonraki timeout/retry için güvenli yaşam döngüsü kur; eski viewer'ı durdur/yeniden kullan, aynı maç state'ini koru ve ikinci eşzamanlı app açma.
 
 ## Sprint M05-S02 — Eylem ve hareket
 
@@ -219,7 +220,7 @@ TACTICA FC; CM0102/CM2010 tarzında kariyer, kulüp yönetimi, haberler, antrenm
 - [ ] M05-S03-T05 1x/2x/4x/8x hızlarda viewer clock ve engine moment senkronunu kaydet.
 - [ ] M05-S03-T06 Tab arka plana alınma/geri dönme, polling backpressure, CPU, heap ve WASM performansını incele.
 - [ ] M05-S03-T07 Gerçek aksiyon ve kabul ekran görüntüsü/video kanıtını kaydet; enjekte edilmiş test karelerini gerçek maç kanıtı sayma.
-- [ ] M05-S03-T08 Bir akış sorunu bulunursa önce engine, event adapter, network/frame cursor ve renderer katmanından hangisinin sebep olduğunu izole et. **Önceki deneme başarı değil:** İzole kariyer 1 Temmuz→8 Temmuz 150 saniye sürdü; Fulham'ın Ederson teklifi gün ilerlemesini durdurduğu için fixture'a varılmadı. **Kaynak bulgusu:** `openFootballRecording.ts` içinde tuple dizisi `never[]` çıkarımına neden oluyordu; açık `[number, string][]` anotasyonu eklendi ve `npx tsc --noEmit -p tsconfig.app.json` başarılı oldu. Tam maç runtime kabulü hâlâ açık.
+- [ ] M05-S03-T08 Bir akış sorunu bulunursa önce engine, event adapter, network/frame cursor ve renderer katmanından hangisinin sebep olduğunu izole et. **Önceki deneme başarı değil:** İzole kariyer 1 Temmuz→8 Temmuz 150 saniye sürdü; Fulham'ın Ederson teklifi gün ilerlemesini durdurduğu için fixture'a varılmadı. **Kaynak bulguları:** `openFootballRecording.ts` tuple çıkarımı düzeltildi; typecheck başarılı. `MatchViewer.start()` Bevy app'ini başlatıyor ve upstream wasm `stop/destroy` export'u sunmuyor; timeout sonrası React retry'si ekranı yeniden kurabiliyor ama önceki app'in durduğunu kanıtlamıyor. Güvenli retry M05-S01-T09'da açık; tam maç runtime kabulü hâlâ açık.
 
 ---
 
