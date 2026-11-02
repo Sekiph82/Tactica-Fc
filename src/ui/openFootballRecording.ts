@@ -1,4 +1,6 @@
 import type { MatchVisualAction } from '../game/types';
+import type { MatchPitchSnapshot } from '../game/types';
+import { formationLayout } from '../game/match-pitch';
 import { OPEN_FOOTBALL_MATCH_DURATION_MS, openFootballTimestamp } from './openFootballTimeline';
 const ACTION_ATTITUDE_MS = 2_400;
 
@@ -12,6 +14,73 @@ export interface OpenFootballActionRecording {
   events: OpenFootballRecordingEvent[];
   /** Viewer wire shape: state transitions are [timestamp, "Group: State"]. */
   states: Record<number, [number, string][]>;
+}
+
+export interface OpenFootballNarrationCue {
+  moment: number;
+  atMoment?: number;
+  atTimeMs?: number;
+  minute: number;
+  text: string;
+  hg: number;
+  ag: number;
+}
+
+/** Keep distinct same-moment events on their own visual timestamps. */
+export function toOpenFootballNarrationTracks(
+  lines: readonly OpenFootballNarrationCue[],
+  totalMoments: number,
+): { at: number; moment: number; minute: number; text: string; hg: number; ag: number }[] {
+  const cues = new Map<string, { at: number; moment: number; minute: number; text: string; hg: number; ag: number }>();
+  for (const line of lines) {
+    const at = line.atTimeMs ?? openFootballTimestamp(line.atMoment ?? line.moment, totalMoments);
+    const key = `${line.moment}:${at}`;
+    const current = cues.get(key);
+    cues.set(key, {
+      at,
+      moment: line.moment,
+      minute: line.minute,
+      text: current ? `${current.text} · ${line.text}` : line.text,
+      hg: line.hg,
+      ag: line.ag,
+    });
+  }
+  return [...cues.values()].sort((left, right) => left.at - right.at || left.moment - right.moment);
+}
+
+/** Keep every player visible, using only the authoritative snapshots attached to narrated scenes. */
+export function toOpenFootballPlayerTracks(
+  snapshots: readonly MatchPitchSnapshot[],
+  totalMoments: number,
+): Record<number, [number, number, number][]> {
+  const tracks: Record<number, [number, number, number][]> = {};
+  for (const snapshot of snapshots) {
+    const time = openFootballTimestamp(snapshot.moment, totalMoments);
+    const positions = formationLayout(snapshot).pos;
+    for (const [playerId, [x, y]] of positions) {
+      const track = tracks[playerId] ??= [];
+      const sample: [number, number, number] = [time, Math.max(0, Math.min(840, x * 8.4)), Math.max(0, Math.min(545, y * 5.45))];
+      if (track.at(-1)?.[0] === time) track[track.length - 1] = sample;
+      else track.push(sample);
+    }
+  }
+  return tracks;
+}
+
+/** Keep the ball on the engine's possession/contact point between narrated actions. */
+export function toOpenFootballBallTracks(
+  snapshots: readonly MatchPitchSnapshot[],
+  totalMoments: number,
+): [number, number, number, number][] {
+  return snapshots.map((snapshot) => {
+    const [x, y] = formationLayout(snapshot).ball;
+    return [
+      openFootballTimestamp(snapshot.moment, totalMoments),
+      Math.max(0, Math.min(840, x * 8.4)),
+      Math.max(0, Math.min(545, y * 5.45)),
+      0,
+    ];
+  });
 }
 
 /**
@@ -66,7 +135,30 @@ export function actionMomentWindows(actions: readonly MatchVisualAction[]): { st
     offsets.set(action.moment, index + 1);
     const start = action.moment + index / count;
     const end = action.moment + (index + 1) / count;
-    return { start, event: (start + end) / 2, end };
+    // A single action belongs to the exact engine moment. For multiple actions
+    // in one step, use the start of each ordered sub-window so captions, goals,
+    // and ball contacts do not drift into the following match minute.
+    return { start, event: start, end };
+  });
+}
+
+/** Convert simulation actions into ordered, continuous video clips on the match clock. */
+export function actionPresentationWindows(
+  actions: readonly MatchVisualAction[],
+  totalMoments: number,
+): { start: number; event: number; end: number }[] {
+  const engineWindows = actionMomentWindows(actions);
+  let lastEnd = 0;
+  return actions.map((action, index) => {
+    const base = openFootballTimestamp(engineWindows[index].start, totalMoments);
+    const start = Math.max(base, lastEnd);
+    const duration = action.kind === 'shot' || action.kind === 'cross' ? 1_100
+      : action.kind === 'longBall' || action.kind === 'throughBall' ? 1_000
+      : action.kind === 'pass' ? 850
+      : 700;
+    const end = start + duration;
+    lastEnd = end;
+    return { start, event: start + Math.min(300, duration * 0.35), end };
   });
 }
 

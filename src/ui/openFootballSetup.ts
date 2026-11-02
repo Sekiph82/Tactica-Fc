@@ -24,6 +24,25 @@ function cssColor(value: string | undefined, fallback: string): string {
   return value.startsWith('#') || value.startsWith('rgb') ? value : `#${value}`;
 }
 
+function rgb(value: string): [number, number, number] | undefined {
+  const hex = value.trim().match(/^#?([\da-f]{3}|[\da-f]{6})$/i)?.[1];
+  if (!hex) return undefined;
+  const full = hex.length === 3 ? [...hex].map((channel) => channel + channel).join('') : hex;
+  return [0, 2, 4].map((offset) => Number.parseInt(full.slice(offset, offset + 2), 16)) as [number, number, number];
+}
+
+function colorDistance(left: string, right: string): number {
+  const a = rgb(left), b = rgb(right);
+  return a && b ? Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) : 0;
+}
+
+function foregroundFor(background: string): string {
+  const color = rgb(background);
+  if (!color) return '#111111';
+  const luminance = color[0] * 0.299 + color[1] * 0.587 + color[2] * 0.114;
+  return luminance > 150 ? '#111111' : '#ffffff';
+}
+
 /**
  * Build the small, presentation-only team sheet and opening frame the Open
  * Football viewer needs. MatchSim remains authoritative; the viewer never
@@ -67,6 +86,18 @@ export function makeOpenFootballSetup(game: GameState, fixture: Fixture, sim: Ma
 
   const home = side(0, fixture.home);
   const away = side(1, fixture.away);
+  const homeShirt = home.color.background;
+  let awayShirt = away.color.background;
+  if (colorDistance(homeShirt, awayShirt) < 105) {
+    const awaySecondary = cssColor(game.clubs[fixture.away]?.colors[1], '#ffffff');
+    const alternateKit = ['#ffffff', '#111111', '#c8102e', '#003399', '#ffd200', '#f68b1f', '#5c2d91', '#6cabdd']
+      .filter((candidate) => colorDistance(candidate, homeShirt) >= 105)
+      .sort((left, right) => colorDistance(right, homeShirt) - colorDistance(left, homeShirt));
+    awayShirt = colorDistance(homeShirt, awaySecondary) >= 105
+      ? awaySecondary
+      : alternateKit[0] ?? '#ffffff';
+    away.color = { background: awayShirt, foreground: foregroundFor(awayShirt) };
+  }
   return {
     initialSnapshot: sim.pitch(),
     totalMoments: sim.totalMoments,

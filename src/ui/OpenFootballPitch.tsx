@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { MatchPitchSnapshot, MatchVisualAction } from '../game/types';
 import { formationLayout } from '../game/match-pitch';
-import { actionMomentWindows, OpenFootballStateTimeline, toOpenFootballRecordingEvents } from './openFootballRecording';
+import { actionMomentWindows, actionPresentationWindows, OpenFootballStateTimeline, toOpenFootballBallTracks, toOpenFootballNarrationTracks, toOpenFootballPlayerTracks, toOpenFootballRecordingEvents } from './openFootballRecording';
 import type { OpenFootballSetup } from './openFootballSetup';
 import { OPEN_FOOTBALL_MATCH_DURATION_MS, openFootballTimestamp } from './openFootballTimeline';
 
@@ -15,6 +15,7 @@ export interface OpenFootballBridge {
     snapshots: readonly MatchPitchSnapshot[],
     goals: readonly { player_id: number; time: number; is_auto_goal: boolean }[],
     actions: readonly MatchVisualAction[],
+    narration: readonly { moment: number; atMoment?: number; atTimeMs?: number; minute: number; text: string; hg: number; ag: number }[],
   ): void;
   setPlaying(playing: boolean): void;
   setSpeed(speed: number): void;
@@ -25,7 +26,7 @@ export interface OpenFootballBridge {
 type ViewerModule = {
   default: (input: URL) => Promise<unknown>;
   MatchViewer: {
-    start: (config: string) => boolean;
+    start: (config: string) => void;
     stop: (sessionId: number) => void;
     isRunning: (sessionId: number) => boolean;
     pushRecording: (recording: string) => void;
@@ -59,6 +60,51 @@ function point([x, y]: [number, number]): [number, number] {
   return [Math.max(0, Math.min(840, x * 8.4)), Math.max(0, Math.min(545, y * 5.45))];
 }
 
+/**
+ * Keep the ball visibly in flight between the real action endpoints. The
+ * engine decides every endpoint and outcome; these extra samples only shape
+ * the path the viewer draws between them.
+ */
+function ballPath(action: MatchVisualAction, start: number, end: number) {
+  const from = point(action.ballFrom ?? action.from);
+  const to = point(action.ballTo ?? action.to);
+  const lift = action.kind === 'cross' || action.kind === 'longBall' ? 3.2 : action.kind === 'shot' ? 1.35 : 0.12;
+  const distanceMeters = Math.hypot(to[0] - from[0], to[1] - from[1]) * 0.125;
+  const targetPace = action.kind === 'shot' ? 25 : action.kind === 'longBall' ? 22 : action.kind === 'cross' ? 20 : 18;
+  // Open Football reads ball contacts on 30 ms probes. A dense, plausible
+  // track lets it infer the kick, flight and reception instead of treating
+  // one large endpoint jump as a placement/teleport.
+  const launch = Math.ceil((start + 100) / 30) * 30;
+  const duration = Math.min(Math.max(30, end - launch), Math.max(300, distanceMeters / targetPace * 1000));
+  const arrival = launch + duration;
+  const firstProbe = launch;
+  const lastProbe = Math.floor(arrival / 30) * 30;
+  const span = Math.max(30, lastProbe - firstProbe);
+  const samples: { moment: number; point: [number, number]; height: number }[] = [];
+  // A short, stationary pre-contact run gives the viewer enough history for
+  // its 150 ms backswing detector. The ball starts at the real action origin.
+  for (let time = Math.max(0, firstProbe - 180); time < firstProbe; time += 30) {
+    samples.push({ moment: time, point: from, height: 0 });
+  }
+  for (let time = firstProbe; time <= lastProbe; time += 30) {
+    const progress = Math.max(0, Math.min(1, (time - firstProbe) / span));
+    // Smooth acceleration off the boot and deceleration into the receiver.
+    const eased = progress * progress * (3 - 2 * progress);
+    const arc = 4 * progress * (1 - progress) * lift;
+    samples.push({
+      moment: time,
+      point: [from[0] + (to[0] - from[0]) * eased, from[1] + (to[1] - from[1]) * eased],
+      height: arc,
+    });
+  }
+  samples.push({ moment: arrival, point: to, height: 0 });
+  for (let time = Math.ceil(arrival / 30) * 30; time < end; time += 30) {
+    samples.push({ moment: time, point: to, height: 0 });
+  }
+  samples.push({ moment: end, point: to, height: 0 });
+  return { samples, arrival };
+}
+
 export function OpenFootballPitch({
   id,
   setup,
@@ -67,6 +113,7 @@ export function OpenFootballPitch({
   onBridge,
   onReady,
   onProgress,
+  onNarration,
   onFailure,
 }: {
   id: number;
@@ -76,11 +123,16 @@ export function OpenFootballPitch({
   onBridge: (bridge: OpenFootballBridge | null) => void;
   onReady: (ready: boolean) => void;
   onProgress: (progress: OpenFootballProgress) => void;
+  onNarration: (line: { text: string; minute: number; moment: number; hg: number; ag: number } | null) => void;
   onFailure: () => void;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const bridgeRef = useRef<OpenFootballBridge | null>(null);
+  const playingRef = useRef(playing);
+  const speedRef = useRef(speed);
   const [ready, setReady] = useState(false);
+  playingRef.current = playing;
+  speedRef.current = speed;
 
   useEffect(() => {
     let cancelled = false;
@@ -93,6 +145,12 @@ export function OpenFootballPitch({
     let readyTimeout: number | undefined;
     let bridge: OpenFootballBridge | null = null;
     const attitudeTimeline = new OpenFootballStateTimeline();
+    const narrationTracks: { at: number; moment: number; minute: number; text: string; hg: number; ag: number }[] = [];
+    let playbackHead = 0;
+    let hostCeiling = 0;
+    let lastClock = performance.now();
+    let lastNarrationKey = '';
+    let narrationFrame = 0;
     const progress = (event: Event) => {
       if (cancelled) return;
       const detail = (event as CustomEvent<Partial<OpenFootballProgress>>).detail;
@@ -136,111 +194,142 @@ export function OpenFootballPitch({
       const config = makeConfig(initial, setup, `#tactica-of-${id}`, sessionId);
       config.renderer = await preferredRenderer();
       if (cancelled || timedOut || !canvas.current) return;
-      viewerStarted = loadedViewer.MatchViewer.start(JSON.stringify(config));
-      if (!viewerStarted) throw new Error('The match viewer refused to start because another viewer is still active.');
+      loadedViewer.MatchViewer.start(JSON.stringify(config));
+      viewerStarted = true;
       loadedViewer.MatchViewer.setHostTime(0);
+
+      const followNarration = (now: number) => {
+        const elapsed = Math.max(0, Math.min(100, now - lastClock));
+        lastClock = now;
+        if (playingRef.current) playbackHead = Math.min(hostCeiling + 125, playbackHead + elapsed * speedRef.current);
+        let active: typeof narrationTracks[number] | undefined;
+        for (const cue of narrationTracks) {
+          if (cue.at > playbackHead) break;
+          active = cue;
+        }
+        const key = active ? `${active.at}:${active.text}` : '';
+        if (key !== lastNarrationKey) {
+          lastNarrationKey = key;
+          onNarration(active ? { text: active.text, minute: active.minute, moment: active.moment, hg: active.hg, ag: active.ag } : null);
+        }
+        if (!cancelled) narrationFrame = window.requestAnimationFrame(followNarration);
+      };
+      narrationFrame = window.requestAnimationFrame(followNarration);
 
       let previousSnapshotTime = 0;
       let previousHostTime = 0;
       let previousBallTime = 0;
       const previousPlayerTimes = new Map<number, number>();
-      const previousPlayerPositions = new Map<number, { team: number; x: number; y: number; moment: number }>();
-      const lastMovementCueTimes = new Map<number, number>();
-      let previousBallPosition: { x: number; y: number; moment: number } | undefined;
+      const presentedPlayerPositions = new Map<number, [number, number]>(
+        [...formationLayout(setup.initialSnapshot).pos].map(([pid, pos]) => [pid, point(pos)]),
+      );
       bridge = {
-        push(snapshots, goals, actions) {
+        push(snapshots, goals, actions, narration) {
           if (cancelled || snapshots.length === 0) return;
+          const narratedMoments = new Set(narration.map((line) => line.moment));
+          // Keep authoritative possession and off-ball movement flowing between
+          // commentary events. Explicit actions below still define the narrated
+          // scene's ball path and contact points.
+          const narratedSnapshots = snapshots;
+          const narratedActions = actions.filter((action) => narratedMoments.has(action.moment));
+          narrationTracks.push(...toOpenFootballNarrationTracks(narration, setup.totalMoments));
+          narrationTracks.sort((left, right) => left.at - right.at);
+          if (narratedSnapshots.length === 0 && narratedActions.length === 0 && narration.length === 0) return;
           const ball: number[][] = [];
           const players: Record<number, number[][]> = {};
           // A step may resolve a pass and shot (or a cross and header) before
           // producing its single final snapshot. Spread those action paths
           // through that step so the viewer receives each real contact in order.
-          const orderedActions = actions
+          const orderedActions = narratedActions
             .map((action, index) => ({ action, index }))
             .sort((left, right) => left.action.moment - right.action.moment || left.index - right.index)
             .map(({ action }) => action);
-          const actionWindows = actionMomentWindows(orderedActions);
-          const actionMoments = actionWindows.map((window) => window.event);
-          const actionEnds = new Set(orderedActions.map((action) => action.moment + 1));
-          const ballSamples: { moment: number; point: [number, number] }[] = [];
-          const playerSamples: { id: number; moment: number; point: [number, number] }[] = [];
-          const movementStates: Record<number, [number, string][]> = {};
-          const orderedSnapshots = snapshots
+          const actionWindows = actionPresentationWindows(orderedActions, setup.totalMoments);
+          const actionMoments = actionMomentWindows(orderedActions).map((window) => window.event);
+          const ballSamples: { moment: number; point: [number, number]; height?: number; priority: number }[] = [];
+          const playerSamples: { id: number; time: number; point: [number, number]; priority: number }[] = [];
+          const addSceneStart = (id: number, time: number, next: [number, number]) => {
+            const lastTime = previousPlayerTimes.get(id) ?? 0;
+            const lastPosition = presentedPlayerPositions.get(id);
+            const holdUntil = Math.max(lastTime, time - 1);
+            if (lastPosition && holdUntil > lastTime) playerSamples.push({ id, time: holdUntil, point: lastPosition, priority: 0 });
+            playerSamples.push({ id, time, point: next, priority: 2 });
+            presentedPlayerPositions.set(id, next);
+          };
+          const orderedSnapshots = narratedSnapshots
             .map((snapshot, index) => ({ snapshot, index }))
             .sort((left, right) => left.snapshot.moment - right.snapshot.moment || left.index - right.index)
             .map(({ snapshot }) => snapshot);
+          // Record the full lineup at each narrated scene. Without these tracks
+          // the viewer drops players that are not the current action's actor
+          // or receiver, leaving only a handful of figures on the pitch.
+          const scenePlayerTracks = toOpenFootballPlayerTracks(orderedSnapshots, setup.totalMoments);
+          for (const [rawId, samples] of Object.entries(scenePlayerTracks)) {
+            const playerId = Number(rawId);
+            for (const [time, x, y] of samples) {
+              playerSamples.push({ id: playerId, time, point: [x, y], priority: 0 });
+              presentedPlayerPositions.set(playerId, [x, y]);
+            }
+          }
+          for (const [time, x, y, height] of toOpenFootballBallTracks(orderedSnapshots, setup.totalMoments)) {
+            ballSamples.push({ moment: time, point: [x, y], height, priority: 0 });
+          }
           for (const [index, action] of orderedActions.entries()) {
             const window = actionWindows[index];
-            const startMoment = window.start + 0.001;
-            if (action.ballFrom) ballSamples.push({ moment: startMoment, point: point(action.ballFrom) });
-            if (action.ballTo) ballSamples.push({ moment: window.end, point: point(action.ballTo) });
-            playerSamples.push({ id: action.actor, moment: startMoment, point: point(action.from) });
-            if (['dribble', 'tackle', 'turnover', 'deflection', 'looseBall'].includes(action.kind)) {
-              playerSamples.push({ id: action.actor, moment: window.end, point: point(action.to) });
+            const startTime = window.start;
+            const endTime = window.end;
+            const path = ballPath(action, startTime, endTime);
+            for (const sample of path.samples) {
+              ballSamples.push({ moment: sample.moment, point: sample.point, height: sample.height, priority: 1 });
             }
-            if (action.target !== undefined && ['pass', 'longBall', 'throughBall', 'cross'].includes(action.kind)) {
-              playerSamples.push({ id: action.target, moment: window.end, point: point(action.to) });
+            addSceneStart(action.actor, startTime, point(action.from));
+            if (['dribble', 'tackle', 'turnover', 'deflection', 'looseBall'].includes(action.kind)) {
+              playerSamples.push({ id: action.actor, time: endTime, point: point(action.to), priority: 2 });
+              presentedPlayerPositions.set(action.actor, point(action.to));
+            }
+            if (action.target !== undefined) {
+              const targetStart = startTime;
+              const targetPosition = presentedPlayerPositions.get(action.target) ?? point(action.to);
+              addSceneStart(action.target, targetStart, targetPosition);
+              const arrivalTime = ['pass', 'longBall', 'throughBall', 'cross'].includes(action.kind)
+                ? path.arrival
+                : endTime;
+              playerSamples.push({ id: action.target, time: arrivalTime, point: point(action.to), priority: 2 });
+              presentedPlayerPositions.set(action.target, point(action.to));
             }
           }
           for (const snapshot of orderedSnapshots) {
             const time = openFootballTimestamp(snapshot.moment, setup.totalMoments);
             if (time <= previousSnapshotTime) continue;
-            const layout = formationLayout(snapshot);
-            for (const [pid, pos] of layout.pos) {
-              playerSamples.push({ id: pid, moment: snapshot.moment, point: point(pos) });
-            }
-            const stepScale = 240 * (snapshot.moment - (previousBallPosition?.moment ?? snapshot.moment)) / Math.max(1, setup.totalMoments);
-            const movementThreshold = Math.max(0.12, stepScale * 0.3);
-            for (const player of snapshot.players) {
-              const current = layout.pos.get(player.id);
-              if (!current) continue;
-              const previous = previousPlayerPositions.get(player.id);
-              if (previous && snapshot.moment > previous.moment && !player.gk && player.id !== snapshot.holder) {
-                const attackDirection = player.team === 0 ? 1 : -1;
-                const forwardRun = player.team === snapshot.poss
-                  && (current[0] - previous.x) * attackDirection > movementThreshold;
-                const closingDown = player.team !== snapshot.poss && previousBallPosition
-                  && Math.hypot(previous.x - previousBallPosition.x, previous.y - previousBallPosition.y)
-                    - Math.hypot(current[0] - previousBallPosition.x, current[1] - previousBallPosition.y) > movementThreshold;
-                const cue = forwardRun ? 'Supporting Attack' : closingDown ? 'Pressing' : undefined;
-                const lastCueAt = lastMovementCueTimes.get(player.id) ?? -Infinity;
-                if (cue && time - lastCueAt >= 2_400) {
-                  (movementStates[player.id] ??= []).push([time, `TACTICA: ${cue}`]);
-                  lastMovementCueTimes.set(player.id, time);
-                }
-              }
-              previousPlayerPositions.set(player.id, { team: player.team, x: current[0], y: current[1], moment: snapshot.moment });
-            }
-            previousBallPosition = { x: layout.ball[0], y: layout.ball[1], moment: snapshot.moment };
-            if (!actionEnds.has(snapshot.moment)) ballSamples.push({ moment: snapshot.moment, point: point(layout.ball) });
             previousSnapshotTime = time;
           }
-          playerSamples.sort((a, b) => a.moment - b.moment);
+          playerSamples.sort((a, b) => a.time - b.time || b.priority - a.priority);
           for (const sample of playerSamples) {
-            const time = openFootballTimestamp(sample.moment, setup.totalMoments);
+            const time = sample.time;
             if (time <= (previousPlayerTimes.get(sample.id) ?? 0)) continue;
             (players[sample.id] ??= []).push([time, sample.point[0], sample.point[1]]);
             previousPlayerTimes.set(sample.id, time);
           }
-          ballSamples.sort((a, b) => a.moment - b.moment);
+          ballSamples.sort((a, b) => a.moment - b.moment || b.priority - a.priority);
           for (const sample of ballSamples) {
-            const time = openFootballTimestamp(sample.moment, setup.totalMoments);
+            const time = sample.moment;
             if (time <= previousBallTime) continue;
-            ball.push([time, sample.point[0], sample.point[1], 0]);
+            ball.push([time, sample.point[0], sample.point[1], sample.height ?? 0]);
             previousBallTime = time;
           }
           const { events, states } = toOpenFootballRecordingEvents(orderedActions, setup.totalMoments, actionMoments);
-          for (const [playerId, entries] of Object.entries(movementStates)) {
-            states[Number(playerId)] = [...entries, ...(states[Number(playerId)] ?? [])];
-          }
           const liveStates = attitudeTimeline.apply(states);
           if (ball.length || Object.keys(players).length || goals.length || events.length || Object.keys(liveStates).length) {
             loadedViewer.MatchViewer.pushRecording(JSON.stringify({ ball, players, goals, events, states: liveStates }));
             // Use the newest accepted snapshot, not the raw batch tail. Delayed
             // or reordered polls must never move the viewer's playback ceiling back.
-            if (previousSnapshotTime > previousHostTime) {
-              loadedViewer.MatchViewer.setHostTime(previousSnapshotTime);
-              previousHostTime = previousSnapshotTime;
+            const tracksEnd = Math.max(previousSnapshotTime, previousBallTime, ...previousPlayerTimes.values());
+            const cueEnd = Math.max(0, ...narration.map((line) => line.atTimeMs ?? openFootballTimestamp(line.atMoment ?? line.moment, setup.totalMoments)));
+            const batchCeiling = Math.max(tracksEnd, cueEnd);
+            if (batchCeiling > previousHostTime) {
+              hostCeiling = Math.max(hostCeiling, batchCeiling);
+              loadedViewer.MatchViewer.setHostTime(batchCeiling);
+              previousHostTime = batchCeiling;
             }
           }
         },
@@ -257,6 +346,7 @@ export function OpenFootballPitch({
     void start().catch(fail);
     return () => {
       cancelled = true;
+      if (narrationFrame) window.cancelAnimationFrame(narrationFrame);
       if (readyTimeout !== undefined) window.clearTimeout(readyTimeout);
       bridge?.setPlaying(false);
       if (viewerStarted && viewer && sessionId !== undefined) {
@@ -268,6 +358,7 @@ export function OpenFootballPitch({
       setReady(false);
       onReady(false);
       onBridge(null);
+      onNarration(null);
     };
     // This is a match-scoped WASM app. The prepared presentation setup is stable for its lifetime.
     // eslint-disable-next-line react-hooks/exhaustive-deps

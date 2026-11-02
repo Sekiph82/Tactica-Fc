@@ -14,7 +14,7 @@ export function FirstDay() {
   const [picked, setPicked] = useState<string[]>(() => ob?.needs ?? needs.slice(0, 2).map((n) => n.key));
   if (!ob) return null;
   const c = g.clubs[g.userClub];
-  if (ob.briefed && ob.plan) return <Briefing />;
+  if (ob.briefed && ob.plan && !ob.briefingDismissed) return <Briefing />;
   if (ob.briefed) return null;
   const done = [!!ob.weak, !!ob.style, !!ob.needs];
   const weak = needs[0];
@@ -61,12 +61,10 @@ export function FirstDay() {
 /** Assistentens oplæg – kan lukkes, når man har læst det */
 function Briefing() {
   const g = useGame()!;
-  const [open, setOpen] = useState(true);
   const plan = g.manager.onboard!.plan!;
   const asst = Object.values(g.staff).find((s) => s.club === g.userClub && s.role === 'assistant');
-  if (!open) return null;
   return (
-    <Panel title={t('onb.briefTitle', { name: asst ? `${asst.first} ${asst.last}` : t('onb.assistant') })} right={<button className="small" onClick={() => setOpen(false)}>{t('common.close')}</button>} className="onb">
+    <Panel title={t('onb.briefTitle', { name: asst ? `${asst.first} ${asst.last}` : t('onb.assistant') })} right={<button className="small" onClick={() => act({ t: 'onboard', step: 'dismissBrief' })}>{t('common.close')}</button>} className="onb">
       <ol className="onb-brief">
         <li>{t('onb.b.weak', { pos: t(`onb.need.${plan.weakest}`) })}</li>
         <li>{t('onb.b.style', { style: t(`onb.style.${plan.style}`), fit: plan.fit })}{plan.bestStyle !== plan.style ? ` ${t('onb.b.alt', { style: t(`onb.style.${plan.bestStyle}`) })}` : ` ${t('onb.b.good')}`}</li>

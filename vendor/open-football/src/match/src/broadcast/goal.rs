@@ -83,7 +83,7 @@ impl GoalShot {
     /// setting off. Measured over seven goals, the first of them is within
     /// five metres of another at +2 s and the pile-on is not worth looking at
     /// before then.
-    const NET_MS: f64 = 1_600.0;
+    const NET_MS: f64 = 5_000.0;
 
     /// Seconds for the shot to swing off the ball onto them, and to give it
     /// back.

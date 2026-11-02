@@ -32,8 +32,8 @@ export default defineConfig(({ command }) => ({
         background_color: '#08090c',
         display: 'standalone',
         icons: [
-          { src: 'tactica-brand/Tactica_FC_Black_Metal_192x192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-          { src: 'tactica-brand/Tactica_FC_Black_Metal_512x512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: 'tactica-brand/Tactica_FC_Black_Metal_192x192.png?v=26', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: 'tactica-brand/Tactica_FC_Black_Metal_512x512.png?v=26', sizes: '512x512', type: 'image/png', purpose: 'any' },
         ],
       },
       workbox: {

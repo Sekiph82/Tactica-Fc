@@ -10,7 +10,7 @@ import { session, skippedMatches, type LiveCmd } from '../../online/client';
 import { fixturesOn, gs, notify, squad } from '../../game/state';
 import type { MatchPitchSnapshot, MatchReport, MatchVisualAction, OppInstructions, OppKind, ShootoutKick } from '../../game/types';
 import { hasVisualQueueCapacity, pairVisualActionsWithSnapshot, type MatchVisualFrame } from '../../game/match-visual';
-import { actionMomentWindows } from '../openFootballRecording';
+import { actionPresentationWindows } from '../openFootballRecording';
 import { t } from '../../i18n';
 import { Bar, ClubLink, Crest, Panel, Pct, PlayerLink, posStr, Rating, Tabs } from '../components';
 import { useGame, useNav } from '../core';
@@ -28,10 +28,10 @@ import { OpenFootballPitch, type OpenFootballBridge, type OpenFootballProgress }
 import { makeOpenFootballSetup, type OpenFootballSetup } from '../openFootballSetup';
 import { openFootballPlaybackSpeed } from '../openFootballSpeed';
 import { OPEN_FOOTBALL_MATCH_DURATION_MS, OPEN_FOOTBALL_MAX_MATCH_DURATION_MS, openFootballMinuteTimestamp, openFootballShootoutDuration, openFootballTimestamp } from '../openFootballTimeline';
-import { statColors } from './matchColors';
+import { statColors, teamColors } from './matchColors';
 
 // Den igangværende kamp overlever navigation mellem skærme
-let live: { fixture: number; sim: MatchSim; viewerSetup: OpenFootballSetup; lines: { text: string; cls: string; m: number; k?: string }[]; consumed: number; visualQueue: MatchVisualFrame[]; visualSeen: number; viewerEventsSeen?: number; viewer?: OpenFootballBridge; viewerPrimed?: boolean; halfShown?: boolean; shotsSeen?: number; cornersSeen?: number; h2hInit?: boolean; evSeen?: number; h2h?: H2hState; ldSeen?: number; prevTab?: string; finishFrameSent?: boolean; finishPresentationReady?: boolean; finishPresentationTimer?: ReturnType<typeof setTimeout>; extraTimeDurationSent?: boolean; shootoutPresentationStarted?: boolean; shootoutKicksSeen?: number } | null = null;
+let live: { fixture: number; sim: MatchSim; viewerSetup: OpenFootballSetup; lines: { text: string; cls: string; m: number; moment: number; hg: number; ag: number; k?: string }[]; consumed: number; visualQueue: MatchVisualFrame[]; visualSeen: number; viewerEventsSeen?: number; viewer?: OpenFootballBridge; viewerPrimed?: boolean; halfShown?: boolean; shotsSeen?: number; cornersSeen?: number; h2hInit?: boolean; evSeen?: number; h2h?: H2hState; ldSeen?: number; prevTab?: string; finishFrameSent?: boolean; finishPresentationReady?: boolean; finishPresentationTimer?: ReturnType<typeof setTimeout>; extraTimeDurationSent?: boolean; shootoutPresentationStarted?: boolean; shootoutKicksSeen?: number } | null = null;
 
 /** Stage and play one engine-resolved shootout kick on its own viewer beat. */
 function shootoutPresentation(base: MatchPitchSnapshot, kick: ShootoutKick | undefined, moment: number) {
@@ -344,7 +344,7 @@ function startH2hBackground(id: number) {
     const ctx = { home, away, score: `${home} ${sim.teams[0].stats.goals}-${sim.teams[1].stats.goals} ${away}` };
     while (L.consumed < sim.commentary.length) {
       const l = sim.commentary[L.consumed];
-      L.lines.push({ text: commentaryText(l, ctx, L.consumed), cls: l.k.startsWith('goal') && l.k !== 'goal-offside' ? 'goal' : l.hi ? 'hi' : '', m: l.m, k: l.k });
+      L.lines.push({ text: commentaryText(l, ctx, L.consumed), cls: l.k.startsWith('goal') && l.k !== 'goal-offside' ? 'goal' : l.hi ? 'hi' : '', m: l.m, moment: l.moment, hg: sim.teams[0].stats.goals, ag: sim.teams[1].stats.goals, k: l.k });
       L.consumed++;
     }
     const finished = sim.finished;
@@ -410,6 +410,7 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
   const [viewerProgress, setViewerProgress] = useState<OpenFootballProgress | null>(null);
   const [viewerPrimed, setViewerPrimed] = useState(() => !!L.viewerPrimed);
   const [viewerFailed, setViewerFailed] = useState(false);
+  const [activeNarration, setActiveNarration] = useState<{ text: string; minute: number; moment: number; hg: number; ag: number } | null>(null);
   const [visualFrame, setVisualFrame] = useState<MatchVisualFrame | undefined>(() => L.visualQueue.shift());
   // flashes/bump/reveal: pr. billede – stor tekst, midlertidig ændring af stillingen (jubel før et annulleret mål) og hvor mange nye kommentarlinjer der vises
   const [hl, setHl] = useState<{ frames: Snap[]; i: number; outcome: string; texts: string[]; hideFrom: number; team: number; flashes?: (string | undefined)[]; bump?: number[]; reveal?: number[]; label?: string } | null>(null);
@@ -422,7 +423,7 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
     while (L.consumed < sim.commentary.length) {
       const l = sim.commentary[L.consumed];
       const cls = l.k.startsWith('goal') && l.k !== 'goal-offside' ? 'goal' : l.hi ? 'hi' : '';
-      L.lines.push({ text: commentaryText(l, ctx, L.consumed), cls, m: l.m, k: l.k });
+      L.lines.push({ text: commentaryText(l, ctx, L.consumed), cls, m: l.m, moment: l.moment, hg: sim.teams[0].stats.goals, ag: sim.teams[1].stats.goals, k: l.k });
       L.consumed++;
     }
   };
@@ -498,14 +499,33 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
     // early when the simulation reports full time on its next step.
     if (sim.finished && L.viewer && !L.finishFrameSent) viewerSnapshots.push(sim.pitch());
     if (L.viewer && viewerSnapshots.length) {
-      const goalWindows = actionMomentWindows(viewerActions);
-      const goals = sim.events.slice(L.viewerEventsSeen ?? 0).filter((event) => event.k === 'goal' && event.p !== undefined).map((event) => {
-        const shotIndex = viewerActions.findIndex((action) => action.kind === 'shot' && action.outcome === 'goal' && action.team === event.t && action.actor === event.p && action.minute === event.m);
-        const goalMoment = shotIndex >= 0 ? goalWindows[shotIndex]?.end : undefined;
-        return { player_id: event.p!, time: goalMoment === undefined ? openFootballMinuteTimestamp(event.m) : openFootballTimestamp(goalMoment, sim.totalMoments), is_auto_goal: false };
+      const actionWindows = actionPresentationWindows(viewerActions, sim.totalMoments);
+      const newLines = L.lines.slice(linesBefore);
+      const narration = newLines.map((line) => {
+        const goalLine = (line.k?.startsWith('goal') ?? false) && line.k !== 'goal-offside';
+        const shotIndex = goalLine ? viewerActions.findIndex((action) => action.kind === 'shot' && action.outcome === 'goal' && action.minute === line.m && action.moment === line.moment) : -1;
+        const sceneIndex = viewerActions.findIndex((action) => action.moment === line.moment);
+        return {
+          moment: line.moment,
+          atTimeMs: shotIndex >= 0 ? actionWindows[shotIndex]?.end
+            : sceneIndex >= 0 ? actionWindows[sceneIndex]?.start : undefined,
+          atMoment: shotIndex >= 0 || sceneIndex >= 0 ? undefined : line.moment,
+          minute: line.m,
+          text: line.text,
+          hg: line.hg,
+          ag: line.ag,
+        };
+      });
+      const goals = sim.events.slice(L.viewerEventsSeen ?? 0).flatMap((event) => {
+        if (event.k !== 'goal' || event.p === undefined) return [];
+        const shotIndex = viewerActions.findIndex((action) => action.kind === 'shot' && action.outcome === 'goal'
+          && action.team === event.t && action.actor === event.p && action.minute === event.m
+          && newLines.some((line) => line.moment === action.moment && line.m === event.m && (line.k?.startsWith('goal') ?? false) && line.k !== 'goal-offside'));
+        if (shotIndex < 0) return [];
+        return [{ player_id: event.p, time: actionWindows[shotIndex]?.end ?? openFootballMinuteTimestamp(event.m), is_auto_goal: false }];
       });
       L.viewerEventsSeen = sim.events.length;
-      L.viewer.push(viewerSnapshots, [...goals, ...shootoutGoals], viewerActions);
+      L.viewer.push(viewerSnapshots, [...goals, ...shootoutGoals], viewerActions, narration);
       if (sim.finished) L.finishFrameSent = true;
     }
     // store chancer og mål afspilles på 2D-banen (kampen venter imens)
@@ -790,7 +810,7 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
   const soKicks = sim.shootout ? sim.shootout.kicks.slice(0, sim.shootout.kicks.length - (hl?.label === 'hl.k.shootout' && hl.i < hl.frames.length - 1 ? 1 : 0)) : null;
   const soScore = soKicks ? [0, 1].map((tm) => soKicks.filter((k) => k.t === tm && k.outcome === 'goal').length) : null;
   const minuteLabel = minute + (soScore ? ` (${t('fix.pens')}\u00a0${soScore[0]}\u2011${soScore[1]})` : '');
-  const viewMinuteLabel = (visualFrame ? `${visualFrame.action.minute}'` : minute) + (soScore ? ` (${t('fix.pens')}\u00a0${soScore[0]}\u2011${soScore[1]})` : '');
+  const viewMinuteLabel = (activeNarration ? `${activeNarration.minute}'` : visualFrame ? `${visualFrame.action.minute}'` : minute) + (soScore ? ` (${t('fix.pens')}\u00a0${soScore[0]}\u2011${soScore[1]})` : '');
   const colors = teamColors(f.home, f.away, me);
   // et mål vises først på resultattavlen, når højdepunktet når frem til målet
   const spoil = hl && hl.outcome === 'goal' && hl.label !== 'hl.k.shootout' && hl.i < hl.frames.length - 1 ? hl.team : -1;
@@ -799,7 +819,8 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
 
   // live-visningen til udeholdet hvert sekund
   const hg = st[0].goals - (spoil === 0 ? 1 : 0) + (fake === 0 ? 1 : 0), ag = st[1].goals - (spoil === 1 ? 1 : 0) + (fake === 1 ? 1 : 0);
-  const shownLines = hl?.reveal ? L.lines.slice(0, hl.hideFrom + hl.reveal[hl.i]) : hl && hl.i < hl.frames.length - 1 ? L.lines.slice(0, hl.hideFrom) : L.lines;
+  const syncedLines = activeNarration ? L.lines.filter((line) => line.moment <= activeNarration.moment) : [];
+  const shownLines = hl?.reveal ? syncedLines.slice(0, hl.hideFrom + hl.reveal[hl.i]) : hl && hl.i < hl.frames.length - 1 ? syncedLines.slice(0, hl.hideFrom) : syncedLines;
   const countdown = hs.phase === 'countdown' ? Math.max(0, Math.ceil((hs.startAt - Date.now()) / 1000)) : 0;
   const halfLeft = hs.phase === 'half' ? Math.max(0, Math.ceil((hs.halfEnd - Date.now()) / 1000)) : 0;
   const liveRef = useRef<FollowData | null>(null);
@@ -854,7 +875,7 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
         )}
         {report && <button className="primary continue" onClick={done}>{t('match.continue')}</button>}
       </Head>
-      <CmScoreboard home={f.home} away={f.away} hg={st[0].goals - (spoil === 0 ? 1 : 0) + (fake === 0 ? 1 : 0)} ag={st[1].goals - (spoil === 1 ? 1 : 0) + (fake === 1 ? 1 : 0)} colors={colors} minute={viewMinuteLabel + (paused && !report ? ' ❚❚' : '')} />
+      <CmScoreboard home={f.home} away={f.away} hg={activeNarration?.hg ?? (viewerReady ? 0 : st[0].goals)} ag={activeNarration?.ag ?? (viewerReady ? 0 : st[1].goals)} colors={colors} minute={viewMinuteLabel + (paused && !report ? ' ❚❚' : '')} />
       <div className="muted kbd-hint" style={{ marginBottom: 8 }}>{report ? t('match.keysDone') : h2h ? '' : t('match.keys')}</div>
       {msg && <div className="insight">{msg}</div>}
       {h2h && hs.phase === 'half' && <div className="insight">{t('mp.h2hHalf', { s: halfLeft })}</div>}
@@ -874,7 +895,7 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
       <div className="match2d">
           <div className="match-stage">
             <OpenFootballPitch id={id} setup={L.viewerSetup} speed={openFootballPlaybackSpeed(speed, h2h ? { halfMinutes: g.options.h2hHalfMinutes ?? 3, homeSpeed: hs.homeSpeed, awaySpeed: hs.awaySpeed } : undefined)} playing={!paused && !report && viewerReady && !viewerFailed && (h2h || viewerPrimed) && (!h2h || hs.phase === 'play')}
-              onBridge={(bridge) => { L.viewer = bridge ?? undefined; setViewerBridge(bridge); }} onReady={(ready) => { setViewerReady(ready); if (ready) setViewerFailed(false); }} onProgress={setViewerProgress}
+              onBridge={(bridge) => { L.viewer = bridge ?? undefined; setViewerBridge(bridge); }} onReady={(ready) => { setViewerReady(ready); if (ready) setViewerFailed(false); }} onProgress={setViewerProgress} onNarration={setActiveNarration}
               onFailure={() => { L.viewer = undefined; setViewerBridge(null); setViewerReady(false); setViewerFailed(true); }} />
             {!viewerReady && <div className="match-viewer-status" role="status" aria-live="polite">
               <div className="match-viewer-status-card">
@@ -886,7 +907,7 @@ function LiveMatch({ id, onViewerRetry }: { id: number; onViewerRetry: () => voi
             </div>}
           </div>
           <div className="match-actionbar">
-            <strong>{L.lines.at(-1)?.text ?? g.clubs[f.home]?.name}</strong>
+            <strong>{activeNarration?.text ?? (viewerReady ? '' : L.lines.at(-1)?.text) ?? g.clubs[f.home]?.name}</strong>
             <div><span>{g.comps[f.comp]?.name}</span><button onClick={() => setTab('stats')}>{t('match.stats')}</button><button onClick={() => setTab('tactics')}>{t('nav.tactics')}</button></div>
           </div>
       </div>
@@ -988,7 +1009,7 @@ function H2hSpeed({ mine, theirs, name, onPick }: { mine: number; theirs: number
 type FollowData = {
   seq: number; phase: 'wait' | 'countdown' | 'play' | 'half'; awayReady: boolean; homeSpeed: number; awaySpeed: number; countdown: number; halfLeft: number;
   minute: string; hg: number; ag: number; finished: boolean; stats: [MatchReport['stats'][0], MatchReport['stats'][1]];
-  lines: { text: string; cls: string; m: number }[]; live: [LiveTeam, LiveTeam]; events: MatchSim['events'];
+  lines: { text: string; cls: string; m: number; moment?: number }[]; live: [LiveTeam, LiveTeam]; events: MatchSim['events'];
   snap: Snap; banner: string; flash?: string; report?: MatchReport;
 };
 

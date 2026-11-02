@@ -595,7 +595,7 @@ export interface ManagerProfile {
   trials?: { pid: number; start: string; end: string; startK: number }[];
   friendlies?: { opp: number; date: string; kind: 'easy' | 'big'; done?: boolean; result?: [number, number] }[];
   /** Første arbejdsdag: opgaver og assistentens oplæg */
-  onboard?: { weak?: boolean; style?: string; needs?: string[]; briefed?: boolean; plan?: { weakest: string; style: string; fit: number; bestStyle: string; targets: Record<string, number[]> } };
+  onboard?: { weak?: boolean; style?: string; needs?: string[]; briefed?: boolean; briefingDismissed?: boolean; plan?: { weakest: string; style: string; fit: number; bestStyle: string; targets: Record<string, number[]> } };
   /** Managerprofil: motto (vises på den offentlige profil) */
   motto?: string;
   /** Til ugens overblik: placering og saldo sidste mandag */
@@ -736,6 +736,8 @@ export interface ShotRecord {
 
 export interface CommentaryLine {
   m: number;
+  /** Exact simulation step used to align the spoken line with its visual scene. */
+  moment: number;
   k: string;
   a?: string;
   b?: string;

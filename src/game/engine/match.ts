@@ -132,6 +132,8 @@ export class MatchSim {
   holder = 0;
   /** Stable visual-only player centers, advanced once per engine moment. */
   private playerCenters = new Map<number, [number, number]>();
+  /** Commentary for a deferred forward pass is emitted with the resolved pass clip. */
+  private pendingForwardPassCommentary: SP | null = null;
   private breakaway: SP | null = null;
   /** hvordan gennembruddet opstod (kontra / gennembrudsaflevering) – vises i 2D */
   private breakawayOrigin = '';
@@ -355,7 +357,7 @@ export class MatchSim {
   }
   private line(k: string, a?: SP | null, b?: SP | null, hi = false) {
     if (!this.opts.commentary) return;
-    this.commentary.push({ m: this.minute, k, a: a ? name(a.p) : undefined, b: b ? name(b.p) : undefined, t: a ? a.team : undefined, hi });
+    this.commentary.push({ m: this.minute, moment: this.moment, k, a: a ? name(a.p) : undefined, b: b ? name(b.p) : undefined, t: a ? a.team : undefined, hi });
   }
 
   private pitchPlayers(includeCenters = false) {
@@ -415,12 +417,24 @@ export class MatchSim {
     action.moment = this.moment;
     action.minute = this.minute;
 
+    // Keep the deferred ball track attached to the passer's current rendered
+    // location. Its original origin belongs to the previous simulation step
+    // and otherwise makes the ball jump back before the receiver gets it.
+    const passer = this.pitchPlayers(true).find((player) => player.id === action.actor);
+    if (passer?.x !== undefined && passer.y !== undefined) {
+      action.from = [passer.x, passer.y];
+      action.ballFrom = [passer.x + (action.team === 0 ? 1.4 : -1.4), passer.y + 0.6];
+    }
+
     if (receiver) {
       const layout = this.visualPositions(action.toZone, action.team, receiver.p.id);
       const receivePoint = playerPoint(layout, receiver.p.id);
       action.target = receiver.p.id;
       action.to = receivePoint ?? layout.ball ?? action.to;
-      action.ballTo = receivePoint ?? layout.ball ?? action.ballTo;
+      // Keep the player endpoint at the receiver's center, but terminate the
+      // ball at the renderer's foot/contact point. Using the player center
+      // here makes the ball visibly stop short of the boot on every pass.
+      action.ballTo = layout.ball ?? receivePoint ?? action.ballTo;
       action.toPoss = action.team;
     } else {
       action.target = undefined;
@@ -431,6 +445,10 @@ export class MatchSim {
 
     this.visualTimeline.push(action);
     this.pendingVisualPass = null;
+    if (this.pendingForwardPassCommentary) {
+      if (receiver) this.line('pass-forward', this.pendingForwardPassCommentary);
+      this.pendingForwardPassCommentary = null;
+    }
   }
 
   /** Model the already-resolved goal kick's presentation owner without selecting a new receiver or consuming RNG. */
@@ -761,7 +779,7 @@ export class MatchSim {
       if (cutback) {
         if (cutbackShooter) { this.lastPasser = s; this.shoot(T, O, cutbackShooter, 'cutback'); }
       }
-      if (trb >= 3 && this.r.chance(0.04)) this.line('pass-forward', s);
+      if (trb >= 3 && this.r.chance(0.04)) this.pendingForwardPassCommentary = s;
     } else {
       this.rate(s, -0.04);
       this.rate(def, 0.05);

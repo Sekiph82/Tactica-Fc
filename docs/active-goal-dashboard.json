@@ -1,8 +1,8 @@
 {
   "project": "TACTICA FC",
   "goal": "CM tarzı menajerlik kariyeri ve güvenilir canlı maç izleyicisi",
-  "updatedAt": "2026-11-02T07:46:14+03:00",
-  "focus": "M05-S03-T01 · Seçilen kulübün maçını başlama vuruşundan full-time'a kadar aynı skor, saat, viewer ve raporla izole kariyerde doğrula.",
+  "updatedAt": "2026-11-02T12:34:02+03:00",
+  "focus": "M05-S03-T08 · Canlı akışın sürekliliğini doğrula; kamera kadrajı ve gol temasını görsel kabulden geçir.",
   "items": [
     {
       "id": "career-foundation",
@@ -14,13 +14,13 @@
       "id": "match-viewer",
       "status": "in-progress",
       "title": "Canlı maç izleyicisi",
-      "detail": "Maçı başlama vuruşundan bitişe kadar gerçek motor akışıyla doğrula; pas, şut, gol ve yeniden başlama sürekliliğini gözden geçir."
+      "detail": "Akış köprüsü tüm engine snapshot'larından 22 oyuncu ve top izlerini, aksiyon yolu önceliğini ve farklı zamanlı anlatımları taşıyor. 103/103 test, typecheck, build ve izole 1× kısa canlı akış geçti. Renkler kullanıcı tarafından kabul edildi. Tam maç, gol temasının görsel doğrulaması ve yakın kamera kadrajında tüm oyuncuları gösterme kabulü açık."
     },
     {
       "id": "movement",
       "status": "open",
       "title": "Oyuncu hareketi ve kamera",
-      "detail": "CM2010 referanslı koşu yolları, destek koşuları, savunma tepkileri ve top takibi görsel kabulü."
+      "detail": "Saha kareleri akıyor; yakın aksiyon kamerasında kenar oyuncular kadraj dışında kalabiliyor. Tam saha/aksiyon kadrajı, destek koşuları ve savunma tepkileri gerçek maçta görsel kabul bekliyor. Takım renkleri kabul edildi; bu konu tekrar açılmayacak."
     },
     {
       "id": "transfer-replay",

@@ -16,7 +16,7 @@ export function statColors(home: number, away: number, me: number): [string, str
 }
 
 /** Team colours for the 2D pitch: own club colours and a contrasting opponent. */
-function teamColors(home: number, away: number, me: number): [string, string, string, string] {
+export function teamColors(home: number, away: number, me: number): [string, string, string, string] {
   const g = gs();
   const css = getComputedStyle(document.documentElement);
   const navBg = css.getPropertyValue('--nav-bg').trim(), navFg = css.getPropertyValue('--nav-fg').trim();

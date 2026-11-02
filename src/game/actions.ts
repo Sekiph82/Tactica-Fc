@@ -63,7 +63,7 @@ export type Action =
   | { t: 'trial'; pid: number; end?: boolean }
   | { t: 'friendly'; opp: number; date: string; kind: FriendlyKind }
   | { t: 'friendlyCancel'; date: string }
-  | { t: 'onboard'; step: 'weak' | 'style' | 'needs' | 'brief' | 'skip'; style?: StyleKey; needs?: string[] }
+  | { t: 'onboard'; step: 'weak' | 'style' | 'needs' | 'brief' | 'dismissBrief' | 'skip'; style?: StyleKey; needs?: string[] }
   | { t: 'managerProfile'; name?: string; nation?: number; motto?: string }
   | { t: 'talk'; pid: number; choice: 'promise' | 'list' | 'refuse' }
   | { t: 'interact'; pid: number; kind: TalkKind }
@@ -166,6 +166,7 @@ export function applyAction(a: Action): unknown {
       else if (a.step === 'style' && a.style) applyStyle(a.style);
       else if (a.step === 'needs') ob.needs = (a.needs ?? []).slice(0, 4);
       else if (a.step === 'brief') return briefing();
+      else if (a.step === 'dismissBrief') ob.briefingDismissed = true;
       else if (a.step === 'skip') ob.briefed = true;
       return 'ok';
     }

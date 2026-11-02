@@ -77,6 +77,7 @@ export function briefing() {
   const fits = (Object.keys(STYLES) as StyleKey[]).map((k) => [k, styleFit(g.userClub, k)] as const).sort((a, b) => b[1] - a[1]);
   const targets = Object.fromEntries((ob.needs ?? []).map((k) => [k, needTargets(k as NeedKey, c.transferBudget)]));
   ob.briefed = true;
+  ob.briefingDismissed = false;
   ob.plan = { weakest: weakest.key, style, fit, bestStyle: fits[0][0], targets };
   addNews({ cat: 'general', key: 'onb.briefing', params: { weak: weakest.key, style } });
   return ob.plan;
