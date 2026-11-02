@@ -262,6 +262,7 @@ TACTICA FC; CM0102/CM2010 tarzında kariyer, kulüp yönetimi, haberler, antrenm
 - [x] M07-S01-T06 TACTICA kullanıcı akışında eski Open Football branding/theme artığını tara; lisans/credit alanları istisna. **Kanıt:** ortak nav/selector, sezon kartları, giriş görseli ve maç çevresi eski lacivert/camgöbeği/gold-violet UI renklerinden temizlendi; bu takip düzeltmesinde maç skorbordu da sabit siyah/grafit/gümüş/kırmızı palete alındı ve dakika iki takım arasına taşındı. Viewer lisans/credit kapsamı korundu; gerçek ekran kabulü T07'de açık.
 - [ ] M07-S01-T07 Gerçek ekran görüntüsüyle görsel kabul kaydet; yalnızca source/CSS parser başarısını yeterli sayma.
 - [x] M07-S01-T08 Aktif maç sunumu hariç yönetim/kurulum sayfalarının Black Metal (siyah/grafit/gümüş/kırmızı) temasında olduğunu kullanıcı kabulüyle kaydet; maç ekranını ayrı düzeltme ve kabul kapsamına al. **Kanıt:** 2026-11-02 kullanıcı, diğer sayfaları konseptle uyumlu kabul edip maç ekranını ayrı tuttu. Responsive ve tablo taşma incelemeleri M07-S01-T03–T05'te açık kalır.
+- [x] M07-S01-T09 Maç ekranı kabuğu, üst/yan navigasyon, skor kartı, kontroller ve yükleme alanını seçili skin/klüp renklerinden bağımsız Black Metal tokenlarına sabitle. **Uygulama:** `.shell:has(.match-screen)` için yerel tema tokenları eklendi; piksel düzeyinde son görsel kabul M07-S01-T07'de açık.
 
 ## Sprint M07-S02 — Etkileşim ve accessibility
 

@@ -817,7 +817,33 @@ button.continue.nudge { animation: nudge 0.9s ease-in-out infinite, nudgeColor 0
 .match-screen .cm-score { min-width: 38px; padding: 2px 7px; border: 1px solid var(--line2); border-radius: 6px; background: var(--surface3); color: var(--strong); font-size: 25px; }
 .match-screen > .tabs { margin: 0 0 8px; }
 .match-screen .match-comm { grid-template-columns: 2fr 1fr; }
-.shell:has(.match-screen) { background: var(--bg); }
+.shell:has(.match-screen) {
+  color-scheme: dark;
+  --bg: #08090c;
+  --bg2: #111318;
+  --surface: #191b20;
+  --surface2: #22252b;
+  --surface3: #2c3037;
+  --tactica-black: #08090c;
+  --tactica-graphite: #191b20;
+  --tactica-silver: #c5cbd3;
+  --tactica-red: #e32832;
+  --line: rgba(197, 203, 211, 0.10);
+  --line2: rgba(197, 203, 211, 0.19);
+  --text: #d8d9dc;
+  --strong: #f1f2f4;
+  --muted: #a4a7ae;
+  --faint: #7b8088;
+  --brand-cyan: #e32832;
+  --brand-teal: #c5cbd3;
+  --accent: #e32832;
+  --accent-ink: #ffffff;
+  --accent2: #f0525b;
+  --tint1: rgba(227, 40, 50, 0.10);
+  --tint2: rgba(197, 203, 211, 0.045);
+  --hover: #30343b;
+  background: var(--bg);
+}
 .shell:has(.match-screen) > .topbar, .shell:has(.match-screen) > .sidenav { background: color-mix(in srgb, var(--bg2) 92%, transparent); color: var(--text); border-color: var(--line); }
 .shell:has(.match-screen) > .main { background: var(--bg); color: var(--text); }
 .shell:has(.match-screen) .sidenav button { color: var(--muted); }
