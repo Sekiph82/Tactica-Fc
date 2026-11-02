@@ -28,7 +28,7 @@ export class OpenFootballStateTimeline {
       const playerId = Number(rawPlayerId);
       const scheduled = this.expiries.get(playerId) ?? [];
       let nextScheduled = scheduled.filter((expiry) => expiry >= entries[0]?.[0]);
-      const playerOutput = output[playerId] = [];
+      const playerOutput: [number, string][] = output[playerId] = [];
 
       for (const [time, state] of entries) {
         playerOutput.push([time, state]);

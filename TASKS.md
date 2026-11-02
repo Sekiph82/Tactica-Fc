@@ -219,7 +219,7 @@ TACTICA FC; CM0102/CM2010 tarzında kariyer, kulüp yönetimi, haberler, antrenm
 - [ ] M05-S03-T05 1x/2x/4x/8x hızlarda viewer clock ve engine moment senkronunu kaydet.
 - [ ] M05-S03-T06 Tab arka plana alınma/geri dönme, polling backpressure, CPU, heap ve WASM performansını incele.
 - [ ] M05-S03-T07 Gerçek aksiyon ve kabul ekran görüntüsü/video kanıtını kaydet; enjekte edilmiş test karelerini gerçek maç kanıtı sayma.
-- [ ] M05-S03-T08 Bir akış sorunu bulunursa önce engine, event adapter, network/frame cursor ve renderer katmanından hangisinin sebep olduğunu izole et. **Önceki deneme başarı değil:** İzole kariyer 1 Temmuz→8 Temmuz 150 saniye sürdü; Fulham'ın Ederson teklifi gün ilerlemesini durdurduğu için fixture'a varılmadı.
+- [ ] M05-S03-T08 Bir akış sorunu bulunursa önce engine, event adapter, network/frame cursor ve renderer katmanından hangisinin sebep olduğunu izole et. **Önceki deneme başarı değil:** İzole kariyer 1 Temmuz→8 Temmuz 150 saniye sürdü; Fulham'ın Ederson teklifi gün ilerlemesini durdurduğu için fixture'a varılmadı. **Kaynak bulgusu:** `openFootballRecording.ts` içinde tuple dizisi `never[]` çıkarımına neden oluyordu; açık `[number, string][]` anotasyonu eklendi. Tam maç runtime kabulü hâlâ açık.
 
 ---
 
