@@ -263,8 +263,17 @@ impl ProcessingRun {
                 self.handle.block_on(Self::write_match_results(result));
             }
             self.i18n.set_date(simulator_data.date);
-            if let Err(error) = self.world_save_store.save(simulator_data) {
-                error!("failed to persist career world snapshot: {error}");
+            match self.world_save_store.save(simulator_data) {
+                Ok(()) => {
+                    if let Some(team_id) = self.manager_team_id
+                        && let Err(error) = self
+                            .manager_career_store
+                            .clear_pending_transfer_responses(team_id)
+                    {
+                        error!("failed to clear manager transfer response journal: {error}");
+                    }
+                }
+                Err(error) => error!("failed to persist career world snapshot: {error}"),
             }
             if self.manager_team_id.is_some_and(|team_id| {
                 manager_has_pending_transfer_decision(simulator_data, team_id)

@@ -46,6 +46,39 @@ struct WorldSaveEnvelope {
 
 struct DecodedSaveTemp(PathBuf);
 
+struct TimedWrite<W> {
+    inner: W,
+    bytes_written: u64,
+    elapsed: std::time::Duration,
+}
+
+impl<W> TimedWrite<W> {
+    fn new(inner: W) -> Self {
+        Self {
+            inner,
+            bytes_written: 0,
+            elapsed: std::time::Duration::ZERO,
+        }
+    }
+}
+
+impl<W: Write> Write for TimedWrite<W> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let started = Instant::now();
+        let result = self.inner.write(buffer);
+        self.elapsed += started.elapsed();
+        match &result {
+            Ok(written) => self.bytes_written += *written as u64,
+            Err(_) => {}
+        }
+        result
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 impl Drop for DecodedSaveTemp {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.0);
@@ -197,9 +230,11 @@ impl WorldSaveStore {
                 .write(true)
                 .create_new(true)
                 .open(&temp_path)?;
-            let mut encoder = GzEncoder::new(BufWriter::new(file), Compression::fast());
+            let encoder = GzEncoder::new(BufWriter::new(file), Compression::fast());
+            let mut measured_writer = TimedWrite::new(encoder);
+            let serialization_started = Instant::now();
             {
-                let writer = WriteAdapter::new(&mut encoder);
+                let writer = WriteAdapter::new(&mut measured_writer);
                 let serializer = serde_wincode::Serializer::<_, SaveCodec>::new(writer);
                 WorldSaveRef {
                     schema_version: SCHEMA_VERSION,
@@ -210,15 +245,24 @@ impl WorldSaveStore {
                 .serialize(serializer)
                 .map_err(io::Error::other)?;
             }
-            let mut file = encoder.finish()?;
+            let serialization_elapsed = serialization_started.elapsed();
+            let serializer_payload_bytes = measured_writer.bytes_written;
+            let write_and_compress_elapsed = measured_writer.elapsed;
+            let finalize_started = Instant::now();
+            let mut file = measured_writer.inner.finish()?;
             file.flush()?;
             file.get_ref().sync_all()?;
+            let finalize_and_sync_elapsed = finalize_started.elapsed();
             fs::rename(&temp_path, &final_path)?;
             let bytes = fs::metadata(&final_path)?.len();
             log::info!(
-                "career world snapshot saved: {} bytes in {} ms",
+                "career world snapshot saved: {} compressed bytes in {} ms ({} serialized bytes; serializer call {} ms including {} ms in write/compress calls; finalize/sync {} ms)",
                 bytes,
-                started.elapsed().as_millis()
+                started.elapsed().as_millis(),
+                serializer_payload_bytes,
+                serialization_elapsed.as_millis(),
+                write_and_compress_elapsed.as_millis(),
+                finalize_and_sync_elapsed.as_millis(),
             );
             Ok(())
         })();

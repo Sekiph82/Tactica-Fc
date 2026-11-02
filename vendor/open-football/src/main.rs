@@ -108,11 +108,15 @@ pub async fn main() {
         });
     if let Some(team_id) = manager_team_id {
         info!("restored manager team selection: {team_id}");
-        if !has_restored_world {
-            if let Some(snapshot) = manager_career_store.load_snapshot(team_id) {
+        if let Some(snapshot) = manager_career_store.load_snapshot(team_id) {
+            if !has_restored_world {
                 if snapshot.apply_to_simulation(&mut game_data, team_id) {
                     info!("restored manager tactics, lineup, training, and transfer-list choices");
                 }
+            }
+            let replayed = snapshot.apply_pending_transfer_responses(&mut game_data, team_id);
+            if replayed > 0 {
+                info!("replayed {replayed} pending manager transfer response(s)");
             }
         }
     }

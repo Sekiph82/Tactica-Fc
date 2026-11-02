@@ -10,7 +10,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-const SCHEMA_VERSION: u32 = 8;
+const SCHEMA_VERSION: u32 = 9;
 const FILE_NAME: &str = "manager-career.jsonl";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -43,6 +43,10 @@ pub struct ManagerCareerSnapshot {
     pub player_training: HashMap<u32, String>,
     #[serde(default)]
     pub listed_player_ids: Vec<u32>,
+    /// Durable manager answers that must be replayed if the full world save
+    /// has not yet captured the corresponding transfer decision.
+    #[serde(default)]
+    pub pending_transfer_responses: HashMap<u32, bool>,
     /// Highest club-newspaper edition the manager has explicitly read.
     #[serde(default)]
     pub last_read_newspaper_issue: u32,
@@ -182,6 +186,27 @@ impl ManagerCareerStore {
         Ok(snapshot)
     }
 
+    pub fn queue_transfer_response(
+        &self,
+        team_id: u32,
+        negotiation_id: u32,
+        accept: bool,
+    ) -> io::Result<()> {
+        self.update_snapshot(team_id, |snapshot| {
+            snapshot
+                .pending_transfer_responses
+                .insert(negotiation_id, accept);
+        })?;
+        Ok(())
+    }
+
+    pub fn clear_pending_transfer_responses(&self, team_id: u32) -> io::Result<()> {
+        self.update_snapshot(team_id, |snapshot| {
+            snapshot.pending_transfer_responses.clear();
+        })?;
+        Ok(())
+    }
+
     fn latest_record(&self) -> Option<ManagerCareerRecord> {
         let _guard = self.append_lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         self.latest_record_unlocked()
@@ -209,6 +234,64 @@ impl ManagerCareerStore {
 }
 
 impl ManagerCareerSnapshot {
+    /// Replay durable manager answers after loading the last full world save.
+    /// Responses already present or resolved in that save are left untouched.
+    pub fn apply_pending_transfer_responses(
+        &self,
+        sim: &mut core::SimulatorData,
+        team_id: u32,
+    ) -> usize {
+        let Some(team) = sim
+            .team(team_id)
+            .filter(|team| team.team_type == core::TeamType::Main)
+        else {
+            return 0;
+        };
+        let managed_club_id = team.club_id;
+        let mut applied = 0;
+        for (negotiation_id, accept) in &self.pending_transfer_responses {
+            let Some(negotiation) = sim
+                .continents
+                .iter_mut()
+                .flat_map(|continent| &mut continent.countries)
+                .find_map(|country| {
+                    country
+                        .transfer_market
+                        .negotiations
+                        .get_mut(negotiation_id)
+                        .filter(|negotiation| {
+                            negotiation.selling_club_id == managed_club_id
+                                || negotiation.buying_club_id == managed_club_id
+                        })
+                })
+            else {
+                continue;
+            };
+            if negotiation.manager_decision.is_some()
+                || !matches!(
+                    negotiation.phase,
+                    core::transfers::deal::negotiation::NegotiationPhase::ClubNegotiation { .. }
+                )
+            {
+                continue;
+            }
+            let is_seller = negotiation.selling_club_id == managed_club_id
+                && matches!(
+                    negotiation.status,
+                    core::transfers::deal::negotiation::NegotiationStatus::Pending
+                        | core::transfers::deal::negotiation::NegotiationStatus::Countered
+                );
+            let is_buyer = negotiation.buying_club_id == managed_club_id
+                && negotiation.status
+                    == core::transfers::deal::negotiation::NegotiationStatus::Countered;
+            if is_seller || is_buyer {
+                negotiation.manager_decision = Some(*accept);
+                applied += 1;
+            }
+        }
+        applied
+    }
+
     pub fn record_match_report(&mut self, report: ManagerMatchReport) {
         if self.match_reports.iter().any(|existing| existing.match_id == report.match_id) {
             return;

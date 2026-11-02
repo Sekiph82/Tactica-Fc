@@ -1307,8 +1307,9 @@ pub async fn update_transfer_negotiation_action(
 }
 
 /// Queue the managed side's decision for the next ordinary transfer tick.
-/// Sellers can accept/reject incoming fees; buyers can accept a seller's
-/// counter. The engine still performs player terms and medical/finalisation.
+/// Persist the small manager response journal immediately; the next successful
+/// day snapshot captures it in the world save. Sellers can accept/reject
+/// incoming fees, and buyers can accept a seller's counter.
 pub async fn decide_incoming_transfer_offer_action(
     State(state): State<GameAppData>,
     Json(body): Json<TransferSellerDecisionRequest>,
@@ -1368,16 +1369,21 @@ pub async fn decide_incoming_transfer_offer_action(
         }
         (country_id, previous)
     };
-    let status = persist_manager_world(&state, sim);
-    if status != StatusCode::ACCEPTED {
+    if let Err(error) = state.manager_career_store.queue_transfer_response(
+        managed_team_id,
+        body.negotiation_id,
+        body.accept,
+    ) {
+        log::error!("failed to persist manager transfer response: {error}");
         if let Some(country) = sim.country_mut(country_id) {
             country
                 .transfer_market
                 .negotiations
                 .insert(body.negotiation_id, previous_negotiation);
         }
+        return StatusCode::INTERNAL_SERVER_ERROR;
     }
-    status
+    StatusCode::ACCEPTED
 }
 
 #[cfg(test)]
