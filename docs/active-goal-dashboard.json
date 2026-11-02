@@ -1,0 +1,49 @@
+{
+  "project": "TACTICA FC",
+  "goal": "CM tarzı menajerlik kariyeri ve güvenilir canlı maç izleyicisi",
+  "updatedAt": "2026-11-02T07:39:39+03:00",
+  "items": [
+    {
+      "id": "career-foundation",
+      "status": "complete",
+      "title": "Kariyer ve menajerlik temeli",
+      "detail": "Kulüp seçimi, fikstür, taktik/kadro, antrenman ve transfer kontrolleri mevcut."
+    },
+    {
+      "id": "match-viewer",
+      "status": "in-progress",
+      "title": "Canlı maç izleyicisi",
+      "detail": "Maçı başlama vuruşundan bitişe kadar gerçek motor akışıyla doğrula; pas, şut, gol ve yeniden başlama sürekliliğini gözden geçir."
+    },
+    {
+      "id": "movement",
+      "status": "open",
+      "title": "Oyuncu hareketi ve kamera",
+      "detail": "CM2010 referanslı koşu yolları, destek koşuları, savunma tepkileri ve top takibi görsel kabulü."
+    },
+    {
+      "id": "transfer-replay",
+      "status": "open",
+      "title": "Teklif/karşı teklif kaydı",
+      "detail": "Listeleme kaydı doğrulandı; teklif ve karşı teklifin yeniden açılışta korunmasını ve günlük kayıt temizliğini doğrula."
+    },
+    {
+      "id": "windows",
+      "status": "open",
+      "title": "Windows paket kabulü",
+      "detail": "Paketli uygulamayı çevrimdışı başlat; kariyer kaydı ve maç izleyicisini doğrula."
+    },
+    {
+      "id": "android",
+      "status": "open",
+      "title": "Android cihaz kabulü",
+      "detail": "Uygun cihazda kariyer, maç izleyicisi ve kayıt akışını doğrula."
+    },
+    {
+      "id": "ios",
+      "status": "open",
+      "title": "iOS yerel doğrulama",
+      "detail": "Apple derleme ortamı ve iOS cihazında yerel çalışma doğrulaması."
+    }
+  ]
+}

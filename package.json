@@ -6,6 +6,7 @@
   "main": "desktop/main.cjs",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5184",
+    "dashboard": "node scripts/task-dashboard.mjs",
     "build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-tactica-fc.ps1",
     "test": "vitest run",
     "open-football:test": "cargo test --manifest-path vendor/open-football/Cargo.toml -p core -j 2",

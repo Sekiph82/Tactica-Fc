@@ -1,392 +1,362 @@
-# TACTICA FC implementation tracker
+# TACTICA FC — Ayrıntılı Ürün Yol Haritası
 
-This file is the single source of truth for milestone status. Mark work complete only after the stated evidence has been collected. “Partial” means the capability exists in CM Reborn but does not yet meet the TACTICA FC objective.
+Bu dosya aktif ve tamamlanmış tüm işlerin tek takip kaynağıdır. Plan hiyerarşisi: **Milestone → Sprint → tekil görev → kabul ölçütü**. Kodun yazılmış olması, gerçek çalışma/kabul testini tamamlamaz; bunlar ayrı görevlerdir.
 
-## TFC-M01: Repository audit and baseline — COMPLETE
+## Ürün hedefi ve sabit kararlar
 
-- [x] Inspect canonical workspace and locate the app, database, match engine, saves, UI, tests, and platform configuration.
-- [x] Confirm original `CM0102.iso` and `SI-Games-Patch-v3.9.68.exe` remain in the workspace parent and are not part of the app tree.
-- [x] Document current engine architecture in this tracker: `MatchSim` advances deterministically in moments; the UI consumes snapshots and commentary, while `MatchReport` stores outcomes and statistics.
-- [x] Install locked npm dependencies using `npm ci` inside `Tactica FC`.
-- [x] Run baseline production build: `npm run build` passed. Vite reports one ineffective dynamic import and a 1.78 MB minified JS chunk.
-- [x] Complete baseline `npm test`: 9 test files passed, 58 tests passed (55.23 seconds).
-- [x] Verify the core singleplayer flow in a browser: created a new 2025/26 career, selected Liverpool, advanced to the first fixture, and started the live 2D match. Confirmed scoreboard, live clock, pitch and match tabs rendered.
-- [x] Audit PWA/platform readiness, data licensing/attribution, and current product-facing CM Reborn branding. PWA is configured; no Electron or Capacitor projects are present. README attributes modern data to CC0 transfermarkt-datasets and code to MIT; additional asset review remains a later task. Product-facing CM Reborn labels and English/Danish-only localization are confirmed.
-- [x] Attempt the existing full Playwright smoke script. It could not launch because the Chromium executable is not installed; the live career/match path was instead verified in the available in-app browser.
+TACTICA FC; CM0102/CM2010 tarzında kariyer, kulüp yönetimi, haberler, antrenman, transferler, kupalar ve günlük dünya akışı sunar. TACTICA TypeScript kariyer ve maç motoru sonuçların tek otoritesidir. Gömülü Open Football viewer, yalnızca TACTICA'nın gerçek olaylarını ve oyuncu/top koordinatlarını animasyonla gösterir.
 
-## TFC-M02: Rebranding and architecture — IN PROGRESS
-- [x] Let the TACTICA Vite dev server select the next free port when the default 5184 is occupied, and document using the exact URL printed by Vite. This prevents a separately running Open Football development server from blocking TACTICA startup or requiring the user to stop another process.
+- Open Football'ın tam menajerlik oyunu TACTICA'nın yerine geçmez; 2026-11-01 kullanıcı yönlendirmesiyle viewer-only kullanım kararı yürürlüktedir.
+- Ticari oyun ISO/yama dosyalarından kod, grafik veya veri kopyalanmaz.
+- TACTICA markası ürün UI'sinde kullanılır; üçüncü taraf lisans/attribution bildirimleri korunur.
+- Kullanıcı kariyer verisi ve `match_results/` korunur; reset, silme, force-push ve kör üzerine yazma yoktur.
+- Her sprint sonunda kanıt ve durum yazılır. Büyük sprint kapanışında yerel `main` ile GitHub `origin/main` eşitlenir.
+- `[x]` uygulama ve belirtilen kanıt tamamlandı; `[ ]` açık. Çalışma zamanı ve fiziksel cihaz kanıtı kod/derleme testinin yerine geçmez.
 
-- [x] Replace the primary product-facing CM Reborn branding with TACTICA FC while preserving MIT and third-party notices. Historical changelog entries and the current hosting URL are retained pending deployment ownership decisions.
-- [x] Update the browser title, social metadata, PWA manifest, npm package identity, start-screen logo, footer, support/about/share strings, and fallback notification identity to TACTICA FC.
-- [x] Refresh the Open Football home/About views with the owner-provided shield and manager artwork; point the GitHub icon to `Sekiph82/Tactica-Fc`, remove the version-check control, and apply the black/silver/red visual identity. Verified the staged shield and manager hero match the supplied PNGs byte-for-byte, the home template has no version-check control, and `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2` passes.
-- [ ] Inspect the refreshed Open Football home/About views in a fresh runtime and capture owner-visible visual acceptance. Port 5184 is still served by the older user-owned process PID 58100; it has not been restarted, so source/template verification does not prove the latest rendered appearance.
-- [x] Apply the supplied `TACTICA_FC_ICO_Paketi.zip` Black Metal icon set across the React start/landing/match screens, Open Football shell/About header, browser favicons, PWA install icons, desktop window, Android launcher/splash, and notification icon. The ICO and native-size PNG assets in Vite public and embedded Open Football static folders match the supplied ZIP by SHA-256; 192 px PWA and Android density variants are resized from pack sources. Cache keys are `v=25` to refresh browser-tab/app logo assets; favicon, PWA, and in-game logo references point at the pack assets. The Open Football SVG fallback favicon was updated from stale `v=23` to `v=25`.
-- [x] Make Turkish the default locale and add a complete Turkish dictionary while retaining English and Danish.
-- [x] Define shared `MatchPitchSnapshot` and `MatchVisualAction` data contracts so the renderer can consume engine state through types instead of importing `MatchSim` internals.
-- [x] Move career-save IndexedDB access, remembered-career preferences, and save-file download behavior behind `src/platform` adapters; keep browser implementations in `src/platform/browser.ts`.
-- [ ] Keep shared game logic independent of platform-specific storage and input APIs.
-- [ ] Confirm the existing React/Vite/PWA foundation before adding renderer or desktop/mobile dependencies.
+---
 
-## TFC-M03: 2D football pitch renderer — COMPLETE
+# Milestone M00 — Repo, mimari ve iş takibi
 
-- [x] Existing `src/ui/Pitch2D.tsx` renders a responsive SVG pitch, markings, goals, players, ball, weather, and set-piece layouts.
-- [x] Replace marker-like player shapes with upright, full-body transparent player sprites. Use two visually distinct outfield players per kit and contrasting lime/orange goalkeeper kits, scale figures by pitch depth, face teams toward their attacking direction without laying figures sideways, and keep readable shirt numbers and holder highlighting layered above them.
-- [x] Add a readable three-frame running loop driven by player movement between consecutive pitch snapshots; keep the upright full-body sprite as the standing pose and add subtle idle breathing.
-- [x] Sequence the existing three-frame upright run atlas during cross and long-ball actions; these visual-only pose cycles leave match simulation unchanged.
-- [x] Add original, kit-matched short/through-pass, shot, upright tackle, and celebration poses with standing-to-action transitions; reduced-motion mode shows the selected static pose.
-- [x] Blend the goalkeeper's standing kit into the dive pose on saves/goals, then return to the upright kit when a held save is recorded.
-- [x] Add original kit-matched long-ball and cross poses with standing-to-action transitions; reduced-motion mode shows the selected static pose.
-- [x] Render actions and the matching snapshots captured from a fixed-seed `MatchSim` game in a browser fixture; visually inspect the engine-generated long-ball and cross events.
-- [x] Inspect the primary `MatchScreen` in a separate-origin QA career at 4×, confirming the scoreboard clock follows the queued event minute and both goals/player figures remain visible.
-- [x] Verify ordinary-action queue pacing and pose timing across speeds and through a complete live match. A live Liverpool–Leeds QA match ran at 1×, 2×, 4× and 8× to full-time; scoreboard and pitch clocks stayed aligned. The pitch retained 22 upright players, both goals, and no side roster panels. The match ended 0–1 with a matching report; details and the 8× backlog fix are recorded in `design-qa.md` (2026-10-30).
-- [x] Add an optional ball-follow camera with a one-step return to the full-pitch default; the control only changes the view, not the simulation.
-- [x] Improve pitch detail, goals/nets, and desktop/mobile readability with shaded, meshed SVG goal structures and compact small-screen match overlays; visually inspect 1280px and 390px browser layouts.
-- [x] Provide a deterministic `Pitch2D` renderer fixture with 22 players, two goalkeepers, a ball, a running sprite loop, and ball-path animation markup.
-- [x] Keep frame timing and rendering out of the simulation RNG and result calculation; fixed-seed engine reports remain identical with visual recording enabled or omitted, and the live presentation interval only drains queued events.
+**Çıkış ölçütü:** Tek repo, motor/görüntüleyici sınırı, kaynak kuralları ve görev süreci belirli.
 
-## TFC-M04: Match engine visual integration — IN PROGRESS
+## Sprint M00-S01 — Başlangıç denetimi ve kaynak sınırı
 
-- [x] Set the intended match architecture: TACTICA's CM-style React/TypeScript career and deterministic match engine are authoritative; Open Football is used as the embedded match presentation/viewer and only the required viewer/data bridge is retained. `npm run dev` now launches the TACTICA React application; `npm run open-football` remains an explicit way to launch the separate upstream application while migration work continues. H2H kickoff waits for viewer readiness so the simulation cannot get ahead of its opening image. Desktop/Android launchers, ownership of the full career flow, and visual acceptance remain open.
-- [x] Keep the embedded Open Football pitch component behind a presentation-only setup DTO: TACTICA prepares the opening snapshot, team colors/names, player roster, and duration; the renderer receives no `MatchSim` reference or match-advancement API. `npm exec tsc -- --noEmit` passes. Live visual acceptance remains separately tracked below.
-- [x] Send viewer batches when they contain player-position tracks or goal records even if no ball path, contact event, or transient state was emitted. This prevents position-only updates from being silently discarded; `npm exec tsc -- --noEmit` passes.
-- [x] Keep replay tracks chronologically ordered even when an incoming delayed batch is internally unordered: validate before taking the fast append path and sort the first batch when needed. Rebuilt the embedded viewer with `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2`; actual-match backtracking/stutter acceptance remains open below.
-- [x] Existing `MatchSim.step()` supports live deterministic progression; simulation events, shots, tactical changes, and pitch snapshots are exposed to the UI.
-- [x] Add an opt-in live-only visual action timeline with match moment/minute, actor, optional recipient/defender, zone-space endpoints, action kind, and outcome.
-- [x] Add a regression check that recording visual actions leaves the exact match report unchanged for a fixed seed.
-- [x] Connect the latest authoritative pass/cross/dribble/shot action to an SVG ball path animation on the live match pitch.
-- [x] Sequence all recorded ordinary-play actions produced between live UI updates; replay highlights temporarily take over the pitch and then ordinary play resumes.
-- [x] Pair every queued action with the `MatchSim.pitch()` snapshot captured immediately after the same engine step, so queued actors, recipients, ball paths, and event time remain tied to their event-time layout.
-- [x] Record historical open-play actor and recipient positions from the same deterministic formation layout used by the renderer; targetless actions and explicit shots keep their ball/goal endpoints. Successful short-pass visuals are finalized against the actual next-moment carrier selected by the existing engine pick, without adding RNG draws or changing match outcomes.
-- [x] Record deterministic historical player centers and separate ball start/end positions from the shared pitch layout for each visual action; explicit shot/cross endpoints remain authoritative. Dribble, tackle, turnover, deflection, and loose-ball actions now include the engine-resolved end center of the player who has the ball after the action, keeping the player and ball connected through the contact. `npm run build` passes; live visual acceptance remains open.
-- [x] Record engine-resolved goalkeeper parries and post rebounds as separate events from the shot, with ball travel from the saved/post point to the selected rebounder.
-- [x] Record keeper-held saves and keeper deflections that produce a corner; start the resulting corner delivery at the flag point.
-- [x] Record blocked-shot and failed-cross defender contacts as deflections to a defender's controlled ball point or a corner flag.
-- [x] Record a keeper distribution from the held-ball point to the actual next carrier chosen by the match engine.
-- [x] Carry unclaimed-ball turnovers into the next engine-selected carrier, including continuity from the actual preceding ball endpoint.
-- [x] Record goal-kick restarts after shots/post hits go out, from the goalkeeper's ball point to the next engine-selected carrier, without adding random draws or changing the match report.
-- [x] Model engine-resolved open-play goalkeeper clearances when the team uses Long passing; resolve the target and result through the existing long-ball simulation and preserve the held-ball visual origin.
-- [x] Audit remaining unowned-ball transitions not covered by saved, rebounded, deflected, goal-kick, or unclaimed-ball paths.
-- [x] Render ordinary live actions alongside the existing highlight sequences; verify ball travel is driven by the recorded engine action and formation movement remains interpolated between snapshots.
-- [x] Preserve deterministic score/event/RNG behavior when visual recording is enabled or omitted; fixed-seed reports compare equal with the optional timeline removed.
-- [x] Add regression coverage for pass endpoint consistency, shot outcomes against the recorded shot report, and unchanged score/event reports.
-- [x] Preserve the engine-resolved defender control/deflection after a blocked shot or cross even when the blocking contact already lists the defender as its target. The regression asserts the resulting visual event sequence and proves the score/event report remains unchanged with visual recording off.
-- [x] Forward TACTICA's fresh visual actions to the embedded Open Football viewer instead of sending empty event/state tracks. An adapter maps blocked shots/crosses and clearances to the viewer's recorded `Blocked` / `HeadedClear` contact cues, and support runs/cross receivers/tackles to the viewer's recognized player attitudes. Duplicate same-time block cues are collapsed; the adapter does not call or mutate `MatchSim`. Adapter regressions, TypeScript project build, `npm test` (14 files, 94 tests), and `npm run build` pass.
-- [x] Remove time-varying per-player position noise from the shared pitch layout. Each player keeps a stable presentation-only spacing offset across match moments; a regression confirms unchanged tactical snapshots produce unchanged player and ball positions at different timestamps. Full `npm test` passes (14 files, 94 tests); `npm run build` passes.
-- [x] Synchronize embedded viewer playback speed with the manager's live match speed. Single-player 1×/2×/4×/8× controls now update both the match engine's wall-clock cadence and Open Football's playback clock; online H2H derives the viewer multiplier from the slower manager and configured half duration, while halftime remains paused. Extracted the calculation into a pure helper with single-player, H2H and invalid-setting regressions; `npm test` passes (15 files, 99 tests) and `npm run build` passes.
-- [x] Make mapped Open Football player attitudes transient across streamed live batches. Support runs, receiving, tackles and interceptions return to neutral after 2.4 seconds of match time; if a later batch adds an action before an already queued reset, the latest attitude is reasserted at that reset so it cannot cancel the newer action. Same-batch and cross-batch regressions pass; full `npm test` passes (15 files, 99 tests) and `npm run build` passes.
-- [x] Include the selected TACTICA match bench in the Open Football viewer's pre-match roster. Substitutes receive viewer actors at startup but stay off-pitch until TACTICA's authoritative live position stream first includes them; the viewer cannot silently omit a manager-made substitution because the incoming player was absent from its roster. `npm run build` passes; live owner-visible substitution playback remains pending.
-- [x] Map successful TACTICA short-pass and long-ball receptions to Open Football's supported receiver attitudes (`Supporting Attack` / `Cross Receiving`) so completed delivery sequences include a visible receiving action. This is presentation-only and leaves the authoritative possession and result untouched. `npm run build` passes; live visual acceptance remains pending.
-- [x] Keep the selected-club match on the Open Football viewer from its opening state. While the viewer initializes, show an explicit localized loading state instead of swapping in TACTICA's former SVG pitch; the local match clock remains at kick-off until the Open Football viewer reports ready. If startup errors or does not report ready within 60 seconds, keep the match frozen and offer a return to the pre-match screen; do not start Bevy after a pre-start timeout, and accept a late `ready` event if the already-started viewer finishes slowly. `npm exec tsc -- --noEmit` passes; a fresh isolated TACTICA career (Fulham vs Leeds, 9 Aug 2025) reached the actual viewer `ready` phase 2.866 seconds after kickoff, showed 1' and the live pitch with both squads, and captured at `%TEMP%\\tactica-match-start-20261102.png`. Full-match pacing/continuity and owner-visible acceptance remain open.
-- [x] Select the WebGPU renderer when the browser exposes a usable hardware adapter, while retaining WebGL2 as a fallback. Both Bevy backends are enabled, the viewer config and generated WASM carry the choice, and the rebuilt viewer is staged into the embedded Open Football assets and TACTICA public assets. `cargo check --manifest-path vendor/open-football/src/match/Cargo.toml --target wasm32-unknown-unknown --release -j 2`, `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2`, `npm exec tsc -- --noEmit`, and `npm run build` pass. Headless Edge confirmed a usable WebGPU adapter; its actual TACTICA career match reached viewer-ready in 2.866 seconds and displayed the opening pitch. Full-match playback and owner-visible visual acceptance remain open.
-- [x] Replace per-frame formation jumps with persistent deterministic player centers in `MatchSim`; each player advances toward the current tactical/ball-relative formation at a bounded rate, and the same coordinates feed the React pitch, engine visual actions, and Open Football viewer. This movement is presentation-only and consumes no RNG. Regressions confirm coordinates are preserved by the pitch layout, movement is bounded across 80 live steps, and fixed-seed match reports remain identical; full `npm test` passes (15 files, 100 tests) and `npm run build` passes. Visual acceptance of pass/interception/shot-rebound continuity remains open below.
-- [x] Reject stale live-match sequence/time responses before updating the Open Football playback ceiling, since `setHostTime()` replaces its value and could rewind an otherwise monotonic viewer. `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2` passes; real-match visual acceptance remains open.
-- [x] Drive the live HUD and playback clock from the newest frame actually accepted from each poll, because recovered `frames` can be ahead of the response's summary frame. The React viewer bridge now advances its host-time ceiling only from its newest accepted snapshot, so an older/reordered batch cannot overwrite a newer queued time. `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2` and `npm exec tsc -- --noEmit` pass; visual continuity still needs a real-match run.
-- [ ] Resolve and visually verify live-action backtracking/stutter across pass interceptions, failed dribbles, and shot/rebound sequences. The manager live feed uses monotonic live-session IDs and per-session frame sequences, retains 16,384 authoritative position samples (enough for a full regulation match plus stoppage time), and streams every unseen frame by `after_frame` cursor so delayed requests no longer discard intermediate movement. A focused regression recovered all 10,800 half-second samples from a full 90-minute match after one delayed poll. Playback speed is measured from the engine timestamps and wall-clock samples instead of forcing 25×; it pauses when the engine clock stops. The page rejects stale frames, throttles to 250ms in a hidden tab, and interpolates transforms over 40ms. Fixed a live-viewer allocation hotspot: single-sample track batches now grow amortized instead of reallocating the entire history per frame; the 10,800-sample regression passes and the viewer compiles for wasm32. The opening viewer recording now includes authoritative goals already present in its first frame; a targeted JavaScript regression verifies that a prior goal enters the viewer recording exactly once. Current-source fixes prevent stale overlapping snapshots or brief polling gaps from rewinding/pausing playback. Successful short-pass visuals now wait for the engine's actual next carrier and use that player's pitch coordinate; cutbacks use the engine-selected shooter. Deferred short passes are timestamped when their engine-selected receiver is resolved, preventing their animation samples from arriving behind an already accepted viewer frame and being discarded. The embedded viewer now clamps each rendered playback step to the latest host-time ceiling instead of dropping a whole frame when its delta barely crosses the 125ms lead, avoiding an unnecessary stop at the streaming boundary. The viewer wasm and React public assets were rebuilt and staged; cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2 and npm run build pass. Actual pass/interception/goal continuity still needs owner-visible acceptance.
-- [ ] Use CM 2010 as a gameplay reference: implement ordered player/ball movement paths, support runs/feeds, defensive reactions, ball-follow framing, and carry real squad shirt numbers into the live viewer with original TACTICA assets; do not reuse proprietary ISO assets. The viewer derives transient `Supporting Attack` and `Pressing` cues from authoritative player coordinates, and imported CM 01/02 databases now retain the original shirt number through simulation and viewer setup (modern world data has no shirt-number field and keeps the positional fallback). The live bridge now stably orders delayed action and snapshot batches by engine moment, preserving same-moment order; this keeps player-history interpolation and ball/action presentation on the same timeline. `npm exec tsc -- --noEmit` passes; actual live visual acceptance remains open.
-- [x] Complete a read-only CM2010 ISO/PE revalidation and document the static-analysis protection barrier: verified the installation executable/hash, distinguished the separate UPX crack copy without running it, confirmed the Direct3D imports and transformed entry/section layout, and recorded that the simulation-to-renderer boundary remains unrecovered (`docs/cm2010-static-analysis.md`, 2026-11-01).
-- [x] Exercise Open Football's selected-league simulation through a fresh local session. One day for Real Madrid's La Liga/continental IDs returned in 3.13s; a 21-day scoped advance returned in 89.46s and produced Getafe 0–3 Real Madrid dated 22.08.2026. The match replay route returned HTTP 200 with its WASM viewer. Manchester City's unselected schedule still showed "Planlanmış maç yok" at the same world date. The periodic/world passes continue globally; match dispatch remains filtered to the passed competition IDs.
-- [x] Extend the embedded live viewer to 120 minutes when TACTICA enters extra time, and map authoritative extra-time player/ball/action/goal timestamps onto that extended timeline. Rebuilt the active WASM viewer and generated JS/WASM assets; `cargo check --manifest-path vendor/open-football/src/match/Cargo.toml --target wasm32-unknown-unknown --release -j 2` and `npm exec tsc -- --noEmit` pass. Owner-visible extra-time playback remains unverified.
-- [x] Give each engine-resolved penalty shootout kick a separate viewer beat after extra time, with the real taker, goalkeeper, outcome, ball path, and scorer timestamp. The viewer duration grows with the actual kick count; `npm exec tsc -- --noEmit` passes. Visual acceptance of penalties remains open.
+- [x] M00-S01-T01 Kanonik React/Vite/TypeScript uygulaması, oyun motoru, veri tabanı, kayıt ve platform dizinlerini tespit et. **Kabul:** repo yapısı ve çalıştırma komutları belgeli.
+- [x] M00-S01-T02 Kilitli bağımlılıkları kur; başlangıç build ve test durumunu kaydet. **Kanıt:** `npm ci`, build ve test başlangıçta başarılı.
+- [x] M00-S01-T03 ISO ve patch dosyalarını uygulamadan ve GitHub'dan ayrı tut; hiçbirini çalıştırma. **Kabul:** orijinal dosyalar değiştirilmedi/commit edilmedi.
+- [x] M00-S01-T04 Kod, veri, grafik ve üçüncü taraf lisans/attribution kurallarını belgeleyip dağıtım notlarına bağla.
+- [x] M00-S01-T05 TACTICA motorunun sonuç ve kariyer state'i; viewer'ın sunum sorumluluğu olduğunu kesinleştir.
 
-- [x] Publish an explicit live match frame immediately after kickoff setup, at the current match timestamp before the first engine tick, then schedule normal samples 500 ms apart. This lets the already-prepared Open Football viewer attach to the real kickoff state instead of beginning from its first later tick. `cargo check --manifest-path vendor/open-football/Cargo.toml -p core --profile fast -j 2` passes; owner-visible continuity still needs acceptance.
+## Sprint M00-S02 — Görev görünürlüğü ve yayın disiplini
 
-## TFC-M05: Live tactical interaction — COMPLETE
+- [x] M00-S02-T01 Görevleri milestone/sprint/tekil task ve ayrı kabul ölçütleri halinde düzenle.
+- [x] M00-S02-T02 Kod tamamlandı, runtime doğrulandı ve owner-visible kabul edildi durumlarını ayır.
+- [x] M00-S02-T03 `TASKS.md` ve özet task verisini dakikada bir okuyan dashboard kur. **Kabul:** `localhost:11000` çalışıyor; dashboard sohbet içi tarayıcı sekmesinde açık.
+- [x] M00-S02-T04 Her büyük sprint sonunda yalnızca ilgili dosyaları commit/push et; owner dosyalarını stage etme.
 
-- [x] Existing match screen exposes tactics, substitutions, and stoppage/half-time interactions.
-- [x] Add deterministic engine regressions showing a live formation change rebuilds player zones and updates the next 22-player pitch snapshot without changing player identities.
-- [x] Add deterministic engine regression showing a substitution updates the active slot, tactic lineup, bench, event timeline, pitch kit/number identity, and final player report.
-- [x] Verify both changes through the live browser controls and visually confirm the updated formation and incoming player's kit/number on the rendered pitch.
+---
 
-## TFC-M06: Match interface and polish — COMPLETE
+# Milestone M01 — Marka, açılış ve kariyer kurulumu
 
-- [x] Existing match screen includes scoreboard, clock, controls, statistics, commentary, match events, and tactical controls.
-- [x] Remove side lineup/rating panels from the live pitch; keep player ratings and condition details in their separate match and squad sections so both goals remain visible.
-- [x] Add match-view-scoped fallback styles for legacy lineup/roster panel variants so they cannot cover the goals; preserve on-pitch player name labels and reduce rain streak contrast and density further.
-- [x] Reduce rain overlay density and opacity so weather stays visible without obscuring players, pitch markings, or goal areas.
-- [x] Make the animated pitch the permanent primary match view; retain commentary as a supplemental panel, not an alternative viewing mode.
-- [x] Add a ball-follow camera toggle while keeping full pitch and both goals as the default view.
-- [x] Improve responsive scoreboard and matchday visual polish; compact the live score, clock, team names, and crests for narrow widths without collisions (checked at 390px and 320px).
-- [x] Inspect the revised rain effect in a match whose actual weather is rain or heavy rain using an isolated MatchSim run with `weather: 'rain'`; verify the pitch overlay remains visible without obscuring the field.
-- [x] Verify one complete match from kick-off through full-time in the live viewer, including halftime talk and the post-match report (manual browser QA career, 9 August 2025; Liverpool 1–1 West Ham).
+**Çıkış ölçütü:** Kullanıcı TACTICA markalı açılışta takip edeceği ligleri ve kulübü seçerek kariyer başlatır; kurulum ekranı oyun navigasyonunda tekrar görünmez.
 
-## TFC-M07: Management UI modernisation — IN PROGRESS
+## Sprint M01-S01 — TACTICA FC kimliği
 
-- [x] Move the history-aware Back control into the persistent app top bar so it stays in one predictable place across manager screens; remove duplicate page-heading controls. Direct-entry screens without history return to the inbox. TypeScript production build and no-emit typecheck pass; visual acceptance remains pending.
+- [x] M01-S01-T01 Başlık, favicon, browser tab, PWA ve uygulama metadata'sını TACTICA FC olarak düzenle.
+- [x] M01-S01-T02 Sağlanan kalkan logosu, menajer görseli ve ICO paketini web ve yerel platform varlıklarına uygula.
+- [x] M01-S01-T03 Black Metal paletini (siyah/grafit/gümüş/kırmızı) ve durum renklerini ortak tasarım tokenlarına taşı.
+- [x] M01-S01-T04 GitHub bağlantısını kullanıcının TACTICA FC repo adresine çevir; version-check butonunu kaldır; Hakkında içeriğini yenile.
+- [x] M01-S01-T05 Viewer attribution ve lisans metinlerini ürün markasından ayrı, gerekli yerde koru.
+- [ ] M01-S01-T06 Open Football host About/home sayfalarının güncel görselini temiz runtime'da incele. **Açık:** eski user server yeniden başlatılmadan yeni source görsel kabul sayılmaz.
 
-- [x] Add Turkish to the language type, language selectors, community language metadata, AI text requests, and locale-aware number/date formatting; add a starter Turkish dictionary for common, start, navigation, and match strings with English fallback.
-- [x] Translate all landing-page, new-career, options, top-bar, match, tactics, team/player instructions, player profile, player attributes, chemistry, staff roles, table headings, and status-tag keys into Turkish.
-- [x] Translate and review the transfer, offer, bid, clause, loan, enquiry, contract, signing, negotiation, and agent UI keys into Turkish; total coverage is now 794 / 4,192 English keys.
-- [x] Translate staff management, scouting, finance, board budget, club information, and inbox news keys into Turkish; total coverage is now 997 / 4,192 English keys.
-- [x] Translate board confidence and expectation messages, training schedules, job-centre workflows, and youth intake news into Turkish; total coverage is now 1,145 / 4,192 English keys.
-- [x] Translate first-day onboarding, manager rankings, achievements, and trophy celebrations into Turkish; total coverage is now 1,326 / 4,192 English keys.
-- [x] Translate the in-game help articles for reputation, board confidence, fans, player management, finances, transfers, scouting, press, and rankings into Turkish; total coverage is now 1,375 / 4,192 English keys.
-- [x] Translate the 87 press-conference question prompts into Turkish; total coverage is now 1,462 / 4,192 English keys.
-- [x] Translate the 231 press-conference reply options into Turkish; total coverage is now 1,693 / 4,192 English keys.
-- [x] Translate manager press responses, journalist reactions, and effect labels into Turkish; total coverage is now 1,740 / 4,192 English keys.
-- [x] Translate all remaining press-conference titles, tone descriptions, promises, progress text, and headlines; all 425 `press.*` keys are now covered, with total Turkish coverage of 1,800 / 4,192 English keys.
-- [x] Translate player complaints and negotiations, team talks, and one-to-one player talks; total Turkish coverage is now 1,969 / 4,192 English keys.
-- [x] Translate match commentary, highlights, team statistics, and match reports; total coverage is now 2,172 / 4,192 English keys.
-- [x] Translate fixtures, league tables, competition summaries, manager performance, attendance, facilities, and dropped-lead analysis; total coverage is now 2,284 / 4,192 English keys.
-- [x] Translate player unrest, trial periods, sponsorship, transfer-window, rejected-offer dialogue, and manager promises/personality; total coverage is now 2,428 / 4,192 English keys.
-- [x] Translate transfer-market search/filter labels, scouting report descriptors, and board confidence/request workflows; total coverage is now 2,601 / 4,192 English keys.
-- [x] Translate tactical analysis, attribute abbreviations, player traits, team talks, season stories, manager history, scouting recommendations, club records, weekly summaries, rivalries, and competition rounds; total coverage is now 2,810 / 4,192 English keys.
-- [x] Translate fan sentiment, transfer bidding wars, training camps, club projects, transfer realism, player rehabilitation, and opposition instructions; total coverage is now 3,018 / 4,192 English keys.
-- [x] Translate database import, draft-mode landing content, inbox categories, weather, public profiles, manager comparisons, supporter information, and AI managers; total coverage is now 3,258 / 4,192 English keys.
-- [x] Translate the Draft League room, draft picks, auction flow, season summaries, and expert ratings; total coverage is now 3,474 / 4,192 English keys.
-- [x] Translate the manager chat, AI banter, and transfer conversations; total coverage is now 3,579 / 4,192 English keys.
-- [x] Translate online multiplayer setup, readiness, turn simulation, live head-to-head matches, and deadline/autopilot messages; total coverage is now 3,675 / 4,192 English keys.
-- [x] Translate the community suggestion board, categories, statuses, voting, comments, and error messages; total coverage is now 3,742 / 4,192 English keys.
-- [x] Translate the assistant lineup/benchmark tools and press-war exchanges; total coverage is now 3,784 / 4,192 English keys.
-- [x] Translate monthly/season awards, counter-offer negotiation, and all career challenges; total coverage is now 3,834 / 4,192 English keys.
-- [x] Translate public manager profiles, friendly matches, transfer-history filters, finance forecasts, and match-performance insights; total coverage is now 3,902 / 4,192 English keys.
-- [x] Translate injury labels, manager head-to-head records, match stats, award news, inbox settings, and player development; total coverage is now 4,028 / 4,192 English keys.
-- [x] Translate all remaining 164 keys and review the complete English dictionary; coverage is 4,193 / 4,193 English keys after adding the localized pitch accessible name.
-- [x] Establish shared TACTICA FC design tokens for brand colors, semantic accents, spacing, control sizing, radii, and elevations; document theme/component rules in `DESIGN_SYSTEM.md`.
-- [x] Apply the Black Metal palette to the React app's default global tokens, form focus states, shared controls, start screen, and landing-page hero accents while preserving explicit saved light/club themes. Source diff reviewed; full screen-by-screen visual acceptance remains open below.
-- [x] Replace legacy CM Reborn branding and its stale site address on season/draft share cards, remove the viewer vendor name from player-facing match loading, and restyle both cards to TACTICA Black Metal red, graphite, and silver. Keep upstream viewer attribution and license notices in project documentation and package notices. `npm run build` passes.
-- [x] Map those shared semantic tokens onto the active Open Football host theme: Black Metal graphite, silver, and red with separate green/amber/red status colors. CSS parser accepted 1,955 top-level rules with zero parse errors; full screen-by-screen modernization and visual acceptance remain open.
-- [x] Add a localized global Back control with a same-site history action and safe route fallback; unify country, league, team-selection panels, tabs, and controls under the graphite/red/silver TACTICA FC theme.
-- [x] Make the deep navy TACTICA FC theme the default for installations without a saved theme preference; preserve explicit saved theme selections.
-- [x] Apply the shared design system to the dashboard inbox feed: keyboard-operable message buttons, clear selected/unread states, aligned date/icon columns, and responsive text wrapping.
-- [x] Remove the pre-match first-XI/condition list; keep formation/mentality context, the tactics link, and the separate ratings section while hiding legacy side-roster overlays above the pitch.
-- [x] Move the 2D pitch accessible name into English, Danish, and Turkish localization dictionaries.
-- [x] Add localized player-name search and goalkeeper/defence/midfield/attack filters to the squad table, including a no-results state. In the 2027 Fulham career UI, the goalkeeper filter reduced 23 players to one (Alfie McNally); accent-insensitive search for `jimenez` found Raúl Jiménez; clearing filters restored all 23 (`design-qa.md`, 2026-10-30).
-- [ ] Apply the design system while modernising the main menu, career setup, dashboard, squad, player, tactics, transfers, fixtures, and results.
-- [x] Restyle the managed schedule's matchday/live-viewer panel with shared Black Metal tokens, responsive score layout, and localized canvas accessibility name; replace the old navy/teal inline presentation. `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2` passes; fresh-runtime visual acceptance remains open.
-- [x] Replace the schedule's remaining legacy navy/teal match-report card with a red/graphite TACTICA panel and silver report links; fresh-runtime visual acceptance remains open.
-- [x] Add Turkish as the default interface locale and preserve English and Danish.
-- [ ] Move user-visible strings into the existing localisation architecture.
-- [x] Verify the core manager workflows use real shared game state. Isolated fresh-server acceptance confirmed persisted manager takeover, tactic/style and player/team training readback, transfer listing, exact positional lineup selection in a managed match, live instructions/substitution applied by the engine, and the resulting replay route; owner-visible browser acceptance is tracked separately under TFC-M04.
-- [x] Keep player and team training controls synchronized with saved manager state: show localized save/success/failure feedback, retain the last acknowledged focus, and restore it after a failed request instead of displaying an unsaved setting. `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2` passes; browser interaction remains unverified.
+## Sprint M01-S02 — Yeni kariyer sihirbazı
 
-## TFC-M08: Career integration and saves — PARTIAL
+- [x] M01-S02-T01 Yeni oyunda izlenecek ülkeleri seçme ekranını oluştur.
+- [x] M01-S02-T02 Ülke başına ligleri göster; lig seçimi ve seçili lig sayısını kaydet.
+- [x] M01-S02-T03 Menajer adını ve yönetilecek kulübü seç; kariyer state'ini başlat.
+- [x] M01-S02-T04 Kariyer başladıktan sonra ülke/lig/takım seçim ekranını ana nav'dan kaldır.
+- [ ] M01-S02-T05 Temiz güncel oturumda ülke→lig→kulüp→kariyer akışını ve nav'dan kalkışını görsel olarak kabul et. **Ön kanıt:** izole source testinde kariyer hub göründü, setup selector nav'da yoktu; owner-visible kabul açık.
+- [ ] M01-S02-T06 Seçili lig sayısı ve seçilen kulüp yeni kariyerin başlangıcında doğru yükleniyor; save/restart sonrası aynı state'i doğrula.
 
-- [x] Make the assigned weekly training schedule affect daily condition recovery: rest recovers faster and high-load fitness training recovers more slowly; update Turkish, English, and Danish guidance. `npm exec tsc -- --noEmit` passed. Match-play balance and owner-visible career acceptance remain part of final QA.
+## Sprint M01-S03 — Ana ekran ve navigasyon
 
-- [x] Existing game includes modern 2025/26 data, competitions, transfers, player development, finances, and IndexedDB-backed save/import/export code.
-- [x] Audit and implement versioned local/exported save snapshots with legacy-read support and atomic payload-plus-metadata records.
-- [x] Add compatibility coverage for legacy unwrapped saves, current versioned saves, malformed payloads, and unsupported future versions.
-- [x] Fault-inject a rejected platform-store replacement and verify the previously committed save remains intact and listed.
-- [x] Retry failed autosaves with capped exponential backoff while the career stays open.
-- [x] Abort a real browser IndexedDB replacement transaction and verify both the previous payload and metadata remain intact.
-- [x] Run two seasons headless and verify archived seasons and retained match reports survive a versioned save/load round-trip.
-- [x] Verify multi-season IndexedDB save/load progression through the UI after match changes. The in-browser QA fixture advanced a cloned Fulham career from 2025-08-09 through 2027-07-02, saved and reloaded its versioned record, matched the save-list metadata, and the normal app auto-resumed the saved career in a separate in-conversation tab; then the actual `Oyunu kaydet` UI button showed its success toast, the updated save appeared at the top of the load list, and selecting it restored the normal app header at 2 July 2027. Two archived seasons and 40 match reports were retained (`design-qa.md`, 2026-10-30).
-- [x] Add safe migration coverage for the versioned save envelope introduced by this work.
+- [x] M01-S03-T01 Geçmiş ekranlarda ortak Geri düğmesi; doğrudan girişte güvenli Inbox dönüşü ekle.
+- [x] M01-S03-T02 Ortak üst barda kulüp, tarih, bütçe, bildirim, sıradaki maç ve Devam et/maça git durumunu göster.
+- [x] M01-S03-T03 Tarih ilerlemesini günlük adımda tut; ayrı tatil eylemi çoklu gün isteyebilir.
+- [x] M01-S03-T04 Maç bekleyen kullanıcıyı doğrudan maç öncesi/maç ekranına götür.
+- [ ] M01-S03-T05 Geri, üst bar, tarihi ilerletme ve maç gününe geçişi 320/390/1280px görünümünde kabul et.
 
-- [x] Show the condition-recovery modifier for each training schedule next to its focus, using the same shared factor as daily gameplay recovery. Turkish, English, and Danish labels are included; `npm exec tsc -- --noEmit` passes. Browser visual acceptance remains open.
+## Sprint M01-S04 — Dil
 
-## TFC-M09: Windows release — IN PROGRESS
+- [x] M01-S04-T01 Türkçeyi varsayılan yap; İngilizce ve Danca'yı koru.
+- [x] M01-S04-T02 Ortak, kariyer, maç, taktik, transfer, antrenman ve haber sözlüklerini tamamla.
+- [x] M01-S04-T03 Tarih/saat/para/sayı formatını locale'e göre düzenle.
+- [ ] M01-S04-T04 Yeni/yenilenen tüm kullanıcı metinlerinde hard-coded string taraması ve üç dilde fallback kabulü yap.
 
-- [x] Select Electron 45.2.1 and configure a Windows NSIS package with the supplied Black Metal ICO, a local TACTICA React app host, single-instance guard, restrictive navigation, disabled renderer Node access, context isolation, and sandboxing. The earlier full Open Football server package is historical and superseded by the viewer-only integration direction.
-- [x] Redirect the Electron source launcher from the full Open Football server to the TACTICA React/TypeScript app served from its own stable loopback origin; package the embedded WASM viewer without the Open Football game executable. The isolated unpacked Windows package was built and its ASAR audited for the TACTICA shell, viewer WASM, and absence of `open_football.exe`; launching the package and validating career saves remain open.
-- [x] Keep legacy Open Football Cargo desktop builds in a separate target directory so they do not replace the executable used by its local server. The current TACTICA React desktop build does not invoke Cargo and keeps its IndexedDB origin stable; migration of legacy Rust-server saves is not yet verified.
-- [x] Preserve the earlier x64 NSIS installer `release/TACTICA FC Setup 0.11.0.exe` and its SHA-256 (`4A841369948F2EF00E2EFE6FB14B2CCA39662A0B8D24484D4A7F6A41D624F0A8`) as a historical pre-transition package; it contains the full Open Football executable and must not be represented as the current viewer-only TACTICA build.
-- [x] Rebuild the current x64 NSIS installer on 2026-11-01, including live-viewer speed sync and cross-batch transient action attitudes. Its ASAR contains the TACTICA desktop shell, current React app bundle (`index-C8wVLXD1.js`) and match-viewer WASM; `open_football.exe` is absent from both ASAR and `win-unpacked`, and `OPEN_FOOTBALL_LICENSE.txt` is bundled. Installer SHA-256: `0926C2B2145FF08FB3D37B431A4A2AC47DC559C31CB50327E7AFFC6BC1736AB2`. The previous viewer installer/unpacked build is preserved under ignored `target/codex-cross-batch-state-backup-20261101/`.
-- [ ] Launch the newly built installer/package and verify offline career, match viewing and saves. The package is unsigned; owner-visible runtime acceptance remains pending.
-- [x] Resolve the production dependency audit: `@vercel/cli-config` pinned vulnerable `zod@4.1.11`, which npm audit reported as four high-severity findings. A root npm override now resolves that transitive dependency to the project's direct `zod@4.6.7`; `npm install --ignore-scripts` synced the installed tree, `npm ls @vercel/blob @vercel/oidc @vercel/cli-config zod --depth=4` shows the override, and `npm audit --omit=dev` reports zero vulnerabilities. The full development dependency audit still reports 3 low and 19 moderate findings.
-- [ ] Verify the installed app's offline singleplayer, match viewing and career saves in an owner-visible session. The existing `open_football.exe` PID 58100 still uses the same `%APPDATA%\Tactica FC` save directory, so do not run a second save writer concurrently. The installer is not code-signed.
-- [ ] Build and launch a Windows desktop package; verify offline singleplayer, match viewing, and career saves.
+---
 
-## TFC-M10: Android release — IN PROGRESS
+# Milestone M02 — Menajerlik kontrolleri
 
-- [x] Confirm the local Android toolchain and available device: Android SDK platform 36, NDK 28.1, Java 21, and a Samsung SM-A105G running Android 11 / `armeabi-v7a` with 1.78 GB RAM. This is environment inventory only; device runtime is not accepted.
-- [x] Preserve the prior Rust/JNI Android engine, generated Capacitor assets, and debug APK under ignored `target/codex-android-engine-transition-backup/` before switching the Android host to the TACTICA React/TypeScript app. The old Rust cross-build/JNI work is historical and no longer describes the Android runtime architecture.
-- [x] Point Capacitor at `dist/tactica-manager`, remove Rust server startup from `MainActivity`, and make `android:sync` build the shared React app before Capacitor sync. The Android packaging script backs up previous artifacts and removes only the duplicate `.js.gz` / `.wasm.gz` viewer copies from generated web assets because Android's asset merger rejects those sibling names.
-- [x] Build `android/app/build/outputs/apk/debug/app-debug.apk` from the TACTICA React app on 2026-11-01. ZIP inspection confirms the packaged React shell and Open Football viewer WASM are present, while `libtactica_android_engine.so` is absent. SHA-256: `CD26FFDAAAF5DB2CB5F7013CC9AA466FFABA986E274ACDA9EA4071DC29450D27`. This proves build/package contents only, not runtime support.
-- [ ] Verify Android startup, CM-style career, TACTICA match simulation/viewer playback, and saves on a suitable device. The available low-memory phone has not been used for runtime acceptance.
-- [ ] Document signing prerequisites for any AAB release.
+**Çıkış ölçütü:** Kadro, taktik, antrenman ve transfer kararları gerçek kariyer state'ini değiştirir; saklanır ve motor tarafından uygulanır.
 
-## TFC-M11: iOS preparation and release — IN PROGRESS
+## Sprint M02-S01 — Kadro ve oyuncu profili
 
-- [x] Generate and configure the Capacitor iOS project under `ios/App`; replace the template app icon and launch splash with the exact supplied TACTICA logo; on Windows, confirm the shared web bundle and plugin/resource sync with `npm run build` and `npm exec -- cap sync ios`. This is platform-independent project validation only; no Xcode build or iOS runtime was available.
-- [x] Document current macOS/Xcode, signing, and device acceptance prerequisites in `docs/ios-release-prerequisites.md`, with official Capacitor and Apple references.
-- [ ] Do not claim native release validation without an appropriate Apple build/runtime environment.
+- [x] M02-S01-T01 Kadroda isim, pozisyon, uyruk, yaş, yetenek, potansiyel, kondisyon, moral, maç/gol, puan ve değer göster.
+- [x] M02-S01-T02 Oyuncu araması, pozisyon filtreleri, temizleme ve boş sonuç durumunu ekle.
+- [x] M02-S01-T03 Oyuncu profili ve sözleşme/sakatlık/kariyer bilgisini kadroya bağla.
+- [ ] M02-S01-T04 Gerçek kariyerde filtre/arama ve profil bağlantılarını yeniden açılış dahil doğrula.
+- [ ] M02-S01-T05 Kadro/profil tablolarının dar ekranda kesilme, yatay taşma ve değer kaybı olmadığını kabul et.
 
-## TFC-M12: Final QA and optimisation — NOT STARTED
+## Sprint M02-S02 — Taktik ve maç kadrosu
 
-- [ ] Run automated engine, event/render mapping, save/load, navigation, and regression checks.
-- [ ] Measure rendering performance on available targets and distinguish desktop measurements from physical mobile-device results.
-- [ ] Record per-platform evidence and unresolved release blockers.
+- [x] M02-S02-T01 Diziliş, zihniyet ve oyun tarzını kaydedip maç simülasyonuna aktar.
+- [x] M02-S02-T02 Mevcut dizilişin 11 slotuna oyuncu ata; boş slotları otomatik tamamla.
+- [x] M02-S02-T03 Takım talimatı ve rakip talimatlarını engine state'ine uygula.
+- [x] M02-S02-T04 Maç içi taktik, oyuncu değişikliği ve devre arası konuşmasını motor state'ine bağla.
+- [x] M02-S02-T05 Değişiklikten sonra aktif slot, bench, forma/numara, timeline ve raporu aynı oyuncuya göre güncelle.
+- [ ] M02-S02-T06 Canlı maçta taktik ve değişiklik etkisini gerçek pozisyonlar/oyuncu aktörüyle kabul et.
+- [ ] M02-S02-T07 Rakip talimatının baskı, savunma hattı ve pozisyon değişimine etkisini görsel kabul et.
 
-## Baseline environment notes
+## Sprint M02-S03 — Antrenman ve kamplar
 
-- Canonical app path: `C:\Users\sekip\Desktop\GAMES\other games and assets\cm0102\Tactica FC`.
-- The workspace parent is not a Git repository; do not assume Git history or branch metadata is available.
-- Initial `npm test` and `npm run build` attempts could not start because dependencies were absent. After `npm ci`, baseline tests and build passed as recorded above.
-- Post-rebrand verification: `npm run build` passed; `npm test` passed (9 files, 58 tests, 36.87 seconds). Production output still warns about the ineffective dynamic import and ~1.78 MB minified bundle.
-- Post-visual-timeline verification: `npm run build` passed; `npm test` passed (9 files, 59 tests, 37.23 seconds), including the deterministic report-equivalence check. Bundle warning remains (~1.78 MB, same ineffective dynamic import).
-- Latest visual pass: opened the rebranded app at the Vite base path, confirmed TACTICA FC title, started Liverpool–West Ham in the refreshed SVG pitch, observed vector kit players and the animated ball during live play, completed both halves with a halftime team talk, and reached the 1–1 post-match report. This is manual desktop-browser evidence; it does not establish mobile layout or native-platform behavior.
-- Latest visual-action queue update: the live UI now queues each new engine timeline entry between clock updates and presents them in order on an independent interval. `npm run build` passed; `npm test` passed (9 files, 59 tests, 36.44 seconds). Browser QA resumed the saved Liverpool career, started Liverpool–Sunderland, and observed the live clock advance through ordinary action commentary including a through ball while the 2D pitch remained active at the narrow in-app viewport. Separate historical ball-flight endpoints were added in the later update below.
-- Follow-up build after keeping the action queue active through the full-time state also passed. The queue's presentation interval is independent of match speed/RNG and may finish presenting the final ordinary-play actions after the report appears.
-- Match-screen follow-up: the animated pitch now stays mounted as the primary view while commentary, ratings, statistics, and tactics remain supplemental tabs. Full `npm test` passed (10 files, 67 tests); `npm run build` passed after the pitch persistence and scroll-to-top changes. Manual in-app browser inspection at a 604px viewport showed 22 upright players, both goals clear, zero lineup overlays, and the pitch still visible with Commentary selected. This test match reached full-time but was not continued into the career. A direct kickoff-from-scrolled-preview check remains open; desktop-width and mobile-device acceptance remain unverified.
-- Display issue follow-up: the live renderer DOM in the current preview contains zero `.match-lineup` elements; the attached screenshot still shows lineup overlays, so it does not reflect the current preview DOM. Reduced rain and heavy-rain streak density/opacity again because diagonal weather lines were competing with the field and goal markings. The current browser session had heatwave weather, so the final rain appearance needs a rain-state visual check. After the final CSS-only change, `npm run build` passed with the same existing dynamic-import and large-chunk warnings.
-- M05 browser-control verification: in an isolated in-app preview match paused at 1', switched Liverpool from 4-4-2 to 4-3-3, then compared the rendered SVG player transforms after switching back: 6 of 22 player positions changed. Substituted Wirtz for Jones; the pitch DOM showed Wirtz with shirt number 7 in Jones's slot, 22 total pitch players, and the available-sub count dropped from 5 to 4. Restored the test match to 4-3-3 and left it paused; no full-time result was committed. M05 control-to-render check is complete for this browser scenario; it does not establish all formations/device layouts.
-- Upright player-art update: replaced the small pitch markers with six optimized transparent PNG sprites (two white-kit players, two striped-kit players, and lime/orange goalkeepers). The browser preview at `http://127.0.0.1:5180/cm0102-reborn/` showed 22 upright full-body players, varying sprite size with field depth and distinguishing kits and keepers. `npm run build` passed; existing dynamic-import and large-JavaScript-chunk warnings remain. See the scoped visual record in `design-qa.md`.
-- Shared-layout endpoint update: `src/game/match-pitch.ts` now calculates the renderer's deterministic open-play positions and is used by both `Pitch2D` and `MatchSim` visual-event recording. Engine regressions assert recorded pass endpoints equal the event-time actor/recipient positions, every recorded shot action corresponds to a reported shot outcome, and enabling visual recording leaves fixed-seed reports unchanged. `npm run build` passed; `npm test` passed (9 files, 60 tests, 44.71 seconds). Manual in-app browser check observed the updated match screen at a narrow viewport during a live highlight. Reduced-motion preference suppresses the new player/ball action motion. These checks do not establish rendered animation quality across all physical devices.
-- Player motion update: three-frame white-kit and striped-kit running atlases now loop inside a player-sized SVG clip, triggered by movement between consecutive snapshots and relevant live actions. Idle players retain the upright standing art with subtle breathing. Saved/goal shots addressed to a goalkeeper select the matching generated dive pose and transition it briefly. `npm run build` passed on 2026-10-29; existing ineffective-dynamic-import and large-JavaScript-chunk warnings remain. The temporary browser preview displayed upright players, then was left at half-time without selecting a team talk; this is not recorded as end-to-end running/dive animation visual acceptance. Complete multi-pose action and goalkeeper sequences remain open.
-- Live tactics regression update (engine-only stage): `npm test -- tests/engine.test.ts` passed (15/15 tests), including fixed-seed formation/snapshot and substitution/report consistency cases. `npm run build` passed. The live visual control-to-render check was still open at that point and was subsequently verified in the M05 browser-control entry above.
-- Ball-path endpoint update: each visual action now carries the deterministic layout ball origin and arrival point separately from the actor/recipient centers. The pitch animates from these held-ball/receiver positions, preserving explicit engine-supplied goal and cross targets; older timeline entries fall back to their existing center coordinates. `npm run build` passed and `npm test` passed (9 files, 60 tests), including assertions that recorded pass ball endpoints equal the corresponding deterministic source/receiver layout ball points and that visual recording does not alter the match report.
-- Rebound event update: saved shots that the engine parries for an attacking rebound and shots that hit the post before an attacking rebound now add a second `rebound` timeline event from the engine-resolved save/post point to the selected attacker. The renderer animates the ball through the extra event and cues the receiver's run. A regression searches deterministic seeds for a rebound and verifies its contact origin, target data, finite ball endpoints, and equality of the resulting match report with visual recording disabled. `npm run build` passed; `npm test` passed (9 files, 61 tests). Held saves, goalkeeper clearances, blocked-shot deflections, and other loose-ball states remain open. This update has engine/test evidence but no new browser visual acceptance.
-- Keeper recovery update: saved shots that the engine holds now record a keeper possession event to the keeper's historical ball point. A save diverted to a corner records a keeper deflection from the save point to the actual corner flag; the following corner cross begins at that same point. Deterministic-seed regressions cover held and corner outcomes and compare each visual report with the same seed without recording. `npm run build` passed; `npm test` passed (9 files, 62 tests). Keeper distribution/clearance, blocked-shot deflections, and other loose-ball states remain open. No browser visual acceptance was performed for this update.
-- Defender contact update: blocked shots now terminate at the selected defender's historical position; a second `deflection` action carries the ball to the defender's control point or the corner flag. Blocked crosses use the defender's contact point and the resulting corner delivery starts from the flag. The transition is presentation-only and preserves the existing random branch order. `npm run build` passed; `npm test` passed (9 files, 63 tests), including seeded assertions that contact points chain between blocked shots/crosses and deflections, corner crosses continue from the flag, and reports match with visual recording disabled. Keeper distribution and other loose-ball transitions remain open. No browser visual acceptance was performed.
-- Keeper distribution update: a goalkeeper who catches a shot or claims a cross retains a presentation-only held-ball point; when the engine chooses the next actual carrier, the timeline records a distribution from that exact stored point. The later clearance update adds a real Long-passing tactic branch; remaining loose-ball transition coverage stays open. The distribution regression compared fixed-seed reports with visual recording disabled.
-- Player-facing and loose-ball update: upright player sprites now face their team's attacking direction while remaining vertically upright; away shirt numbers receive a counter-flip so they stay readable. Unclaimed turnovers (including offside restarts) now connect the prior actual ball endpoint to the next carrier chosen by the match engine. The seeded regression forces the offside instruction, checks exact endpoint continuity and confirms visual recording leaves the report unchanged. A 1536 × 1024 Edge session rendered a live match with 22 upright player groups, 22 sprites, the ball, and no console errors; one separate 4× session reached a long-ball action with a running sprite and SVG ball travel, while a repeat attempt timed out waiting for that action state. `design-qa.md` records scope and limits. `npm run build` passed; `npm test` passed (10 files, 65 tests). Keeper clearances and full multi-pose animation remain open.
-- Renderer-fixture update: `tests/pitch-renderer.test.tsx` server-renders the real `Pitch2D` component twice from a fixed 22-player snapshot and asserts identical markup, 22 sprites, two goalkeepers, upright positive vertical scaling with both team facings, readable counter-flipped shirt numbers, the three-frame running loop, and SVG ball travel. The targeted test passed, then the full suite passed (10 files, 65 tests) and `npm run build` passed. Existing ineffective-dynamic-import and large-JavaScript-chunk warnings remain. The fixture validates component markup, not browser rasterization or visual acceptance.
-- Goal-kick update: off-target shots and post hits that do not produce an attacking rebound now start a goal-kick possession with the engine's goalkeeper and record its release to the next carrier already chosen by the engine. The keeper action has its own upright kick cue and explicit `goalKick` outcome; no random branch or receiver selection was added. Seeded coverage includes saved, held, parried, corner, normal distribution, and goal-kick outcomes and compares each report with visual recording disabled. `npm test` passed (10 files, 65 tests) and `npm run build` passed. An Edge match observed `p2d-sprite-goal-kick` as the computed animation during a goal-kick event; the player element changed before a focused screenshot could be taken, so no visual pose acceptance is claimed.
-- Pitch-clearance UI update: removed both live roster overlays from the field, preserving squad/rating tabs and the scoreboard, and made the normal/heavy-rain pattern thinner, less dense, and more transparent. A 1536 × 1024 Edge live-match screenshot with a temporary heavy-rain class showed 22 players, 22 sprites, one ball, zero lineup panels, both goal mouths visible, and no console errors. The screenshot and modified browser context were temporary; no image artifact was retained.
-- The named pitch snapshot now preserves post-hit outcomes explicitly and is compiled/tested with the renderer consuming the shared type.
-- `npm ci` reported 10 dependency audit findings (5 low, 1 moderate, 4 high) and a pending `esbuild` install script approval warning. No automatic dependency upgrades were applied.
-- An existing `.github/workflows/deploy.yml` is present. No workflow was enabled or changed.
-- Keeper-clearance update: open-play keeper claims now have a deterministic, engine-resolved chance to clear long when team passing is explicitly set to Long. The shared long-ball resolver selects the actual recipient and outcome, and the visual event starts at the stored keeper-held ball point. `npm test -- tests/engine.test.ts` passed (16/16), including a fixed-seed clearance and render-independence regression; the full `npm test` suite passed (10 files, 68 tests); `npm run build` passed. This does not close the separate audit of all loose-ball transitions.
-- Match obstruction follow-up (2026-10-30): the provided screenshot showed the older side rosters covering the goal areas and strong diagonal rain streaks. The current match JSX contains no roster overlays; added a `.match-stage .match-lineup` fallback hide rule and lowered both rain streak opacity and frequency. In the live 1280×720 preview, both goals remained clear and upright full-body players were visible. `npm test` passed (10 files, 68 tests); `npm run build` passed with the existing dynamic-import and large-bundle warnings. The preview match had heatwave weather, so the changed rain appearance still needs a true rain-state visual check. The full-time test match remains uncontinued.
-- Loose-ball transition audit (2026-10-30): enumerated the `turnover(null)` entry paths in `MatchSim`: an unresolved through ball caught offside, an exhausted/no-carrier recovery, and a long ball without a selected receiver/defender. They retain the last recorded ball endpoint in the loose-ball state; when a carrier is subsequently found, the renderer receives a `looseBall/recovered` action from that point. Strengthened the fixed-seed offside regression to require the recovered action's `ballFrom` to equal the offside through-ball's `ballTo`. `npm test -- tests/engine.test.ts` passed (16/16); full `npm test` passed (10 files, 68 tests); `npm run build` passed. This closes the audit item, not every future match-event or renderer QA item.
+- [x] M02-S03-T01 Oyuncu ve takım antrenman ayarlarını kaydet/oku; onaylı değer ile başarısız yazmayı ayır.
+- [x] M02-S03-T02 Dinlenme/yoğunluk ve kondisyon toparlanması etkisini günlük motora bağla.
+- [x] M02-S03-T03 Antrenman katılımı ve performansını gelişim, haber ve oyuncu demecine bağla.
+- [x] M02-S03-T04 Fikstürsüz güne 7 günlük kamp planı; yer, ücret ve etki önizlemesi ekle.
+- [x] M02-S03-T05 Kamp iptali, ücret, kondisyon/moral etkisi, save state'i ve bitiş raporunu uygula.
+- [ ] M02-S03-T06 Canlı kariyerde kampı planla/iptal et; 7 günlük ilerlemeyi, bilanço/condition/moral etkisini, restart ve inbox raporunu doğrula.
+- [ ] M02-S03-T07 Gerçek antrenman sonucundan üretilen demeç ve oyuncu gelişim raporunu doğrula. **Not:** önceki 5/7 gün kariyeri sahiplenilmiş state; yeniden yaratmadan önce veri dizini kontrol edilmelidir.
 
-## Match roster removal follow-up — 2026-10-30
+## Sprint M02-S04 — Transfer pazarı
 
-- Broadened legacy lineup and roster fallback selectors from the pitch stage to the full match-view wrapper, covering side-card variants rendered alongside the stage. The active match JSX still has no roster cards; on-pitch names and player-rating/condition tabs remain.
-- Rechecked the 604px in-app browser preview after the CSS update: both goals are visible and no lineup panels cover the field. The test match was already full-time and was left there.
-- `npm test` passed (10 files, 69 tests); `npm run build` passed with the existing ineffective dynamic-import and large-chunk warnings. This preview used heatwave weather and does not validate rain appearance.
+- [x] M02-S04-T01 Arama, gözlem, permanent/loan listesi, teklif formu ve transfer short-list akışını uygula.
+- [x] M02-S04-T02 Kulüp ücreti, oyuncu maaşı/sözleşmesi, kulüp görüşmesi ve oyuncu şartı aşamalarını bağla.
+- [x] M02-S04-T03 Satıcı kulüp teklifi ve alıcı tarafı karşı teklifi kabul/red kontrollerini ekle.
+- [x] M02-S04-T04 Yönetici kararlarını append-only journal'da replay et; başarıyla kaydedilen snapshot'ta temizle.
+- [x] M02-S04-T05 Oyuncu listele/liste kaldır eyleminin server restart sonrasında kalmasını doğrula. **Kanıt:** izole Bournemouth kariyeri; tekrar listeleme testi yapılmayacak.
+- [ ] M02-S04-T06 Teklif gönder/kabul/red/karşı teklif etkileşimlerini izole kariyerde gerçek HTTP/UI akışıyla doğrula.
+- [ ] M02-S04-T07 Teklif ve karşı tekliflerin restart replay'ini, snapshot sonrası journal temizliğini doğrula.
+- [ ] M02-S04-T08 Kalıcı ve kiralık transferi pazarlık→şartlar→medical/finalizasyon→kadrolar/bütçe/tarihçe boyunca uçtan uca doğrula.
+- [ ] M02-S04-T09 Bekleyen manager kararında takvim durur; karar sonrası doğru günden devam eder; UI açıklamasını doğrula.
 
-## Kit-matched shot pose update — 2026-10-30
+## Sprint M02-S05 — Yönetim ve mali işler
 
-- Connected the existing transparent white-kit and blue/red-striped shot sprites to field-player shot actions. The renderer cross-fades from the upright kit sprite into the kick pose; reduced-motion mode keeps the shot pose static. Shot ball travel and the match engine are unchanged.
-- Connected existing transparent white-kit and blue/red-striped pass sprites to short and through-ball events. Pass and shot actors transition from the standing kit sprite into matching action art; reduced-motion mode keeps each selected pose static.
-- Added two kit-matched upright tackle sprites and made a held-save keeper event transition from the dive sprite back to the keeper's standing kit. Added upright celebration art for the scorer; these are presentation-only and do not alter ball travel or simulation results.
-- Added `tests/pitch-action-preview.html`, an isolated browser page that renders the real `Pitch2D` component using engine-shaped pass, shot, tackle, keeper-held, goal, cross, and long-ball samples. At 604px, manual screenshots showed the upright tackle, goalkeeper recovery, and goal pose. This fixture does not run the match engine.
-- Expanded `tests/pitch-renderer.test.tsx` to assert both kits, pass/shot/tackle/celebration layers, keeper recovery, and 256×384 RGBA PNG assets. Targeted renderer suite passed (8/8); full `npm test` passed (10 files, 75 tests); `npm run build` passed with the existing dynamic-import and large-chunk warnings.
-- Added kit-matched upright long-ball and cross artwork and connected both action kinds to their own standing-to-pose transitions. Renderer tests check both kit variants and all four transparent PNGs; the isolated Vite fixture visibly rendered `cross: claimed` and `longBall: complete` with upright player figures. This fixture does not run the match engine.
-- Corrected a stale `actionPose` reference found during integration; running is now suppressed whenever a dedicated action pose is active.
-- `npm test -- tests/pitch-renderer.test.tsx` passed (9/9), `npm test` passed, and `npm run build` passed with the existing ineffective dynamic-import and large-chunk warnings. Actual simulated live-match timing and full action-sequence visual QA remain open.
+- [x] M02-S05-T01 Bakiye ve transfer bütçesini kulüp/transfer state'iyle eşle.
+- [x] M02-S05-T02 Yönetim beklentisi, güven, bütçe, sponsorluk ve kulüp yönetimi kontrollerini bağla.
+- [ ] M02-S05-T03 Sözleşme ve yönetim kararlarını gerçek kariyerde kaydet/yükle ve haber akışında izle.
+- [ ] M02-S05-T04 İlk gün onboarding görevleri ve takım planının tamamlanmasını gerçek kariyerde doğrula.
 
-## Engine-generated action visual check — 2026-10-30
+---
 
-- Added `tests/pitch-live-engine-preview.html`. It constructs teams from the existing world database, runs the actual `MatchSim` with deterministic seed 1, captures engine timeline actions alongside the corresponding pitch snapshots, then renders those real pairs through `Pitch2D`. It does not create or save a career.
-- The browser fixture produced short pass, through ball, long ball, cross, shot, and tackle examples from Arsenal FC–Burnley FC. At 1280 × 640, the full pitch, both goals, upright players, and the real long-ball/cross sample states rendered. This validates actual engine action/snapshot compatibility at the component boundary, not the timing/order of the primary `MatchScreen` queue.
-- `MatchScreen` action-queue ordering and pose timing remain open for direct live-career verification.
+# Milestone M03 — Dünya simülasyonu, takvim ve haberler
 
-## Match action queue snapshot alignment — 2026-10-30
+**Çıkış ölçütü:** Takip edilen ligler ve kulübün oynadığı yerel/kıtasal kupalar doğru ilerler; haberler gerçek engine sonuçlarından çıkar.
 
-- Changed the live ordinary-action queue to store `{action, snap}` frames. Each `advance()` engine step pairs newly recorded timeline entries with that step's `sim.pitch()` snapshot; the renderer replays historical snapshots in FIFO order and returns to the current live snapshot when the queue empties.
-- Head-to-head matches do not accumulate local replay frames while their UI queue is disabled; background simulation advances its presentation cursor and clears unseen frames.
-- Added a seeded regression using actual Arsenal FC–Burnley FC `MatchSim` data. Queued actions match the engine timeline in order, each paired snapshot is exactly one step after its action moment, and the acting player is present. `npm test` passed (10 files, 77 tests); `npm run build` passed.
-- Primary `MatchScreen` live-career visual timing and queue-drain inspection remains open.
+## Sprint M03-S01 — Dünya ve yarışmalar
 
-## Primary live match screen replay check — 2026-10-30
+- [x] M03-S01-T01 Seçili liglerin maç simülasyonunu yarışma ID'leriyle filtrele.
+- [x] M03-S01-T02 Ülkelerin transfer/antrenman/world güncellemelerini koru; sadece kullanıcının izlediği fikstürleri daraltma yap.
+- [x] M03-S01-T03 Gün başına tek tık ilerleme ve kullanıcı maç gününde maça yönlenme davranışını uygula.
+- [x] M03-S01-T04 Kullanıcı kulübünün ligi takip edilmese bile lig, yerel kupa, playoff ve kıtasal maçlarını takvime ekle.
+- [ ] M03-S01-T05 Yeni kariyerde seçili lig, domestic cup, playoff ve kıtasal fikstürün doğru tarihte geldiğini doğrula.
+- [ ] M03-S01-T06 Maç/transfer/news duraklarının gün ve fixture kaydını atlamadığını kabul et.
 
-- Ran the actual `MatchScreen` through a separate Vite origin (`127.0.0.1:5181`) with a fresh QA career, leaving the existing user origin and save untouched. Liverpool–Chelsea progressed through the first half, goal/VAR commentary, halftime team talk, and second-half action.
-- At 4×, inspected the pitch during a 43' queued action and during a 10' last-ditch highlight. The pitch and scoreboard showed the same event minute after the replay-clock fix; the full field, both goals, and upright player sprites remained visible with no side lineup panels.
-- This was a bounded live UI check, not a full-match or every-speed queue-pacing acceptance. That remains open. `npm test` passed (10 files, 77 tests); `npm run build` passed with the existing dynamic-import and large-chunk warnings.
+## Sprint M03-S02 — Inbox ve gazete
 
-## Photo-field alignment and match HUD cleanup — 2026-10-30
+- [x] M03-S02-T01 Mevcut typed news altyapısından kulüp haberleri, haftalık gazete ve aylık lig gazetesi üret.
+- [x] M03-S02-T02 Takip edilen lig haberleri/sonuçları newest-first manager timeline'ına ekle.
+- [x] M03-S02-T03 Maç/kupa, antrenman, transfer, board, oyuncu ve manager hikâyelerini sonuç kayıtlarına bağla.
+- [x] M03-S02-T04 Okundu/unread, gazete aboneliği, mark-all-read ve manager karar linklerini kaydet.
+- [x] M03-S02-T05 Antrenman performansından oyuncu demeçlerini üret; tekil praise yanıtını ve cooldown'u kaydet.
+- [ ] M03-S02-T06 Haber/gazete akışını gerçek kariyerde lig sonucu, transfer, maç raporu ve antrenman örnekleriyle doğrula.
+- [ ] M03-S02-T07 Aynı event'in refresh/restart sonrası yinelenmediğini doğrula.
 
-- The stadium photograph is now the actual pitch background inside the same SVG camera group as the players and ball. Player coordinates project onto the grass quadrilateral (about 12.5–85.5% of image height, with a small rear-touchline x inset); the prior full-screen SVG field markings and artificial goals are removed.
-- The ball-follow camera now pans and zooms the photographic field together with the action. The duplicate pitch clock, pitch commentary toast, and large on-pitch goal text are removed; the scoreboard is the only match clock and the line below the field is the only live commentary banner.
-- Replaced the stretched oval ball drawing with a transparent, generated football sprite at reduced asset size.
-- A multi-action engine moment could previously attach every action to the final pitch snapshot of that whole moment. Each frame now uses the action's own destination zone and possession/holder, tackle events award presentation possession to the tackling team, and the active animation counts toward queue back-pressure. This aims to keep the rendered pass sequence chronological without changing match RNG or scoring.
-- The inbox transfer digest table now uses a fixed responsive layout and wraps player/club names inside its panel.
-- `npm run build` passed after these changes. Existing Vite warnings remain: CM0102 data is dynamically and statically imported from the same module, and the main JS chunk is above 500 kB.
-- Live browser inspection remains pending: the in-chat browser service returned `transport closed` while opening/rebinding the isolated preview on port 5184. The desktop Chrome window was not used. Do not treat visual alignment or live match pacing as browser-accepted until the in-chat preview can be inspected.
+## Sprint M03-S03 — Kupa, yaşam ve futbol atmosferi
 
-## Local preview route and server recovery — 2026-10-30
+- [x] M03-S03-T01 Nadir deterministik düğün haberini, oyuncu morale etkisini ve kalıcı event tarihini ekle.
+- [ ] M03-S03-T02 Kupa kurası, maç, final, şampiyonluk ve ödül haberlerinin gerçek turnuva sonucuna bağlı olduğunu doğrula.
+- [ ] M03-S03-T03 Basın, oyuncu demeçleri, taraftar ve yönetim mesajlarını gerçek performans/karar bağlamında doğrula.
+- [ ] M03-S03-T04 Ek kişisel yaşam olaylarını yalnızca oyun anlamı, yaş/uygunluk ve kalıcı sonuçları belirlenmişse tasarla/uygula.
+- [ ] M03-S03-T05 Her haberin tarih/oyuncu/kulüp/lig/sonuç ilişkisini sezon simülasyonunda tutarlılık açısından incele.
 
-- Changed the Vite development base from `/cm0102-reborn/` to `/tactica-fc/`; kept Vercel root routing and GitHub Pages repository-name routing intact.
-- Updated README, smoke/screenshot helper defaults, and the multi-season QA return link to the new local route.
-- Restarted Vite on port 5184 bound to all local interfaces. `http://localhost:5184/tactica-fc/` returned HTTP 200, and the in-chat browser loaded the TACTICA FC landing screen at that exact URL. Desktop Chrome was not used.
-- `npm run build` passed. Existing dynamic-import and large-bundle warnings remain.
+---
 
-## Open Football full-engine phase — SUPERSEDED BY OWNER DIRECTION (2026-11-01)
+# Milestone M04 — TACTICA maç motoru ve yönetici girdileri
 
-- On 2026-10-31, `npm run dev` and `npm run build` were redirected to the full Open Football application at pinned upstream commit `9741ee9e2c7321b080676a5910e246b83fcd1430`.
-- On 2026-11-01, the owner clarified the intended separation: CM-style TACTICA career and TypeScript match engine are authoritative; Open Football is wanted for its match viewer and required visual protocol only.
-- `npm run dev`, `npm run build`, and `npm test` now target the React/TypeScript TACTICA app. `npm run open-football` and `npm run open-football:test` preserve explicit access to the upstream application and tests during transition.
-- The Electron source launcher now serves `dist/tactica-manager/` on a stable loopback origin; the isolated package embeds the OF WASM viewer and its license but omits the OF game executable. Vite serves the TACTICA app on an ephemeral test port and returns 200 for its shell, React entry, viewer JavaScript, and viewer WASM. The package ASAR contains the TACTICA UI and viewer and has no `open_football.exe`.
-- `npm test` passes all 89 tests across 13 files after aligning the pitch fixture with its stadium-image goals and fixing a dropped defender control/deflection frame. `npm run build` passes; the existing ineffective dynamic-import and large-bundle warnings remain.
-- The current boundary is explicit: TACTICA's React/TypeScript career and deterministic match simulation remain authoritative; the existing Open Football WASM viewer is embedded as a renderer receiving TACTICA match state/events through `src/ui/OpenFootballPitch.tsx`. Do not run the Open Football game/server as the product runtime or let viewer timing determine match outcomes. Keep only viewer assets/protocol code and required license notices.
-- Runtime acceptance on an owner-visible desktop is not performed. The owner's existing `open_football.exe` PID 58100 was left running; it may still occupy port 5184. Android now packages the shared TACTICA React app with that viewer; device runtime remains unverified.
+**Çıkış ölçütü:** Maç sonucu, olay, istatistik ve oyuncu/top state'i tek deterministik TACTICA simülasyonundan gelir.
 
-### TACTICA FC manager-career controls — IN PROGRESS
-- [x] Persist the new-career league selection and build competitions only for selected league IDs; selecting nations supplies the league choices, and the managed club league is included when a career moves outside the initial scope. The start screen shows the selected-league count and has select-all/clear controls; old saves without this field retain their prior all-leagues-in-active-nations behavior. Typecheck and production build pass; owner-visible setup acceptance remains open.
+## Sprint M04-S01 — Engine sonucu ve olaylar
 
-- [x] Correct the 5184-port conflict message in the separate Open Football launcher to instruct rerunning `npm run open-football`, not the React app's `npm run dev`.
-- [x] Document the Turkish club-takeover, tactics/lineup, training, transfer, day-advance, and match-replay route in `docs/manager-career-guide.md` and link it from the Windows startup section in `README.md`.
-- [x] Add a local manager takeover action on a club's first-team page; selecting it stores the managed team in the running server.
-- [x] Add a searchable A-team career chooser to the opening page when no career is active; it lists league-playing first teams, creates the career through the existing manager API, then opens the managed team's schedule. Fresh-source isolated HTTP verification returned 2,075 choices, created 12 de Junio, and returned 200 for its schedule; the career hub replaced the chooser afterward. Port 5185 and a separate temporary data directory were used; the owner's 5184 process remained untouched.
-  - [x] Make the country/league/club selector a new-career-only screen: after a manager club is saved, the root page becomes the career hub and its sidebar provides squad/training, tactics, fixtures/replays, transfers, news and search links. The career hub also opens the club newspaper directly. The selector panels and setup hero are hidden for an active career; `cargo check -p web --profile fast -j 2` passed, visual acceptance awaits a safe server restart.
-  - [ ] Visually confirm the career home no longer shows the country/league selector after the owner-controlled server is restarted. A fresh current-source isolated build on port 5193 returned 200 after selecting Manchester City (team 679): the career hub was present, while the setup hero, country grid, country links, and selector routes in the navigation were absent. The screenshot ports still run older binaries; owner-visible confirmation remains open.
-- [x] Localize the added manager-career controls in English and Turkish, including takeover, tactics/lineup, team/player training, matchday progress and transfer-negotiation labels, accessibility text and runtime statuses. Other shipped locales use the existing English fallback; both dictionaries and Askama templates parse/compile, with runtime visual acceptance pending a safe server restart.
-- [x] Add a returning-career hub to the opening screen after club takeover, with direct links to squad/training, tactics/starting XI, fixtures/replays, and transfers; it reads the active manager selection from the same server state. `cargo check -p web --profile fast -j 2` passed; live runtime verification waits for a safe restart because port 5184 is still running the previous binary.
-- [x] Persist the selected first-team manager career across server restarts in a versioned append-only user-data record. Startup restores only a team ID that still resolves to a main team; `cargo test --manifest-path vendor/open-football/Cargo.toml -p web --lib manager_career_store --profile fast -j 2` passed both reopening and partial-tail tests, and the full binary `cargo check` passed. The manager selection record is separate from the compressed authoritative world snapshot, which restores the calendar/results and is flushed after each world-process step (see the world-save implementation and restart acceptance below).
-- [x] Verify the expanded manager settings overlay and positional XI after fresh restarts: in an isolated server session, selected Real Madrid, saved 4-3-3, possession, pressing 8/10, defensive line 7/10, technical team training, dribbling focus for Courtois, and 11 explicit positional assignments. After stopping and restarting against the same isolated data directory, the manager hub restored Real Madrid; the tactics/squad pages rendered all saved choices and each GK/DL/DCL/DCR/DR/MCL/MC/MCR/FL/FC/FR player assignment as selected. The append-only schema-v3 record retained the values; owner process 5184 was left untouched.
-- [x] Add a formation selector that writes the selected first-team tactic into the shared Open Football simulation state for upcoming matches.
-- [x] Add a managed team-style selector and feed its choice into the engine's existing TacticalStyle decision path, affecting shape, pressing and player behaviour; Rust/template compilation passed, fresh-session gameplay verification is still pending.
-- [x] Add manager-controlled pressing-intensity and defensive-line sliders. Persist normalized values in `Tactics`; pressing feeds shared match pressure and high-press decisions, while the line override sets each side's shared `defensive_line_x` target (phase-based AI targets remain unchanged). English/Turkish labels, range validation, and focused engine tests include the second-half side-mirror mapping; web/core `cargo check` and the focused `core` tests pass.
-- [x] Verify the pressing and defensive-line sliders update a fresh managed team's shared `Tactics` state and saved career snapshot. On an isolated server, selected 12 de Junio, posted 4-3-3/attacking/pressing 9/10/line 2/10, then read those values back from the rendered tactics page and append-only career record. Existing `core` manager tests cover pressing/high-press decisions, normalized defensive-line targets and side switching.
-- [ ] Inspect pressing and defensive-line behavior during a live match and visually accept the pitch response. The owner server on 5184 remains untouched; current runtime verification stopped before advancing the world or starting a fixture.
-- [x] Add per-player development focus controls using the existing individual-training plans, so choices feed the engine's training progression.
-- [x] Expose Penalties as an individual development focus in English and Turkish; the manager endpoint and career snapshot restore path map it to the engine's existing `SkillType::Penalties` training gain.
-- [x] Expose the engine's injury-reintegration program only for players in post-injury recovery; reject the focus for other players and restore it only while recovery is active. This preserves the engine's match-selection caution adjustment and plan expiry behavior.
-- [x] Add manager-selected secondary-position retraining for existing familiarity levels 10–14, matching the engine's eligible retraining range; validate eligibility in the API and reapply only viable targets from the career snapshot.
-- [x] Add a team training emphasis selector (balanced, fitness, technical, tactical, set pieces, recovery) that modifies generated weekly sessions while preserving fixture-critical rest and match preparation. Engine tests verify all five non-balanced focuses change the session type, Recovery lowers intensity, fixture-protected sessions remain untouched, and Balanced preserves the coach plan.
-- [x] Keep manager-control event handlers available when no AI provider is configured; only the AI report UI requires AI configuration.
-- [x] Add transfer-list/delist controls for players owned by the managed first team; reject players currently loaned in or out.
-- [x] Add an incoming offer form for listed players that opens the existing seller-country `TransferMarket` negotiation, with budget checks, transfer-window gating, wage/contract terms, and a five-live-bid cap across markets.
-- [x] Rank permanent-transfer opportunities ahead of loan listings in the 30-player manager shortlist so zero/low-fee loans cannot crowd permanent targets off the page; `cargo check -p web --profile fast -j 2` passed. Fresh runtime check after one world tick showed 30 permanent targets before any loan listing (0 loans in the shortlist).
-- [x] Add a distinct loan-offer path for loan-listed players with 3/6/12-month durations, loan fees, and no permanent-transfer wage/contract requirements; route it through the existing loan negotiation pipeline. Request validation now has focused coverage for supported loan lengths, permanent wage/contract requirements, and invalid fees; successful negotiation completion remains pending with the transfer-tick acceptance item below.
-- [x] Add stage-aware manager responses to transfer negotiations: raise the club-to-club fee during club talks and revise player wage/contract terms during personal negotiations; normal world-day resolution remains authoritative for acceptance and completion. Negotiation directions, phases, and statuses are localized in English/Turkish, and successful offer, counteroffer, and seller-decision actions refresh the page so the server's latest negotiation state appears without manual reload. Focused web tests verify seller accept/reject decisions queue during club talks and reject duplicate, finished, or personal-terms decisions. Runtime interaction remains pending.
-- [x] Let the managed buyer accept a seller's counter-offer; queue the choice for the ordinary transfer tick, which continues through player terms and medical/finalisation. Reused the existing serialized manager-decision slot to preserve the world-save layout. `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2` passes; runtime negotiation interaction remains unverified.
-- [x] Show incoming offers for managed-club players and let the manager queue accept/reject during club negotiations; the normal seller tick advances accepted offers into player terms or reopens a rejected listing. Rust/template compilation passed; real incoming-offer tick verification remains pending.
-- [x] Verify a manager seller-accept decision through real world-day ticks into the existing player-terms pipeline. In an isolated fresh session, accepting Real Madrid's €17.1M Huijsen offer queued the decision; two selected-league day advances moved it from club negotiation to player terms, where the player rejected it.
-- Source audit: the manager's queued seller decision is consumed in `ClubNegotiation`, then the existing player-terms/medical stages remain authoritative. Fresh runtime bids included a €100 permanent offer for Fiodor Cernych, which returned HTTP 202 and advanced through initial approach to medical/finalization before rejection; the separate €1 loan bid for Anis Aït-Amarat likewise traversed the existing negotiation stages before rejection. Two focused core tests now drive agreed permanent and six-month loan listings through the real medical-pass completion path, confirming completed market history and queued roster execution; the loan case also proves completion outside the permanent-transfer window. Successful negotiation initiated through and accepted by the manager control remains unverified. The league filter limits match dispatch while periodic and world passes continue to process every country.
-- [x] Implement complete compressed world snapshots using the existing Serde-compatible Wincode format, with engine/database identity checks, two recoverable snapshots, atomic new-file promotion, and derived-index/cache reconstruction on load. The full `SimulatorData` graph serializes without skipping authoritative fields; startup now loads a compatible career before generating a fallback world and reseeds player/staff IDs. `cargo build --manifest-path vendor/open-football/Cargo.toml -p open_football --profile fast -j 2` passes.
-- [x] Verify career save/restart/load on an isolated fresh server. Manchester City advanced from 2 Aug to 23 Aug 2026; 4-3-3 attacking, technical team training, manager selection, and a listed player survived restart. Crystal Palace 1–2 Manchester City and replay `2026-08-22_642_679` remained after restart; the schedule showed the replay link, replay route returned HTTP 200, and metadata exposed 19 chunks. Existing project-local replay fallback also worked after new career-scoped storage was enabled. The owner's PID 58100 on 5184 was left running and untouched.
-- [x] Restore streamed world saves without the full uncompressed heap buffer. Direct Wincode deserialization from a gzip reader failed because the Serde compatibility layer needs stable backing-byte borrows for enum identifiers. The loader now inflates at most the configured 1 GiB limit plus one byte to a uniquely named temporary file, memory-maps its stable bytes, deserializes the snapshot, and removes the temporary file with RAII cleanup. A fast-profile binary with the memory-mapped loader restored the full 886,517,799-byte decoded snapshot on restart: the career date returned as 3 Aug 2026 and the pending Zerafa Joseph offer remained in the transfer history. Valid-size input reaches gzip EOF so its checksum/trailer is validated; oversized input is rejected before mapping. The final bounded inflate change passed `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2`. The restore process measured 2.72 GB private / 2.57 GB working set after startup; this is not a before/after comparison.
-- [ ] Measure snapshot read/write duration and reduce persistence/match-day memory. Test snapshots ranged from 239,413,046 B (2 Aug) through 346,670,148 B (23 Aug). Restored-server working set ranged 2.51–4.50 GB. Four-thread multi-day processing reached 5.36 GB; two-thread live play was about 3.52 GB at 55' and 4.33 GB at full time, with 1.5–2.4 GB free RAM. The 180-second HTTP request timed out while the live match continued; it later completed 1–2. World saves stream Wincode serialization through gzip and log save duration/compressed bytes. Loading uses a temporary file-backed mapping instead of a second full-size heap `Vec`. Actual memory reduction versus the old loader and snapshot read/write timing measurements remain pending.
-- [x] Label completed results on the managed team's schedule with an explicit "Maçı izle" link to the existing Open Football replay route.
-- [x] Verify a real managed-team fixture completes and its "Maçı izle" link opens the recorded replay in a fresh local session. On an isolated server, the Real Madrid manager's scoped 22.08.2026 away fixture finished Getafe 1–2 Real Madrid; the schedule exposed the replay link and the replay returned HTTP 200 with the WASM viewer.
-- [x] Add a one-day advance action on the managed team's schedule, scoped to its league plus the club's domestic cup and applicable playoff competitions; continental fixtures remain on the engine's own daily processing path. Refresh the fixture/results view after processing. Isolated fresh-session matchday processing and the resulting replay link are verified; clicking the control in the owner's browser remains unverified.
-- [x] Make the simulation-league selection count explicit and high-contrast on league pages, with an accessible live status label (for example, “Seçili lig sayısı: 4”); `cargo check -p web --profile fast -j 2` passes. Fresh owner-runtime visual confirmation remains pending because PID 58100 still holds the previous executable open.
-- [x] Add a "Sonraki maça ilerle" schedule action that computes the daily ticks through the manager team's next unplayed fixture and uses the same competition scope; Rust/template compilation passed, runtime date-and-replay acceptance remains pending.
-- [x] Add matchday preparation controls on the managed team's schedule: save formation/style before advancing, auto-save dirty choices before processing, and link directly to first-XI/position setup. Rust/template compilation passed; runtime interaction remains pending.
-- [x] Add a managed-squad control that pins up to 11 available players as first-team starters through the engine's existing force-match-selection flag; show the pinned count and explain this is a starter preference, not exact position-slot editing.
-- [x] Add exact positional player assignment for each of the current formation's 11 slots; pass the saved slot plan into the engine's competitive first-XI construction while retaining automatic picks for empty slots. A core selection test now asserts all 11 exact slot assignments, including the manager-selected goalkeeper despite a stronger automatic alternative.
-- [x] Preserve the manager's selected starters when changing formation; remap them to the new shape by role familiarity and retain unmatched picks. Cargo compilation passed; runtime interaction is still part of the fresh-session QA below.
-- [x] Route the managed fixture through a per-team live session while the normal day process runs. The engine publishes its actual score, ball and 22 player coordinates to a pollable API; the manager schedule renders that frame and sends tempo instructions into `MatchCoach`, where they override automatic coach escalation. Other fixtures do not claim the session. Only the selected live match is paced, at 20 ms per 500 ms of match clock (~3-4 minutes for 90 minutes), so the manager can observe and change instructions.
-- [x] Add a live substitution UI populated from the selected team's actual first-team roster; available off/on players come from the active match field and bench, and accepted requests are applied through the engine's existing substitution, stats, stoppage-window, and replay-recording path. Core protocol coverage checks one outstanding command, applied resolution, rejection of a queued change at match end, and finished-session refusal. A focused engine-path test also passes, asserting the substitute takes the outgoing player's tactical slot, leaves the bench, and records the outgoing player's stats and `Manager` reason.
-- [x] Fix the live-substitution browser handler to refresh via the defined live-match function after an accepted command; validate player and team training requests against the managed first team before persisting or mutating training state. `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2` passes.
-- [x] Replace the manager schedule's bespoke SVG pitch with the existing Open Football WASM match viewer and stream timestamped positions and actual match events from the managed live session. The active viewer accepts inline live frames, joins at the current engine timestamp, receives goal records, and hides its duplicate scoreboard/transport when embedded. Managed live frames carry incremental `MatchEventData` with per-session cursors; the feed exposes missed events through `after_event` and shows a short EN/TR feed of key actions. Event actors and recipients are resolved to names, and live position frames now carry both teams' player names plus substitutes so the viewer can label every participant. Fixed the live-playback startup fault: the manager page called `setSpeed(25)` after viewer startup, but the staged WASM had no such export, so the promise failed before `setPlaying(true)` and playback stayed on its opening frame. Added the host speed export and applied it before each playback tick, clamped to the live viewer's supported 0.25x–25x range. Fixed another live-start fault: wasm-bindgen has no default Wasm URL, so the manager page now passes the viewer response explicitly, matching the replay page. An isolated headless Chrome harness loaded a copied 20-chunk real match recording into the viewer; adjacent one-second canvas captures differed, confirming frames render and advance (not owner-page visual acceptance). An isolated `cargo check --manifest-path vendor/open-football/Cargo.toml -p open_football --profile fast -j 2` rebuilt/staged the viewer (21,809,087-byte WASM; 7,034,662-byte gzip); the generated JS exports `setSpeed` and the React public viewer copy now matches. Rendered live goals and in-play actions still require visual acceptance in the owner browser; owner PID 58100 on port 5184 remains untouched.
-- [x] Stream each recorded action's `ballFrom`/`ballTo` and the acting/receiving players' historical coordinates into the Open Football viewer as chronological paths. When one TACTICA simulation step resolves a pass followed by a shot/cross, assign each action a sub-step presentation window so intermediate contacts, player movement cues, and the goal timestamp remain ordered instead of collapsing onto one coordinate/time. The viewer consumes these visual samples only; TACTICA still owns outcomes. `npm run build` passes; actual live-match visual acceptance remains open.
-- [x] Verify the live manager controls end-to-end in an isolated current-source Windows build (`%TEMP%\tactica-fc-goal-target-20261101`) with separate data (`%TEMP%\tactica-fc-goal-data-20261101`) on port 5185, leaving owner PID 58100 on 5184 untouched. Manchester City (team 679) entered a Crystal Palace match: `/api/game/live-match` moved from `waiting` to `playing` at 6', published 22 players and 7 substitutes; `push_forward` returned 202 and appeared in the frame; substitution 24060473→2000098727 returned 202, became `applied` at 24', and the next frame showed the incoming player on pitch and outgoing player off (22 players / 6 substitutes). The match finished at 91' 1–0, processing ended, Manchester City's 22.08.2026 schedule showed `1–0 · Maçı izle`, the replay route returned 200, and the viewer JS, WASM and gzipped WASM returned 200. The isolated process was stopped after acceptance. Browser visual inspection remains pending.
-- [x] Bound embedded viewer playback to the latest authoritative live-match timestamp with a 125 ms display lead, and let the terminal frame drain before pausing after full time. Stale host times cannot rewind playback; if the viewer catches its lead it waits for fresh engine samples, and after the final sample it stops at the same bounded lead. `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2` passed and the rebuilt gzipped WASM binding exports `setHostTime`; owner-visible movement smoothness acceptance remains open.
-- [x] Apply the same authoritative-time ceiling to the React live-match bridge: prime the viewer at kickoff, then update its ceiling after every newly recorded engine snapshot. Re-stage the generated viewer JS/WASM into the React public assets so its runtime exposes `setHostTime`; `npm run build` passes. Actual owner-visible match smoothness remains open.
-- [x] Prime single-player and shared head-to-head kickoffs with one real engine step before releasing viewer playback, so both opening position samples are available for interpolation. Head-to-head elapsed time is offset by the primed step to keep both manager clocks aligned. This maintains a one-step presentation buffer without inventing positions or changing match outcomes; `npm run build` passes. Verify it in real owner-visible matches before closing the stutter item.
-- [ ] Inspect the live pitch animation and goal replay in an actual owner-visible match. After the startup-speed and explicit-Wasm-URL fixes, an isolated build on `%TEMP%\tactica-fc-goal-target-20261101` compiled successfully; the real `/tr/teams/12-de-junio/schedule` page rendered the match canvas in headless Chrome using an injected test `LiveMatchView`. Its score (1–0), clock, live status, and enabled instruction controls rendered; viewer JS and Wasm both returned HTTP 200, 194 live polls completed without console errors, and two canvas captures 500 ms apart had different SHA-256 hashes. The probe also exposed and fixed the status text's dashed `dataset` key lookup. Test-only screenshot: `%TEMP%\tactica-fc-live-schedule-smoke-20261101.png`. This proves the manager page starts and advances the viewer, but the injected frames are not a real match and owner-visible goal/replay acceptance remains open. Isolated port 5185 was stopped; owner PID 58100 on port 5184 remains untouched.
-- [x] Verify manager takeover, tactic/style readback, player/team training readback, transfer listing, positional lineup, and replay navigation in isolated fresh local server sessions. Setting Thibaut Courtois in the GK slot returned HTTP 200 and persisted on readback; after the managed fixture, the replay squad showed Courtois as Real Madrid's GK. The replay route returned HTTP 200 and served the WASM viewer.
-- [x] Initialize the live match viewer with the actual fixture's home and away club colors, including correct home/away ordering when the managed club is the away side; derive both colors from the fixture teams' club data instead of assigning every opponent the same navy kit.
-- [x] Keep whole-world country processing enabled; the 2026-10-31 owner log shows country work finishing concurrently within a short processing interval. The selected-league filter continues to limit match dispatch while transfer/training/world passes run globally. Preserve the one-day-per-process-step date behavior.
-- [x] Implement manager-planned seven-day training camps with fixture-free scheduling, club-balance costs, player condition/morale effects, backward-compatible persistence, and a manager-inbox report. The schedule previews the selected destination's actual cost and effect, a planned camp can be cancelled before departure without charge, and the cancellation API rejects camps already running. Source review confirms the day-tick applies the cost/effects and persists completion/report state. Live career and owner-visible acceptance remain open.
-- [ ] Verify training-camp planning, cancellation, seven-day progression, resulting balance/condition/morale, save/restart persistence, and inbox report. Existing isolated runtime on port 5193 is already a Manchester City career with the camp started 2026-08-02 and showing 5/7 days; processing is idle because three buyer-side counter-offers (Yasin Ayari, Vinícius Júnior, Chris Richards) await a manager decision. The loaded runtime predates the newly added reject control, so preserve this career and resume it only after confirming its data directory and safely loading a current-source binary; do not recreate the career setup. Owner-visible acceptance remains pending.
-- [x] Remove the manager schedule's direct “advance to next match · N days” action. Normal manager progression now exposes one calendar day per click, while the separate holiday flow can still intentionally advance multiple days.
-- [x] Make global career progression always include the managed first team's league, domestic cup, relevant playoffs, and upcoming continental competitions alongside the user's followed leagues. The schedule and process API now share one competition resolver, preventing a normal Continue click from skipping the user's own fixture when that league is not followed. `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2` passes; isolated runtime matchday verification remains open.
-- [ ] Build a manager inbox/event timeline by reusing the existing 361 typed news-story kinds and the Monday club / monthly league newspaper runs, which already cover match and cup reports, training, transfers, boardroom decisions, and squad/manager stories. Completed slices: daily ticks capture managed-team fixtures and actual training participation/form into backward-compatible schema-v7 career records; the managed newspaper page merges individual club stories, followed-league stories, replay-linked match reports, and training reports into one newest-first timeline, with item-level unread counts and one mark-all-read action; training stories now include a localized player statement selected from that player's actual training performance; pending incoming seller decisions and managed-buyer counter-offers link to the existing transfer controls; the process API now refuses to advance while an incoming club offer or buyer counter-offer awaits the manager, and both the global Continue control and manager schedule show a localized explanation. A rare deterministic player wedding now generates linked, localized manager news and a one-time morale increase; optional personal-life events with further gameplay consequences and other meaningful manager stop points remain. `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2` passes for the statement addition. Browser interaction remains unverified.
-- [x] Add a one-time “praise player” response to each manager training report. It targets the report's actual best-performing player, applies the existing cooldown-gated manager-praise morale event, persists the player change to the world save, and records the response in the backward-compatible career overlay so the inbox confirms it after refresh and hides praise while the player is in the 7-day event cooldown. `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2` passes; owner-visible interaction remains unverified.
-- [x] Add rare deterministic weddings for adult first-team players in the managed club, persist the event date in compatible player data, link a localized news item to the player, and apply a small morale increase without consuming the simulation's shared RNG. `npm exec tsc -- --noEmit` and `npm run build` pass; event appearance in a running career remains unverified.
-- [x] Stop multi-day and holiday processing after the first daily tick that creates a manager transfer decision, persist that completed tick, refresh the page, and show the existing localized response prompt. A response header distinguishes this early stop from a completed holiday request.
-- Baseline before the response journal: an isolated buyer decision blocked for 11m 1s, used about 682 seconds of server CPU, and produced a 275,651,047-byte compressed world snapshot. Transfer bids and negotiated fee/wage edits still use this full-world snapshot path.
-- [x] Decouple manager accept/reject decisions from the full-world save. The response is appended to the manager-career journal (schema v9); an isolated API call returned HTTP 202 in 68 ms without creating a world-save temp file. After stopping and restarting the isolated server, startup logged one replayed manager response and the Chris Richards row no longer exposed accept/reject buttons. `cargo check --manifest-path vendor/open-football/Cargo.toml -p open_football --profile fast -j 1` passed. Existing user servers were left untouched.
-- [x] Replace the slow full-world save path for manager transfer bids and negotiated fee/wage edits with the schema-v10 append-only manager-career journal. Startup replays the stored engine negotiation and listing state, while a successful daily world snapshot clears both pending offers/updates and manager responses. `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2` passes.
-- [x] Verify isolated HTTP transfer-list and unlist actions survive restarts. In a fresh isolated Bournemouth career (team 600), a non-loan player's list toggle returned HTTP 200 and remained listed after restart; unlisting returned HTTP 200 and the player remained absent after a second restart. The manager team selection also restored. Fast optimized executable build completed successfully; task-owned server ran only on port 5194 and was stopped. User servers were untouched.
-- [ ] Verify isolated HTTP offer/counter submissions, their restart replay, and pending-journal cleanup after a successful daily world snapshot. The market had no negotiable listed players in the earlier isolated run, so offer/counter replay and post-day snapshot cleanup remain unverified. These checks are still open; do not repeat the completed list/unlist verification.
-- Once a snapshot has been atomically renamed into place, failure to prune older recovery files is now logged as cleanup trouble rather than reported as a failed commit. This keeps manager-action rollback consistent with the already durable snapshot; `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2` passes.
-- [x] Add persisted unread state for the managed club newspaper: the append-only manager-career snapshot now stores the last read edition (schema v5 with backward-compatible defaults), the managed schedule/news tab shows unread editions, and the newspaper page can mark all current editions read through a manager-only endpoint. All first-team club tabs now share the unread badge count. `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2` passed; browser interaction remains to verify.
-- [x] Add persisted followed-league subscriptions and monthly unread digests: managers can follow/unfollow from a league newspaper page, mark a followed league's latest edition read, and open followed papers from the managed schedule. Career snapshot schema v5 keeps old records readable. `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2` passed; browser interaction remains to verify.
-- [x] Avoid an unconditional deep clone of the 80k-player `SimulatorData` on each process request: mutate the authoritative shared `Arc` under an owned write lock, with `Arc::make_mut` retaining copy-on-write behavior for outstanding snapshots. World-reading pages wait until the tick completes, while the live-match session API remains separate for frames and coach/substitution commands. `cargo check --manifest-path vendor/open-football/Cargo.toml -p open_football --profile fast -j 2` passes; runtime memory/latency measurement is still pending.
-- Isolated HTTP acceptance on a separate port confirmed manager takeover, tactic/style save and readback, player/team training save, transfer-list action, positional GK selection through an actual match, and its recorded replay. An unfiltered one-day match run took 227.18 seconds and the isolated process reached about 4.7 GB working set before it was stopped; ordinary match dispatch stays scoped to selected leagues while country/day passes remain global.
-- [x] Keep the embedded Open Football playback visible through the exact terminal match timestamp. TACTICA now appends its final authoritative pitch snapshot at 90:00 and delays the post-match report by the last presentation beat, so the viewer is not stopped one simulation step before full time. `npm exec tsc -- --noEmit` passes; owner-visible full-match playback still needs confirmation.
-- [x] Centralize the 505.34-second regulation timeline and moment/minute mapping used by viewer setup, player/ball/action tracks, goal timestamps, playback speed and the final-frame handoff. `npm exec tsc -- --noEmit` and `git diff --check` pass; owner-visible timing confirmation remains open.
-- [x] Batch recovered live-match frames per browser poll before sending them to the embedded viewer, collecting ball/player tracks, events and cumulative goals into one recording payload while preserving sequence filtering. `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2` passes. This reduces per-frame WASM calls after delayed polls; real-match visual smoothness acceptance remains open.
-- [x] Reduce visible live-match polling from 20 ms to 33 ms and batch the retained timestamped samples per response. The `after_frame` cursor still recovers every retained engine sample; `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2` passes. Runtime CPU and visual pacing measurements remain open.
-- [x] On the managed club's fixture day, initialize the viewer's JS/WASM module before submitting the day-processing request; if initialization fails, keep the day from advancing so kickoff cannot pass without a ready viewer. The schedule marks matchdays from the unfiltered fixture list, independent of the selected season tab. `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2` passes; an isolated fresh career reached viewer-ready at kickoff in 2.866 seconds. Full-match playback remains open.
-- [x] Let the manager reject a seller counter-offer on a buyer-side club negotiation; route both decisions through the existing persisted manager-decision path and localize the control in Turkish and English. `cargo check --manifest-path vendor/open-football/Cargo.toml -p web --profile fast -j 2` passes; isolated runtime persistence is confirmed after restart (see latency finding above), while owner-visible interaction remains unverified.
+- [x] M04-S01-T01 MatchSim'i authoritative engine-moment akışı ve tek rapor sonucu olarak koru.
+- [x] M04-S01-T02 Pas, dripling, şut, gol, save, block, rebound, faul, kart, ofsayt, korner ve restart olaylarını rapora bağla.
+- [x] M04-S01-T03 Görsel sampling/RNG'yi sonuç RNG'sinden ayır.
+- [x] M04-S01-T04 Oyuncu puanı, skor, istatistik, sakatlık, gol/asist ve raporu aynı engine state'ten üret.
+- [ ] M04-S01-T05 Sabit seed regresyonlarında gol/şut/kurtarış oranları, rapor ve skor tutarlılığını kapsa.
+- [ ] M04-S01-T06 Uzatma ve penaltı state/raporunu normal sonuç ve viewer timeline'ıyla eşleştir.
 
+## Sprint M04-S02 — Canlı kararlar
+
+- [x] M04-S02-T01 Canlı taktik/takım instruction state'ini sonraki engine adımlarına aktar.
+- [x] M04-S02-T02 Substitution ve devre arası konuşmasını match state/raporuna kaydet.
+- [ ] M04-S02-T03 Canlı taktik/substitution kararlarını gerçek maçı izlerken uygula ve pozisyon/oyuncu değişimini doğrula.
+- [ ] M04-S02-T04 Gol, kart, sakatlık, maç bitti ve extra-time duraklarında UI kontrollerini doğrula.
+
+---
+
+# Milestone M05 — Gömülü maç görüntüleyicisi
+
+**Çıkış ölçütü:** Kick-off'tan full-time'a gerçek TACTICA verisi oynatılır; top/oyuncular geriye zıplamaz; skor ve gol atlanmaz.
+
+## Sprint M05-S01 — Viewer köprüsü ve açılış
+
+- [x] M05-S01-T01 Open Football viewer'ı React maç ekranına göm; tam upstream uygulama navigasyonunu TACTICA'ya alma.
+- [x] M05-S01-T02 Fixture, takım rengi, forma numarası, oyuncu, ilk 11 ve bench verisini viewer DTO'suna aktar.
+- [x] M05-S01-T03 TACTICA position/ball/event/goal/time kayıtlarını viewer recording formatına bağla.
+- [x] M05-S01-T04 Viewer hazır olana kadar kick-off saatini tut; görünür loading/error/retry state'i sağla.
+- [x] M05-S01-T05 1x/2x/4x/8x speed, 90 dakika, uzatma ve shootout zaman çizgisini eşle.
+- [x] M05-S01-T06 Stale/overlap batch'i reddet; host time monotonic ve accepted frame'e göre ilerlesin.
+- [x] M05-S01-T07 Gecikmiş poll'daki tüm frame'leri sequence cursor ile toparla; track history ve allocation'ı sınırla.
+- [x] M05-S01-T08 Son viewer frame'i ve full-time raporu tam aynı timestamp'te sırala.
+
+## Sprint M05-S02 — Eylem ve hareket
+
+- [x] M05-S02-T01 Pas, şut, blok, clear, pressing ve support-run cue'larını gerçek engine olaylarına bağla.
+- [x] M05-S02-T02 Pas alıcısı/şutörü engine kararından seç; eski taşıyıcıya geri dönme veya aynı pası iki kez gösterme.
+- [x] M05-S02-T03 Save, post, rebound, goal-kick ve held-ball geçişlerini ayrı gerçek pozisyon kayıtlarıyla sırala.
+- [x] M05-S02-T04 Oyuncu merkezlerini bounded deterministic hareketle güncelle; simülasyon RNG'sini etkileme.
+- [x] M05-S02-T05 Canlı sonucu daha hızlı renderer'a gönder; viewer fps ve match wall-clock ilişkisini koru.
+- [ ] M05-S02-T06 CM2010 referanslı sıralı oyuncu/top yolu, destek koşusu ve savunma tepkisini gerçek maçta görsel kabul et.
+- [ ] M05-S02-T07 Gerçek forma numarası, takım rengi, ayakta oyuncu figürü ve doğru goalkeeper kitlerini kabul et.
+- [ ] M05-S02-T08 Topu takip et kamerasında hareket ve aksiyon net; varsayılan tam saha ve iki kale görünür kalsın.
+
+## Sprint M05-S03 — Tam maç kabulü ve süreklilik
+
+- [ ] M05-S03-T01 Seçilen kulübün maçını kick-off'tan full-time'a izole kariyerde başlat ve bitir. **Kabul:** score, clock, viewer ve report aynı maça ait; gol önceden oynanmış/atlanmış değil.
+- [ ] M05-S03-T02 Pas, interception, failed dribble, shot, save, rebound ve restart'ta geriye sıçrama/tekrar hareketi gözle.
+- [ ] M05-S03-T03 Gol animasyonu, scoreboard artışı, tek anlatım metni ve replay'i engine report ile eşleştir.
+- [ ] M05-S03-T04 Devre arası, ikinci yarı, extra-time, penalty ve full-time akışını doğrula.
+- [ ] M05-S03-T05 1x/2x/4x/8x hızlarda viewer clock ve engine moment senkronunu kaydet.
+- [ ] M05-S03-T06 Tab arka plana alınma/geri dönme, polling backpressure, CPU, heap ve WASM performansını incele.
+- [ ] M05-S03-T07 Gerçek aksiyon ve kabul ekran görüntüsü/video kanıtını kaydet; enjekte edilmiş test karelerini gerçek maç kanıtı sayma.
+- [ ] M05-S03-T08 Bir akış sorunu bulunursa önce engine, event adapter, network/frame cursor ve renderer katmanından hangisinin sebep olduğunu izole et. **Önceki deneme başarı değil:** İzole kariyer 1 Temmuz→8 Temmuz 150 saniye sürdü; Fulham'ın Ederson teklifi gün ilerlemesini durdurduğu için fixture'a varılmadı.
+
+---
+
+# Milestone M06 — Kariyer kayıtları ve veri devamlılığı
+
+**Çıkış ölçütü:** Web ve paketlerde kariyer, manager kararları, maç raporu ve sezonlar kaybolmadan kaydedilir/yüklenir.
+
+## Sprint M06-S01 — Browser career save
+
+- [x] M06-S01-T01 IndexedDB platform adapter ve sürümlü payload/metadata zarfı ekle.
+- [x] M06-S01-T02 Eski save, current save, bozuk save ve unsupported future version doğrulaması ekle.
+- [x] M06-S01-T03 Atomik replace, rollback, capped retry ve autosave hata yönetimini doğrula.
+- [x] M06-S01-T04 Çok sezon save/load, arşiv ve maç raporunu UI üzerinden doğrula.
+- [ ] M06-S01-T05 Local web/Desktop/Android kökenleri arasında eski save'i taşıma veya desteklenmiyor davranışını kullanıcıya açıkça sun.
+
+## Sprint M06-S02 — World snapshot/manager journal
+
+- [x] M06-S02-T01 Dünya verisini uyumlu engine kimliği, kurtarılabilir snapshot ve atomic promotion ile kaydet.
+- [x] M06-S02-T02 Büyük save'i bounded gzip/temp file/memory map ile yükle.
+- [x] M06-S02-T03 Manager kararları için append-only journal, restart replay ve successful snapshot cleanup ekle.
+- [x] M06-S02-T04 Liste/liste kaldır eylemini iki server restart boyunca doğrula; bu test tamamlandı, tekrarlama.
+- [ ] M06-S02-T05 Offer/counter journal replay ve günlük snapshot cleanup'ını gerçek izolasyonla kabul et.
+- [ ] M06-S02-T06 Snapshot read/write süresini ve peak memory'i ölç; önceki/baseline ölçümü olmadan optimizasyon iddiası yapma.
+- [ ] M06-S02-T07 Kayıt başarısızlığında önceki save'in sağlam kaldığını UI ve disk state'iyle kabul et.
+
+---
+
+# Milestone M07 — TACTICA arayüzü, responsive ve erişilebilirlik
+
+**Çıkış ölçütü:** Seçimden maç raporuna kadar ekranlar aynı tema ve etkileşim kurallarında; tablolar taşmaz, metin ve geri navigasyonu çalışır.
+
+## Sprint M07-S01 — Ekran teması ve markalama
+
+- [x] M07-S01-T01 Ortak renk tokenları, temel kontroller, focus state ve kullanıcı teması seçimini tanımla.
+- [x] M07-S01-T02 Inbox, schedule/live viewer, report kartları ve bazı Open Football host CSS alanlarını TACTICA temasına çevir.
+- [ ] M07-S01-T03 Açılış/yeni oyun, dashboard/Inbox, squad/player ekranlarında 320/390/768/1280px taşmayı incele.
+- [ ] M07-S01-T04 Taktik/antrenman/transfer, lig/kupa/fikstür/sonuç/gazete ekranlarını aynı ölçülerde incele.
+- [ ] M07-S01-T05 Tüm tabloların başlık, para, isim ve düğme alanlarının kesilmeden sığmasını kabul et.
+- [ ] M07-S01-T06 TACTICA kullanıcı akışında eski Open Football branding/theme artığını tara; lisans/credit alanları istisna.
+- [ ] M07-S01-T07 Gerçek ekran görüntüsüyle görsel kabul kaydet; yalnızca source/CSS parser başarısını yeterli sayma.
+
+## Sprint M07-S02 — Etkileşim ve accessibility
+
+- [x] M07-S02-T01 Sahadaki roster/rating overlay'lerini kaldır; kondisyon ve puanları ayrı sekmelerde tut.
+- [x] M07-S02-T02 Maç alanı için erişilebilir ad, responsive scoreboard ve ortak geri kontrolü ekle.
+- [ ] M07-S02-T03 Klavye, focus, screen-reader label ve reduced-motion davranışlarını temel menajer/maç akışlarında kabul et.
+- [ ] M07-S02-T04 Dar viewport, browser zoom %125/%150 ve uzun takım/oyuncu isimlerinde yatay taşmayı kontrol et.
+- [ ] M07-S02-T05 Tablolarda uzun lig/oyuncu/transfer satırlarının truncate/tooltip/scroll davranışını doğrula.
+
+---
+
+# Milestone M08 — Web ve masaüstü/mobil paketleri
+
+**Çıkış ölçütü:** Her platform hedef ortamında kariyer yaratır, kaydeder ve gerçek viewer maçı oynatır; imza/cihaz gereksinimleri belgelenir.
+
+## Sprint M08-S01 — Web/PWA
+
+- [x] M08-S01-T01 React/Vite build, PWA metadata, viewer js/wasm ve TACTICA iconlarını paketle.
+- [ ] M08-S01-T02 Temiz browser profilinde install/offline, kariyer, save/load ve maç viewer'ını doğrula.
+- [ ] M08-S01-T03 Gerçek mobil tarayıcıda WebGPU varsa seç, yoksa WebGL2 fallback davranışını kabul et.
+
+## Sprint M08-S02 — Windows/Electron
+
+- [x] M08-S02-T01 Electron sandbox, context isolation, local TACTICA host, single-instance ve ICO ayarlarını yap.
+- [x] M08-S02-T02 Viewer-only pakette embedded WASM ve attribution bulunsun; `open_football.exe` olmasın.
+- [x] M08-S02-T03 Güncel NSIS paketi üret; ASAR/içerik hash ile güncel uygulama olduğunu kanıtla.
+- [ ] M08-S02-T04 Güncel installer'ı izole kur ve çevrimdışı aç.
+- [ ] M08-S02-T05 Paketli Windows'ta yeni kariyer, tam maç viewer, save/load/restart doğrula.
+- [ ] M08-S02-T06 Eski server save'inin yeni TACTICA origin'ine geçişini doğrula veya desteklenmiyorsa kullanıcı yönlendirmesi ekle.
+- [ ] M08-S02-T07 İmzasız paketi açıkça etiketle; yayın imzalama gereksinimini belgele.
+- [ ] M08-S02-T08 Eski pre-transition installer'ı güncel sürüm gibi sunmadığını doğrula.
+
+## Sprint M08-S03 — Android/Capacitor
+
+- [x] M08-S03-T01 Capacitor Android host'u ortak React bundle'a bağla; Rust server startup'ını kaldır.
+- [x] M08-S03-T02 Android ikon/splash varlıklarını supplied TACTICA icon pack'ten üret.
+- [x] M08-S03-T03 Debug APK üret; React shell/viewer WASM var, eski Rust engine yok içerik kontrolünü yap.
+- [ ] M08-S03-T04 Uygun cihazda kariyer, kadro/taktik, transfer/antrenman ve kayıt akışını çalıştır.
+- [ ] M08-S03-T05 Android cihazında tam maç viewer, renderer fallback, gol ve full-time akışını doğrula.
+- [ ] M08-S03-T06 Düşük RAM cihazda crash/FPS/bellek sınırını ölç ve desteklenen minimumları belirle.
+- [ ] M08-S03-T07 Release AAB signing ve key gereksinimlerini belgele.
+
+## Sprint M08-S04 — iOS/Capacitor
+
+- [x] M08-S04-T01 Capacitor iOS projesi, supplied TACTICA ikon ve launch splash kaynaklarını kur.
+- [x] M08-S04-T02 Windows'ta web build ve Capacitor resource sync doğrula; native iOS kabulü sayma.
+- [x] M08-S04-T03 macOS/Xcode, signing ve fiziksel cihaz ön koşullarını belge.
+- [ ] M08-S04-T04 macOS/Xcode'da native build üret.
+- [ ] M08-S04-T05 Fiziksel iOS cihazda kariyer/save/live match akışını doğrula.
+- [ ] M08-S04-T06 Apple signing ve paketleme ön koşullarını doğrula. **Blok:** uygun Apple ortamı yoksa bu sprint tamamlanamaz.
+
+---
+
+# Milestone M09 — Regresyon, performans ve release kabulü
+
+**Çıkış ölçütü:** Maç görüntüsü ve oyun sonucu tutarlı; kritik regresyonlar geçer; her platformun gerçek kanıtı ve kalan blokları açık.
+
+## Sprint M09-S01 — Motor, UI ve kayıt regresyonu
+
+- [x] M09-S01-T01 Seed'li maç sonucunun deterministik ve renderer RNG'sinden bağımsız olduğunu kapsa.
+- [x] M09-S01-T02 Player center persistence/bounded movement regressions ekle.
+- [ ] M09-S01-T03 Pass/interception/shot/save/rebound/goal/restart/substitution timeline testlerini kalıcı hale getir.
+- [ ] M09-S01-T04 Overtime/shootout, scoreboard, report ve replay skor uyumunu test et.
+- [ ] M09-S01-T05 Save migration, restart, multi-season, manager journal ve transfer state regresyonlarını çalıştır.
+- [ ] M09-S01-T06 Navigation, selector visibility, squad search, tactic/training/transfer UI akışlarını test et.
+- [ ] M09-S01-T07 Build/test başarısızlıklarını sonuçlarıyla kaydet; başarısız full suite'i focused pass ile gizleme.
+
+## Sprint M09-S02 — Render ve simülasyon performansı
+
+- [ ] M09-S02-T01 90 dakika desktop viewer FPS, CPU, JS heap, WASM heap ve frame backlog ölç.
+- [ ] M09-S02-T02 Dünya ilerlemesi ve maç animasyonu süresini ayrı ölç; darboğazı doğru katmana ata.
+- [ ] M09-S02-T03 Hidden/visible tab ve uzun maçta sample memory büyümesinin limitli olduğunu doğrula.
+- [ ] M09-S02-T04 Android ve varsa iOS fiziksel cihaz sonuçlarını desktop değerlerinden ayrı raporla.
+- [ ] M09-S02-T05 Snapshot load/save ve peak memory için önce/sonra ölçümü üret.
+
+## Sprint M09-S03 — Yayın kapısı ve repo kapanışı
+
+- [ ] M09-S03-T01 Kritik akışlarda release-blocking hata bırakma.
+- [ ] M09-S03-T02 Lisans ve varlık attribution'ını tüm paketlerde doğrula.
+- [ ] M09-S03-T03 Versiyon, installer/APK hash'i, kurulum ve bilinen sınırlamaları kaydet.
+- [ ] M09-S03-T04 Tamamlanmamış platformu tamamlandı/çapraz-platform diye raporlama; gerçek bloklayıcıyı listele.
+- [ ] M09-S03-T05 Her büyük sprint sonunda yerel branch ve origin/main'i korumalı şekilde eşitle.
+
+---
+
+# Aktif çalışma sırası
+
+1. **M05-S03:** seçilen kulübün maçını baştan sona gerçek viewer'da doğrula; önceki deneme fikstüre ulaşmadığı için açık.
+2. **M02-S04 / M06-S02:** teklif ve karşı teklif restart/journal kabulü; tamamlanmış list/unlist testi tekrarlanmayacak.
+3. **M02-S03 / M03-S02:** kamp ve haber/oyuncu demeci runtime kabulü.
+4. **M07:** ekran ekran taşma/tema ve setup nav görsel kabulü.
+5. **M08:** Windows runtime, Android cihaz, iOS native cihaz kabulü.
+6. **M09:** regresyon, performans ve platform bazlı release kanıtı.
+
+## Kanıt ve kapsam notları
+
+- Tamamlanmış viewer bridge, save ve platform build kanıtlarının daha geniş ayrıntıları Git geçmişinde, `design-qa.md`, `docs/ios-release-prerequisites.md` ve `docs/cm2010-static-analysis.md` içindedir.
+- Inject edilmiş fake/live test kareleri gerçek maç kabulü değildir.
+- Dashboard `TASKS.md` dosyasını her dakikada yeniden okur; ayrıntılı liste ve checkbox durumları buradan beslenir.
+- Owner'a ait `match_results/` verileri korunur ve bu takip planı için stage edilmez.
 
