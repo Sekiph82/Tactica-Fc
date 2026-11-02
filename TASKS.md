@@ -33,6 +33,7 @@ TACTICA FC; CM0102/CM2010 tarzında kariyer, kulüp yönetimi, haberler, antrenm
 - [x] M00-S02-T02 Kod tamamlandı, runtime doğrulandı ve owner-visible kabul edildi durumlarını ayır.
 - [x] M00-S02-T03 `TASKS.md` ve özet task verisini dakikada bir okuyan dashboard kur. **Kabul:** `localhost:11000` çalışıyor; dashboard sohbet içi tarayıcı sekmesinde açık.
 - [x] M00-S02-T04 Her büyük sprint sonunda yalnızca ilgili dosyaları commit/push et; owner dosyalarını stage etme.
+- [x] M00-S02-T05 Dashboard'da TASKS hiyerarşisini milestone→sprint→görev olarak göster; her seviyede tamamlanma sayısını ve mevcut çalışma odağını belirt. **Kabul:** 60 saniyelik yenileme korunur; gerçek checkbox sayısı dashboard'da doğru görünür.
 
 ---
 
