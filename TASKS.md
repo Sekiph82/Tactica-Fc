@@ -56,7 +56,7 @@ TACTICA FC; CM0102/CM2010 tarzında kariyer, kulüp yönetimi, haberler, antrenm
 - [x] M01-S02-T02 Ülke başına ligleri göster; lig seçimi ve seçili lig sayısını kaydet.
 - [x] M01-S02-T03 Menajer adını ve yönetilecek kulübü seç; kariyer state'ini başlat.
 - [x] M01-S02-T04 Kariyer başladıktan sonra ülke/lig/takım seçim ekranını ana nav'dan kaldır.
-- [ ] M01-S02-T05 Temiz güncel oturumda ülke→lig→kulüp→kariyer akışını ve nav'dan kalkışını görsel olarak kabul et. **Ön kanıt:** izole source testinde kariyer hub göründü, setup selector nav'da yoktu; owner-visible kabul açık.
+- [x] M01-S02-T05 Temiz güncel oturumda ülke→lig→kulüp→kariyer akışını ve nav'dan kalkışını görsel olarak kabul et. **Kanıt:** 2026-11-02 kullanıcı, seçimi tamamlayınca kurulum ekranının nav'dan istediği gibi kaybolduğunu doğruladı; App setup ekranını yalnızca kariyer state'i yokken gösteriyor.
 - [ ] M01-S02-T06 Seçili lig sayısı ve seçilen kulüp yeni kariyerin başlangıcında doğru yükleniyor; save/restart sonrası aynı state'i doğrula.
 
 ## Sprint M01-S03 — Ana ekran ve navigasyon
@@ -258,8 +258,9 @@ TACTICA FC; CM0102/CM2010 tarzında kariyer, kulüp yönetimi, haberler, antrenm
 - [ ] M07-S01-T03 Açılış/yeni oyun, dashboard/Inbox, squad/player ekranlarında 320/390/768/1280px taşmayı incele.
 - [ ] M07-S01-T04 Taktik/antrenman/transfer, lig/kupa/fikstür/sonuç/gazete ekranlarını aynı ölçülerde incele.
 - [ ] M07-S01-T05 Tüm tabloların başlık, para, isim ve düğme alanlarının kesilmeden sığmasını kabul et.
-- [x] M07-S01-T06 TACTICA kullanıcı akışında eski Open Football branding/theme artığını tara; lisans/credit alanları istisna. **Kanıt:** ortak nav/selector, sezon kartları, giriş görseli ve maç ekranındaki eski lacivert/camgöbeği/gold-violet UI renkleri TACTICA tokenlarına taşındı; viewer lisans/credit kapsamı korundu.
+- [x] M07-S01-T06 TACTICA kullanıcı akışında eski Open Football branding/theme artığını tara; lisans/credit alanları istisna. **Kanıt:** ortak nav/selector, sezon kartları, giriş görseli ve maç çevresi eski lacivert/camgöbeği/gold-violet UI renklerinden temizlendi; bu takip düzeltmesinde maç skorbordu da sabit siyah/grafit/gümüş/kırmızı palete alındı ve dakika iki takım arasına taşındı. Viewer lisans/credit kapsamı korundu; gerçek ekran kabulü T07'de açık.
 - [ ] M07-S01-T07 Gerçek ekran görüntüsüyle görsel kabul kaydet; yalnızca source/CSS parser başarısını yeterli sayma.
+- [x] M07-S01-T08 Aktif maç sunumu hariç yönetim/kurulum sayfalarının Black Metal (siyah/grafit/gümüş/kırmızı) temasında olduğunu kullanıcı kabulüyle kaydet; maç ekranını ayrı düzeltme ve kabul kapsamına al. **Kanıt:** 2026-11-02 kullanıcı, diğer sayfaları konseptle uyumlu kabul edip maç ekranını ayrı tuttu. Responsive ve tablo taşma incelemeleri M07-S01-T03–T05'te açık kalır.
 
 ## Sprint M07-S02 — Etkileşim ve accessibility
 

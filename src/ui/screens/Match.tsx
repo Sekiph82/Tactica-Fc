@@ -263,11 +263,11 @@ function CmScoreboard({ home, away, hg, ag, minute, colors }: { home: number; aw
   const g = gs();
   return (
     <div className="cm-board">
-      <div className="cm-minute">{minute}</div>
       <div className="cm-team" style={{ borderLeftColor: colors[0] }}>
         <span className="cm-name"><Crest id={home} size={30} /><span className="name-long">{g.clubs[home]?.name}</span><span className="name-short">{g.clubs[home]?.short}</span></span>
         <span className="cm-score">{hg}</span>
       </div>
+      <div className="cm-minute">{minute}</div>
       <div className="cm-team away" style={{ borderRightColor: colors[2] }}>
         <span className="cm-score">{ag}</span>
         <span className="cm-name"><span className="name-long">{g.clubs[away]?.name}</span><span className="name-short">{g.clubs[away]?.short}</span><Crest id={away} size={30} /></span>
