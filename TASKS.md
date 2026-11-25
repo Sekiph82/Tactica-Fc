@@ -366,3 +366,11 @@ TACTICA FC; CM0102/CM2010 tarzında kariyer, kulüp yönetimi, haberler, antrenm
 - Dashboard `TASKS.md` dosyasını her dakikada yeniden okur; ayrıntılı liste ve checkbox durumları buradan beslenir.
 - Owner'a ait `match_results/` verileri korunur ve bu takip planı için stage edilmez.
 
+
+
+## Codex ImageGen V3 integration (owner directive; open)
+
+- [ ] **IMG-V3-01 — Repository integration:** Read DESIGN_SYSTEM.md; generate fictional crests, kits, portraits, stadiums and trophies; keep React/CSS UI interactive; test responsive screens.
+- [ ] **IMG-V3-02 — Provider and safety:** Use global codex-imagegen, local Windows CLI and owner ChatGPT authentication only; no paid API fallback, no GitHub Actions, no secret logging. Shared persistent queue, bounded retries, deduplication, atomic outputs, project routing and concise reports. Never overwrite approved assets.
+- [ ] **IMG-V3-03 — Verification:** Test routing, failures, duplicates, recovery; run actual local Codex smoke test and application visual QA with screenshots. Preserve approval gates and report SHA and genuine blockers.
+- [ ] **IMG-V3-04 — Handoff:** Update tracker each cycle, commit/push and synchronize local checkout; continue independent tasks autonomously. No fabricated PASS.
